@@ -18,6 +18,8 @@ pub(crate) struct Settings {
     pub(crate) footer_bg: String,
     #[serde(default = "default_line_numbers_bg")]
     pub(crate) line_numbers_bg: String,
+    #[serde(default = "default_syntax_max_bytes")]
+    pub(crate) syntax_max_bytes: u64,
 }
 
 fn default_syntax_highlighting() -> bool {
@@ -35,6 +37,7 @@ fn default_double_tap_speed_ms() -> u64 {
 fn default_header_bg() -> String { "#001848".into() } // dark blue tone
 fn default_footer_bg() -> String { "#001848".into() }
 fn default_line_numbers_bg() -> String { "#001848".into() }
+fn default_syntax_max_bytes() -> u64 { 500_000 } // 500 KB threshold
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct KeyBindings {
@@ -256,5 +259,12 @@ mod tests {
         assert!(Settings::parse_color("#001848").is_some());
         assert!(Settings::parse_color("#ffffff").is_some());
         assert!(Settings::parse_color("#zzzzzz").is_none());
+    }
+
+    #[test]
+    fn syntax_max_bytes_default() {
+        let (_tmp, _guard) = crate::env::set_temp_home();
+        let s = Settings::load().unwrap();
+        assert_eq!(s.syntax_max_bytes, 500_000);
     }
 }

@@ -241,9 +241,7 @@ fn render_line(
 
 
 
-fn get_highlight_spans(line: &str, file: &str) -> Vec<StyledSpan> {
-    highlight_line(line, file)
-}
+fn get_highlight_spans(line: &str, file: &str, settings: &crate::settings::Settings) -> Vec<StyledSpan> { highlight_line(line, file, settings) }
 
 
 fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Position) {
@@ -313,7 +311,7 @@ fn render_line_segment_expanded(
     // Apply syntax highlighting if enabled
     // Note: We need to map visual positions back to original positions for highlighting
     if state.settings.enable_syntax_highlighting {
-        let spans = get_highlight_spans(original_line, file);
+        let spans = get_highlight_spans(original_line, file, state.settings);
         if !spans.is_empty() {
             return render_with_highlighting_expanded(stdout, expanded_chars, original_line, start_visual, end_visual, &spans, tab_width);
         }
@@ -362,11 +360,9 @@ fn render_line_segment_with_selection_expanded(
     
     // Get syntax highlighting spans once for the entire line if enabled
     let spans = if state.settings.enable_syntax_highlighting {
-        let s = get_highlight_spans(original_line, file);
+        let s = get_highlight_spans(original_line, file, state.settings);
         if s.is_empty() { None } else { Some(s) }
-    } else {
-        None
-    };
+    } else { None };
     
     // Render each character in the segment, applying selection styling where appropriate
     for visual_i in start_visual..end_visual {

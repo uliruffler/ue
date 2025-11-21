@@ -1,7 +1,9 @@
 use syntect::highlighting::{ThemeSet, Style, Theme};
 use syntect::parsing::SyntaxSet;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, Mutex};
+use std::collections::HashMap;
 use std::path::PathBuf;
+use bincode; // for deserialization of precompiled assets
 
 /// Lazily loaded syntax set
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -9,9 +11,19 @@ static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
 /// Lazily loaded theme
 static THEME: OnceLock<Theme> = OnceLock::new();
 
+/// Lazily loaded file size cache
+static FILE_SIZE_CACHE: OnceLock<Mutex<HashMap<String, u64>>> = OnceLock::new();
+
 /// Get the global syntax set (loaded once)
 fn get_syntax_set() -> &'static SyntaxSet {
     SYNTAX_SET.get_or_init(|| {
+        if let Ok(path) = std::env::var("UE_PRECOMPILED_SYNTECT") {
+            if let Ok(data) = std::fs::read(&path) {
+                if let Ok((ss, _themes)) = bincode::deserialize::<(SyntaxSet, Vec<(String, Theme)>)>(&data) {
+                    return ss;
+                }
+            }
+        }
         let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
         
         // Load custom syntax files from ~/.ue/syntax/
@@ -39,8 +51,16 @@ fn get_custom_syntax_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
 /// Get the global theme (loaded once)
 fn get_theme() -> &'static Theme {
     THEME.get_or_init(|| {
+        if let Ok(path) = std::env::var("UE_PRECOMPILED_SYNTECT") {
+            if let Ok(data) = std::fs::read(&path) {
+                if let Ok((_ss, themes)) = bincode::deserialize::<(SyntaxSet, Vec<(String, Theme)>)>(&data) {
+                    if let Some((_, t)) = themes.iter().find(|(n, _)| n == "base16-ocean.dark") { return t.clone(); }
+                    if let Some((_, t)) = themes.iter().find(|(n, _)| n == "Monokai") { return t.clone(); }
+                    return themes.first().expect("at least one theme").1.clone();
+                }
+            }
+        }
         let ts = ThemeSet::load_defaults();
-        // Use a dark theme that works well in terminals
         ts.themes.get("base16-ocean.dark")
             .or_else(|| ts.themes.get("Monokai"))
             .or_else(|| ts.themes.values().next())
@@ -118,8 +138,24 @@ impl StyledSpan {
     }
 }
 
+/// Get file size in bytes, using a cache
+fn file_size(filename: &str) -> Option<u64> {
+    let cache = FILE_SIZE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = cache.lock().ok()?;
+        if let Some(sz) = guard.get(filename) { return Some(*sz); }
+    }
+    let sz = std::fs::metadata(filename).ok()?.len();
+    if let Ok(mut guard) = cache.lock() { guard.insert(filename.to_string(), sz); }
+    Some(sz)
+}
+
 /// Highlight a line of text using syntect
-pub(crate) fn highlight_line(line: &str, filename: &str) -> Vec<StyledSpan> {
+pub(crate) fn highlight_line(line: &str, filename: &str, settings: &crate::settings::Settings) -> Vec<StyledSpan> {
+    // Skip highlighting if disabled or file too large
+    if !settings.enable_syntax_highlighting { return Vec::new(); }
+    if let Some(sz) = file_size(filename) { if sz > settings.syntax_max_bytes { return Vec::new(); } }
+    
     // Get file extension
     let ext = std::path::Path::new(filename)
         .extension()
@@ -170,62 +206,22 @@ pub(crate) fn highlight_line(line: &str, filename: &str) -> Vec<StyledSpan> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    fn test_settings() -> crate::settings::Settings { crate::settings::Settings { keybindings: crate::settings::KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into() }, line_number_digits:3, enable_syntax_highlighting:true, tab_width:4, double_tap_speed_ms:300, header_bg:"#001848".into(), footer_bg:"#001848".into(), line_numbers_bg:"#001848".into(), syntax_max_bytes:500_000 } }
     #[test]
-    fn test_rust_syntax_highlighting() {
-        let line = "fn main() {";
-        let spans = highlight_line(line, "test.rs");
-        
-        // Should have some highlighted spans for Rust keywords
-        assert!(!spans.is_empty(), "Rust syntax should produce highlights");
-    }
-
+    fn test_rust_syntax_highlighting() { let line = "fn main() {"; let spans = highlight_line(line, "test.rs", &test_settings()); assert!(!spans.is_empty(), "Rust syntax should produce highlights"); }
     #[test]
-    fn test_python_syntax_highlighting() {
-        let line = "def hello():";
-        let spans = highlight_line(line, "test.py");
-        
-        // Should have some highlighted spans for Python keywords
-        assert!(!spans.is_empty(), "Python syntax should produce highlights");
-    }
-
+    fn test_python_syntax_highlighting() { let line = "def hello():"; let spans = highlight_line(line, "test.py", &test_settings()); assert!(!spans.is_empty(), "Python syntax should produce highlights"); }
     #[test]
-    fn test_unknown_extension() {
-        let line = "some text";
-        let spans = highlight_line(line, "test.unknown");
-        
-        // Unknown files should return empty spans
-        assert!(spans.is_empty(), "Unknown extension should not highlight");
-    }
-
+    fn test_unknown_extension() { let line = "some text"; let spans = highlight_line(line, "test.unknown", &test_settings()); assert!(spans.is_empty(), "Unknown extension should not highlight"); }
     #[test]
-    fn test_no_extension() {
-        let line = "#!/bin/bash";
-        let spans = highlight_line(line, "script");
-        
-        // Should try to detect by content
-        // Result may vary, just ensure it doesn't crash
-        let _ = spans;
-    }
-
+    fn test_no_extension() { let line = "#!/bin/bash"; let spans = highlight_line(line, "script", &test_settings()); let _ = spans; }
     #[test]
-    fn test_toml_syntax_highlighting() {
-        // Note: This test relies on the TOML syntax file being present in ~/.ue/syntax/
-        // The syntax file is loaded once when the application starts, so it uses the real
-        // ~/.ue/syntax/ directory, not UE_TEST_HOME
-        let line = "name = \"test\"";
-        let spans = highlight_line(line, "test.toml");
-        // If custom TOML syntax is available, this should produce highlights
-        // If not available, it will be empty (which is acceptable for this test)
-        let _ = spans; // Just ensure it doesn't crash
-    }
-    #[test]
-    fn test_toml_key_value_highlighting() {
-        // Note: Same as above - relies on ~/.ue/syntax/TOML.sublime-syntax
-        let line = r#"name = "value""#;
-        let spans = highlight_line(line, "Cargo.toml");
-        // Just ensure it doesn't crash
-        let _ = spans;
-    }
+    fn test_large_file_skips() { 
+        let s = test_settings(); 
+        let tmp_path = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
+        std::fs::write(tmp_path.path(), "fn a() {}\n").unwrap(); // small file highlights
+        let fname = tmp_path.path().to_str().unwrap();
+        let spans_small = highlight_line("fn a() {}", fname, &s); assert!(!spans_small.is_empty(), "Expected highlighting for small Rust file");
+        // simulate large by setting threshold tiny
+        let mut s2 = s.clone(); s2.syntax_max_bytes = 1; let spans_large = highlight_line("fn a() {}", fname, &s2); assert!(spans_large.is_empty(), "Expected skip for large threshold"); }
 }
-

@@ -1023,6 +1023,7 @@ name = "ue"
 version = "0.0.1"
 dependencies = [
  "arboard",
+ "bincode",
  "clap",
  "crossterm",
  "serde",

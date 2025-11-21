@@ -20,6 +20,9 @@ header_bg = "#001848"
 footer_bg = "#001848"
 line_numbers_bg = "#001848"
 
+# Disable syntax highlighting for files larger than this (approx bytes)
+syntax_max_bytes = 500000
+
 [keybindings]
 quit = "Esc Esc"
 file_selector = "Esc"
