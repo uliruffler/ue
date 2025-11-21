@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{SetCursorStyle, Hide, Show},
@@ -42,13 +43,31 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
     execute!(stdout, Hide)?;
     crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
     
+    // Track last Esc press time for double-press detection
+    let last_esc_press: Option<Instant> = None;
+    let double_press_threshold = Duration::from_millis(settings.double_tap_speed_ms);
+    
     loop {
         match event::read()? {
             Event::Key(k) => {
-                // Check for quit command (Ctrl+Q)
-                if settings.keybindings.quit_matches(&k.code, &k.modifiers) {
-                    execute!(stdout, Show)?;
-                    return Ok(SelectorResult::Quit);
+                // Check for double Esc to quit
+                if k.code == KeyCode::Esc && k.modifiers.is_empty() {
+                    let now = Instant::now();
+                    let is_double_press = if let Some(last_press) = last_esc_press {
+                        now.duration_since(last_press) < double_press_threshold
+                    } else {
+                        false
+                    };
+                    
+                    if is_double_press {
+                        // Double Esc detected - quit application
+                        execute!(stdout, Show)?;
+                        return Ok(SelectorResult::Quit);
+                    } else {
+                        // Single Esc - cancel selector (no need to record time since we're returning)
+                        execute!(stdout, Show)?;
+                        return Ok(SelectorResult::Cancelled);
+                    }
                 }
                 
                 match k.code {
@@ -69,10 +88,6 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
                     KeyCode::Enter => {
                         execute!(stdout, Show)?;
                         return Ok(SelectorResult::Selected(tracked[selected_index].path.to_string_lossy().to_string()));
-                    }
-                    KeyCode::Esc => {
-                        execute!(stdout, Show)?;
-                        return Ok(SelectorResult::Cancelled);
                     }
                     _ => {}
                 }
@@ -199,26 +214,85 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let mut visible_lines = (term_height as usize).saturating_sub(2);
     state.needs_redraw = true;
 
+    // Track last Esc press time for double-press detection
+    let mut last_esc_press: Option<Instant> = None;
+    let double_press_threshold = Duration::from_millis(settings.double_tap_speed_ms);
+
     loop {
         if state.needs_redraw { render_screen(&mut stdout, file, &lines, &state, visible_lines)?; state.needs_redraw = false; }
-        match event::read()? {
-            Event::Key(key_event) => {
-                // File selector activation via configured keybinding
-                if settings.keybindings.file_selector_matches(&key_event.code, &key_event.modifiers) {
-                    match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                        SelectorResult::Selected(selected_file) => {
-                            return Ok((state.modified, Some(selected_file), false, false));
-                        }
-                        SelectorResult::Quit => {
-                            return Ok((state.modified, None, true, false));
-                        }
-                        SelectorResult::Cancelled => {
-                            // Cancelled - redraw editor
-                            state.needs_redraw = true;
-                            continue;
-                        }
+        
+        // Check if we should open file selector after timeout
+        if let Some(last_press) = last_esc_press {
+            if Instant::now().duration_since(last_press) >= double_press_threshold {
+                // Timeout - open file selector now
+                last_esc_press = None;
+                match run_file_selector_overlay(file, &mut visible_lines, settings)? {
+                    SelectorResult::Selected(selected_file) => {
+                        return Ok((state.modified, Some(selected_file), false, false));
+                    }
+                    SelectorResult::Quit => {
+                        return Ok((state.modified, None, true, false));
+                    }
+                    SelectorResult::Cancelled => {
+                        // Cancelled - redraw editor
+                        state.needs_redraw = true;
+                        continue;
                     }
                 }
+            }
+        }
+        
+        // Use poll with timeout to detect when to open file selector
+        let timeout = if last_esc_press.is_some() {
+            let elapsed = Instant::now().duration_since(last_esc_press.unwrap());
+            double_press_threshold.checked_sub(elapsed).unwrap_or(Duration::from_millis(0))
+        } else {
+            Duration::from_secs(86400) // 24 hours if no Esc pending
+        };
+        
+        if !event::poll(timeout)? {
+            // Timeout reached - open file selector if Esc is pending
+            if last_esc_press.is_some() {
+                last_esc_press = None;
+                match run_file_selector_overlay(file, &mut visible_lines, settings)? {
+                    SelectorResult::Selected(selected_file) => {
+                        return Ok((state.modified, Some(selected_file), false, false));
+                    }
+                    SelectorResult::Quit => {
+                        return Ok((state.modified, None, true, false));
+                    }
+                    SelectorResult::Cancelled => {
+                        // Cancelled - redraw editor
+                        state.needs_redraw = true;
+                        continue;
+                    }
+                }
+            }
+            continue;
+        }
+        
+        match event::read()? {
+            Event::Key(key_event) => {
+                use crossterm::event::KeyCode;
+                
+                // Check for double Esc press to quit
+                if key_event.code == KeyCode::Esc && key_event.modifiers.is_empty() {
+                    let now = Instant::now();
+                    if let Some(last_press) = last_esc_press {
+                        if now.duration_since(last_press) < double_press_threshold {
+                            // Double Esc detected - quit immediately
+                            return Ok((state.modified, None, true, false));
+                        }
+                    }
+                    
+                    // First Esc - record time and wait for potential second press
+                    last_esc_press = Some(now);
+                    continue; // Don't process other handlers, wait for timeout or second Esc
+                }
+                
+                // Any other key clears the pending Esc
+                last_esc_press = None;
+                
                 // Handle key event and check for quit or close signals
                 let (should_quit, should_close) = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, file)?;
                 if should_quit {

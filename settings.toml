@@ -12,8 +12,11 @@ enable_syntax_highlighting = true
 # Width of tab character (number of spaces)
 tab_width = 4
 
+# Double tap speed in milliseconds for Esc Esc quit (default: 300)
+double_tap_speed_ms = 250
+
 [keybindings]
-quit = "Ctrl+q"
+quit = "Esc Esc"
 file_selector = "Esc"
 copy = "Ctrl+c"
 paste = "Ctrl+v"

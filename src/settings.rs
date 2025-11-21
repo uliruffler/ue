@@ -10,6 +10,8 @@ pub(crate) struct Settings {
     pub(crate) enable_syntax_highlighting: bool,
     #[serde(default = "default_tab_width")]
     pub(crate) tab_width: usize,
+    #[serde(default = "default_double_tap_speed_ms")]
+    pub(crate) double_tap_speed_ms: u64,
 }
 
 fn default_syntax_highlighting() -> bool {
@@ -18,6 +20,10 @@ fn default_syntax_highlighting() -> bool {
 
 fn default_tab_width() -> usize {
     4
+}
+
+fn default_double_tap_speed_ms() -> u64 {
+    300
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -79,6 +85,8 @@ impl KeyBindings {
     pub fn save_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.save, code, modifiers) }
     pub fn undo_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.undo, code, modifiers) }
     pub fn redo_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.redo, code, modifiers) }
+    
+    #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
     pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.file_selector, code, modifiers) }
 }
 
@@ -175,5 +183,27 @@ mod tests {
         fs::write(&settings_path, content).unwrap();
         let settings_second = Settings::load().expect("second load");
         assert_eq!(settings_second.line_number_digits, 2);
+    }
+
+    #[test]
+    fn double_esc_keybinding() {
+        let (_tmp, _guard) = set_temp_home();
+        let kb = KeyBindings { 
+            quit: "Esc Esc".into(), 
+            copy: "Ctrl+c".into(), 
+            paste: "Ctrl+v".into(), 
+            cut: "Ctrl+x".into(), 
+            close: "Ctrl+w".into(), 
+            save: "Ctrl+s".into(), 
+            undo: "Ctrl+z".into(), 
+            redo: "Ctrl+y".into(), 
+            file_selector: "Esc".into() 
+        };
+        
+        // Esc without modifiers should open file selector
+        assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
+        
+        // Note: Double Esc detection is handled in the UI layer, not by keybinding parser
+        // The quit keybinding "Esc Esc" is a special marker that the UI interprets
     }
 }

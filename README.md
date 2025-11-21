@@ -21,7 +21,11 @@ A terminal-based file viewer with configurable key bindings.
 - **PageDown**: Scroll down one page
 - **Space** or **n**: Move to next file (if multiple files are opened)
 - **Ctrl+W** (configurable): Close current file and move to next
-- **Ctrl+Q** (configurable): Quit the application
+- **Esc** (configurable): Open file selector (after configurable delay if not double-pressed)
+- **Esc Esc** (double press, configurable): Quit the application immediately
+  - Press Esc twice quickly (default: within 300ms) in the editor to quit instantly
+  - Single Esc waits for the timeout (default: 300ms), then opens file selector if no second press
+  - Speed is configurable via `double_tap_speed_ms` setting
 
 The current line is highlighted with a `>` marker on the left.
 
@@ -55,25 +59,43 @@ The default configuration is stored in `settings.toml` in the repository and is 
 ### Default Configuration
 
 ```toml
+# Double tap speed in milliseconds for Esc Esc quit (default: 300)
+double_tap_speed_ms = 300
+
 [keybindings]
-next_page = ["space", "n"]
-quit = "Ctrl+q"
+quit = "Esc Esc"
+file_selector = "Esc"
 copy = "Ctrl+c"
+paste = "Ctrl+v"
+cut = "Ctrl+x"
 close = "Ctrl+w"
+save = "Ctrl+s"
+undo = "Ctrl+z"
+redo = "Ctrl+y"
 ```
+
+Note: `quit = "Esc Esc"` enables double-press detection. The `double_tap_speed_ms` setting controls how quickly you need to press Esc twice to quit (default 300ms). Single Esc waits for the timeout before opening the file selector.
 
 ### Configuration Options
 
+#### General Settings
+
+- **`double_tap_speed_ms`**: Time window (in milliseconds) for detecting double Esc press
+  - Default: `300` (300 milliseconds)
+  - Range: Any positive number (recommended: 200-500)
+  - Lower values require faster double-tap, higher values are more forgiving
+
 #### `[keybindings]`
 
-- **`next_page`**: Array of keys that advance to the next page
-  - Example: `["space", "n"]`
-  - Supported: any single character or "space"
-
 - **`quit`**: Key combination to quit the application
-  - Format: `"[Modifier+]Key"` (e.g., `"Ctrl+q"`, `"Alt+x"`, `"Ctrl+Shift+q"`)
-  - Modifiers: `Ctrl` (or `Control`), `Alt`, `Shift`
-  - Can combine multiple modifiers with `+`
+  - Format: `"[Modifier+]Key"` or `"Key Key"` for double-press detection
+  - Default: `"Esc Esc"` (press Esc twice within configured time)
+  - Examples: `"Ctrl+q"`, `"Alt+x"`, `"Esc Esc"`
+  - Double-press format: `"Key Key"` (same key twice, space-separated)
+
+- **`file_selector`**: Key combination to open the file selector
+  - Format: Same as other keybindings
+  - Default: `"Esc"`
 
 - **`copy`**: Key combination to copy selected text to clipboard
   - Format: Same as `quit`
@@ -87,17 +109,21 @@ close = "Ctrl+w"
 
 ```toml
 [keybindings]
-next_page = ["space", "n", "j"]
-quit = "Ctrl+Shift+x"
-copy = "Ctrl+y"
+quit = "Ctrl+q"
+file_selector = "Ctrl+o"
+copy = "Ctrl+Shift+c"
+paste = "Ctrl+Shift+v"
 close = "Ctrl+d"
+save = "Ctrl+Shift+s"
 ```
 
 This would:
-- Allow Space, 'n', or 'j' to advance to the next page
-- Require Ctrl+Shift+X to quit
-- Use Ctrl+Y to copy selected text
-- Use Ctrl+D to close current file and move to next
+- Use Ctrl+Q to quit (single keypress instead of double Esc)
+- Use Ctrl+O to open file selector
+- Use Ctrl+Shift+C to copy selected text
+- Use Ctrl+Shift+V to paste
+- Use Ctrl+D to close current file
+- Use Ctrl+Shift+S to save
 
 ## Syntax Highlighting
 
