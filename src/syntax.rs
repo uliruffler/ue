@@ -1,6 +1,7 @@
 use syntect::highlighting::{ThemeSet, Style, Theme};
 use syntect::parsing::SyntaxSet;
 use std::sync::OnceLock;
+use std::path::PathBuf;
 
 /// Lazily loaded syntax set
 static SYNTAX_SET: OnceLock<SyntaxSet> = OnceLock::new();
@@ -10,7 +11,29 @@ static THEME: OnceLock<Theme> = OnceLock::new();
 
 /// Get the global syntax set (loaded once)
 fn get_syntax_set() -> &'static SyntaxSet {
-    SYNTAX_SET.get_or_init(|| SyntaxSet::load_defaults_newlines())
+    SYNTAX_SET.get_or_init(|| {
+        let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
+        
+        // Load custom syntax files from ~/.ue/syntax/
+        if let Ok(custom_syntax_dir) = get_custom_syntax_dir() {
+            if custom_syntax_dir.exists() {
+                // Load all .sublime-syntax files from the directory
+                if let Err(e) = builder.add_from_folder(&custom_syntax_dir, false) {
+                    eprintln!("Warning: Failed to load custom syntax files from {:?}: {}", custom_syntax_dir, e);
+                }
+            }
+        }
+        
+        builder.build()
+    })
+}
+
+/// Get the path to the custom syntax directory
+fn get_custom_syntax_dir() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let home = std::env::var("UE_TEST_HOME")
+        .or_else(|_| std::env::var("HOME"))
+        .or_else(|_| std::env::var("USERPROFILE"))?;
+    Ok(PathBuf::from(home).join(".ue").join("syntax"))
 }
 
 /// Get the global theme (loaded once)
@@ -182,6 +205,26 @@ mod tests {
         
         // Should try to detect by content
         // Result may vary, just ensure it doesn't crash
+        let _ = spans;
+    }
+
+    #[test]
+    fn test_toml_syntax_highlighting() {
+        // Note: This test relies on the TOML syntax file being present in ~/.ue/syntax/
+        // The syntax file is loaded once when the application starts, so it uses the real
+        // ~/.ue/syntax/ directory, not UE_TEST_HOME
+        let line = "name = \"test\"";
+        let spans = highlight_line(line, "test.toml");
+        // If custom TOML syntax is available, this should produce highlights
+        // If not available, it will be empty (which is acceptable for this test)
+        let _ = spans; // Just ensure it doesn't crash
+    }
+    #[test]
+    fn test_toml_key_value_highlighting() {
+        // Note: Same as above - relies on ~/.ue/syntax/TOML.sublime-syntax
+        let line = r#"name = "value""#;
+        let spans = highlight_line(line, "Cargo.toml");
+        // Just ensure it doesn't crash
         let _ = spans;
     }
 }
