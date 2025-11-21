@@ -123,31 +123,24 @@
 
 
 ┌──────────────────────────────────────────────────────────────┐
-│                     syntax.rs (~310 lines)                   │
+│                     syntax.rs (~180 lines)                   │
 ├──────────────────────────────────────────────────────────────┤
-│ Syntax definition parsing & color conversion                 │
-│ • SyntaxDefinition - Keywords, matches, colors               │
-│ • ColorSpec - ANSI colors, bold/italic attributes            │
-│ • SyntaxMatch - Regex-based patterns                         │
-│ • get_syntax_for_extension() - Load from ~/.ue/syntax/       │
-│ • parse_vim_syntax() - Parse simplified Vim syntax           │
-│ • ColorSpec::apply_to_stdout() - Apply colors to terminal    │
-│ • SYNTAX_CACHE - Cache parsed definitions                    │
+│ Syntax highlighting using syntect library                    │
+│ • StyledSpan - Position + color for a text span              │
+│ • highlight_line() - Apply syntax to a line of text          │
+│   - Uses syntect's TextMate/Sublime grammar support          │
+│   - Supports 100+ languages out-of-the-box                   │
+│   - Converts syntect RGB colors to crossterm colors          │
+│ • SYNTAX_SET - Lazily loaded syntax definitions              │
+│ • THEME - Lazily loaded color theme (base16-ocean.dark)      │
 │ + 4 tests                                                    │
 └──────────────────────────────────────────────────────────────┘
 
 
 ┌──────────────────────────────────────────────────────────────┐
-│                   highlighter.rs (~150 lines)                │
+│                   highlighter.rs (REMOVED)                   │
 ├──────────────────────────────────────────────────────────────┤
-│ Line-level syntax highlighting application                   │
-│ • StyledSpan - Position + color for a text span              │
-│ • highlight_line() - Apply syntax to a line of text          │
-│   - First pass: regex pattern matches                        │
-│   - Second pass: keyword matches (word boundaries)           │
-│   - Regex spans take precedence over keywords                │
-│ • get_file_extension() - Extract extension from filename     │
-│ + 3 tests                                                    │
+│ *** Merged into syntax.rs for simplicity ***                 │
 └──────────────────────────────────────────────────────────────┘
 
 
@@ -185,29 +178,22 @@ rendering::render_line_segment()
          │
          ▼
 rendering::get_highlight_spans()
-  Extracts file extension
+  Passes filename to syntax module
          │
          ▼
-syntax::get_syntax_for_extension()
-  1. Check SYNTAX_CACHE
-  2. If miss: load ~/.ue/syntax/{ext}.vim
-  3. parse_vim_syntax() - Parse keywords, matches, colors
-  4. Cache result
-  Returns: SyntaxDefinition
-         │
-         ▼
-highlighter::highlight_line()
-  1. Apply regex patterns → StyledSpan[]
-  2. Apply keywords (word boundaries) → candidates
-  3. Filter overlaps (regex wins)
-  4. Sort by position
+syntax::highlight_line()
+  1. Extract file extension from filename
+  2. Look up syntax in SYNTAX_SET (lazy-loaded once)
+  3. Create HighlightLines with THEME (lazy-loaded once)
+  4. Call syntect to tokenize and style the line
+  5. Convert syntect RGB colors to crossterm colors
   Returns: Vec<StyledSpan>
          │
          ▼
 rendering::render_with_highlighting()
   For each character:
     - Find matching span
-    - Apply ColorSpec::apply_to_stdout()
+    - Apply StyledSpan::apply_to_stdout()
     - Write character
     - Reset color
          │

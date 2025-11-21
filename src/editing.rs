@@ -1,13 +1,15 @@
 use std::{fs, time::Duration};
-use once_cell::sync::Lazy;
-use std::sync::Mutex;
+use std::sync::{Mutex, OnceLock};
 
 use crate::editor_state::{FileViewerState, Position};
 use crate::undo::Edit;
 
 
-static GLOBAL_CLIPBOARD: Lazy<Mutex<Option<arboard::Clipboard>>> = 
-    Lazy::new(|| Mutex::new(arboard::Clipboard::new().ok()));
+static GLOBAL_CLIPBOARD: OnceLock<Mutex<Option<arboard::Clipboard>>> = OnceLock::new();
+
+fn get_clipboard() -> &'static Mutex<Option<arboard::Clipboard>> {
+    GLOBAL_CLIPBOARD.get_or_init(|| Mutex::new(arboard::Clipboard::new().ok()))
+}
 
 pub(crate) fn save_file(filename: &str, lines: &[String]) -> Result<(), std::io::Error> {
     let content = lines.join("\n");
@@ -586,7 +588,7 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
 
 fn copy_to_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error>> {
     // Acquire (or initialize) global clipboard so it persists beyond this call
-    let mut guard = GLOBAL_CLIPBOARD.lock().unwrap();
+    let mut guard = get_clipboard().lock().unwrap();
     if guard.is_none() {
         *guard = arboard::Clipboard::new().ok();
     }
@@ -599,7 +601,7 @@ fn copy_to_clipboard(text: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn paste_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
-    let mut guard = GLOBAL_CLIPBOARD.lock().unwrap();
+    let mut guard = get_clipboard().lock().unwrap();
     if guard.is_none() {
         *guard = arboard::Clipboard::new().ok();
     }

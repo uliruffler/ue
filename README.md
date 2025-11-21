@@ -101,14 +101,19 @@ This would:
 
 ## Syntax Highlighting
 
-The editor supports syntax highlighting using simplified Vim syntax files. See [SYNTAX.md](SYNTAX.md) for details.
+The editor supports syntax highlighting for 100+ programming languages using the [syntect](https://github.com/trishume/syntect) library (based on Sublime Text's syntax definitions).
 
-Quick setup:
-1. Create directory: `~/.ue/syntax/`
-2. Add `.vim` files named after extensions (e.g., `rs.vim` for Rust, `py.vim` for Python)
-3. Enable in `~/.ue/settings.toml`: `enable_syntax_highlighting = true` (default)
+Highlighting is **enabled by default** and works automatically based on file extension. Supported languages include:
+- Rust, Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Ruby, PHP, Swift, Kotlin
+- HTML, CSS, SCSS, JSON, YAML, TOML, XML, Markdown
+- Shell scripts, SQL, Dockerfile, and many more
 
-Sample syntax files for Rust and Python are automatically created in `~/.ue/syntax/` on first run.
+To disable syntax highlighting, edit `~/.ue/settings.toml`:
+```toml
+enable_syntax_highlighting = false
+```
+
+The editor uses the "base16-ocean.dark" color theme optimized for terminal viewing.
 
 ## Usage
 
