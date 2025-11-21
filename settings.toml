@@ -13,7 +13,12 @@ enable_syntax_highlighting = true
 tab_width = 4
 
 # Double tap speed in milliseconds for Esc Esc quit (default: 300)
-double_tap_speed_ms = 250
+double_tap_speed_ms = 300
+
+# UI colors (hex or named). Default dark blue.
+header_bg = "#001848"
+footer_bg = "#001848"
+line_numbers_bg = "#001848"
 
 [keybindings]
 quit = "Esc Esc"

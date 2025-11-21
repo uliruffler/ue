@@ -25,79 +25,55 @@ enum SelectorResult {
 
 /// Run file selector overlay and return selected file path if confirmed (None if cancelled)
 fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, settings: &Settings) -> crossterm::Result<SelectorResult> {
-    use crossterm::event::KeyCode;
+    use crossterm::event::{KeyCode, Event};
     let mut stdout = io::stdout();
     let tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
-    if tracked.is_empty() {
-        return Ok(SelectorResult::Cancelled);
-    }
-    
-    // Determine current file canonical path and preselect that entry (fallback to 0)
+    if tracked.is_empty() { return Ok(SelectorResult::Cancelled); }
     let current_canon = std::fs::canonicalize(current_file).unwrap_or_else(|_| std::path::PathBuf::from(current_file));
     let current_str = current_canon.to_string_lossy();
     let mut selected_index = tracked.iter().position(|e| e.path.to_string_lossy() == current_str).unwrap_or(0);
     let scroll_offset = 0usize;
-    let (_, th) = terminal::size()?;
-    let vis = (th as usize).saturating_sub(1);
-    
-    execute!(stdout, Hide)?;
-    crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
-    
-    // Track last Esc press time for double-press detection
-    let last_esc_press: Option<Instant> = None;
-    let double_press_threshold = Duration::from_millis(settings.double_tap_speed_ms);
-    
+    let (_, th) = terminal::size()?; let vis = (th as usize).saturating_sub(1);
+    execute!(stdout, Hide)?; crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
+
+    // Double Esc detection state
+    let mut last_esc_press: Option<Instant> = None;
+    let esc_threshold = Duration::from_millis(settings.double_tap_speed_ms);
+
     loop {
+        // If first Esc was pressed and timeout elapsed without second Esc -> cancel overlay
+        if let Some(t0) = last_esc_press { if Instant::now().duration_since(t0) >= esc_threshold { execute!(stdout, Show)?; return Ok(SelectorResult::Cancelled); } }
+
+        // Determine poll timeout (remaining time until cancellation or long wait)
+        let timeout = if let Some(t0) = last_esc_press {
+            let elapsed = Instant::now().duration_since(t0);
+            esc_threshold.checked_sub(elapsed).unwrap_or(Duration::from_millis(0))
+        } else { Duration::from_secs(86400) };
+
+        if !event::poll(timeout)? {
+            // Timeout fired -> treat as cancellation (handled above); just continue loop to trigger branch
+            continue;
+        }
+
         match event::read()? {
             Event::Key(k) => {
-                // Check for double Esc to quit
                 if k.code == KeyCode::Esc && k.modifiers.is_empty() {
                     let now = Instant::now();
-                    let is_double_press = if let Some(last_press) = last_esc_press {
-                        now.duration_since(last_press) < double_press_threshold
-                    } else {
-                        false
-                    };
-                    
-                    if is_double_press {
-                        // Double Esc detected - quit application
-                        execute!(stdout, Show)?;
-                        return Ok(SelectorResult::Quit);
-                    } else {
-                        // Single Esc - cancel selector (no need to record time since we're returning)
-                        execute!(stdout, Show)?;
-                        return Ok(SelectorResult::Cancelled);
-                    }
+                    if let Some(prev) = last_esc_press { if now.duration_since(prev) <= esc_threshold { execute!(stdout, Show)?; return Ok(SelectorResult::Quit); } }
+                    // First Esc: record and wait for second or timeout
+                    last_esc_press = Some(now); continue; // do not cancel yet
                 }
-                
+                // Any non-Esc key clears pending first Esc
+                last_esc_press = None;
                 match k.code {
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if selected_index > 0 {
-                            let prev = selected_index;
-                            selected_index -= 1;
-                            crate::file_selector::render_selection_change(&tracked, prev, selected_index, scroll_offset, vis)?;
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if selected_index + 1 < tracked.len() {
-                            let prev = selected_index;
-                            selected_index += 1;
-                            crate::file_selector::render_selection_change(&tracked, prev, selected_index, scroll_offset, vis)?;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        execute!(stdout, Show)?;
-                        return Ok(SelectorResult::Selected(tracked[selected_index].path.to_string_lossy().to_string()));
-                    }
+                    KeyCode::Up | KeyCode::Char('k') => { if selected_index > 0 { let prev = selected_index; selected_index -= 1; crate::file_selector::render_selection_change(&tracked, prev, selected_index, scroll_offset, vis)?; } }
+                    KeyCode::Down | KeyCode::Char('j') => { if selected_index + 1 < tracked.len() { let prev = selected_index; selected_index += 1; crate::file_selector::render_selection_change(&tracked, prev, selected_index, scroll_offset, vis)?; } }
+                    KeyCode::Enter => { execute!(stdout, Show)?; return Ok(SelectorResult::Selected(tracked[selected_index].path.to_string_lossy().to_string())); }
                     _ => {}
                 }
             }
-            Event::Resize(_, h) => {
-                *visible_lines = (h as usize).saturating_sub(2);
-                let vis_new = (h as usize).saturating_sub(1);
-                crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis_new)?;
-            }
-            Event::Mouse(_) => { /* ignore mouse in overlay */ }
+            Event::Resize(_, h) => { *visible_lines = (h as usize).saturating_sub(2); let vis_new = (h as usize).saturating_sub(1); crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis_new)?; }
+            Event::Mouse(_) => { /* ignore mouse */ }
             _ => {}
         }
     }

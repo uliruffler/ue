@@ -2,7 +2,7 @@ use std::io::Write;
 use crossterm::{
     cursor,
     execute,
-    style::{Stylize, ResetColor},
+    style::{Stylize, ResetColor, SetBackgroundColor},
     terminal::{self, ClearType},
 };
 
@@ -57,6 +57,9 @@ fn render_header(
     let path = std::path::Path::new(file);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
     let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.header_bg) {
+        execute!(stdout, SetBackgroundColor(color))?;
+    }
     if state.settings.line_number_digits > 0 {
         let modulus = 10usize.pow(state.settings.line_number_digits as u32);
         let top_number = (state.top_line / modulus) * modulus;
@@ -65,6 +68,7 @@ fn render_header(
     }
     write!(stdout, "{} {} ({}){}", modified_char, filename, parent, mode_info)?;
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+    execute!(stdout, ResetColor)?;
     write!(stdout, "\r\n")?;
     Ok(())
 }
@@ -79,13 +83,10 @@ fn render_footer(
     let col_num = state.cursor_col + 1;
     let position_info = format!("{}:{}", line_num, col_num);
     let total_width = state.term_width as usize;
-
-    // Compute bottom block number (similar to previous implementation)
     let digits = state.settings.line_number_digits as usize;
     let mut bottom_number_str = String::new();
     if digits > 0 {
         let modulus = 10usize.pow(digits as u32);
-        // Find last visible logical line
         let mut last_visible_line = state.top_line;
         let mut remaining = visible_lines;
         let text_width = state.term_width.saturating_sub(line_number_width(state.settings));
@@ -97,13 +98,12 @@ fn render_footer(
         let bottom_number = (last_visible_line / modulus) * modulus;
         bottom_number_str = format!("{:width$} ", bottom_number, width = digits);
     }
-
-    // Left part: bottom block number (or empty). Right part: position info right-aligned.
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.footer_bg) {
+        execute!(stdout, SetBackgroundColor(color))?;
+    }
+    write!(stdout, "\r{}", bottom_number_str)?;
     let left_len = bottom_number_str.len();
     let remaining = total_width.saturating_sub(left_len);
-
-    write!(stdout, "\r{}", bottom_number_str)?;
-
     if position_info.len() >= remaining {
         let truncated = &position_info[position_info.len() - remaining..];
         write!(stdout, "{}", truncated)?;
@@ -112,8 +112,8 @@ fn render_footer(
         for _ in 0..pad { write!(stdout, " ")?; }
         write!(stdout, "{}", position_info)?;
     }
-
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+    execute!(stdout, ResetColor)?;
     Ok(())
 }
 
@@ -152,7 +152,11 @@ fn render_visible_lines(
     // Fill remaining visible lines with empty lines
     while visual_lines_rendered < visible_lines {
         if state.settings.line_number_digits > 0 {
+            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.line_numbers_bg) {
+                execute!(stdout, SetBackgroundColor(color))?;
+            }
             write!(stdout, "{:width$} ", "", width = state.settings.line_number_digits as usize)?;
+            execute!(stdout, ResetColor)?;
         }
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
         write!(stdout, "\r\n")?;
@@ -201,9 +205,17 @@ fn render_line(
                 // Calculate line number to display (modulo based on digits)
                 let modulus = 10usize.pow(state.settings.line_number_digits as u32);
                 let line_num = (logical_line_index + 1) % modulus;
+                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.line_numbers_bg) {
+                    execute!(stdout, SetBackgroundColor(color))?;
+                }
                 write!(stdout, "{:width$} ", line_num, width = state.settings.line_number_digits as usize)?;
+                execute!(stdout, ResetColor)?;
             } else {
+                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.line_numbers_bg) {
+                    execute!(stdout, SetBackgroundColor(color))?;
+                }
                 write!(stdout, "{:width$} ", "", width = state.settings.line_number_digits as usize)?;
+                execute!(stdout, ResetColor)?;
             }
         }
         

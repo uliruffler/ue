@@ -12,6 +12,12 @@ pub(crate) struct Settings {
     pub(crate) tab_width: usize,
     #[serde(default = "default_double_tap_speed_ms")]
     pub(crate) double_tap_speed_ms: u64,
+    #[serde(default = "default_header_bg")]
+    pub(crate) header_bg: String,
+    #[serde(default = "default_footer_bg")]
+    pub(crate) footer_bg: String,
+    #[serde(default = "default_line_numbers_bg")]
+    pub(crate) line_numbers_bg: String,
 }
 
 fn default_syntax_highlighting() -> bool {
@@ -25,6 +31,10 @@ fn default_tab_width() -> usize {
 fn default_double_tap_speed_ms() -> u64 {
     300
 }
+
+fn default_header_bg() -> String { "#001848".into() } // dark blue tone
+fn default_footer_bg() -> String { "#001848".into() }
+fn default_line_numbers_bg() -> String { "#001848".into() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct KeyBindings {
@@ -132,6 +142,30 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
     has_ctrl == needs_ctrl && has_alt == needs_alt && has_shift == needs_shift
 }
 
+impl Settings {
+    pub(crate) fn parse_color(s: &str) -> Option<crossterm::style::Color> {
+        use crossterm::style::Color;
+        let name = s.trim().to_lowercase();
+        match name.as_str() {
+            "black" => Some(Color::Black),
+            "blue" => Some(Color::Blue),
+            "darkblue" => Some(Color::DarkBlue),
+            "dark_grey" | "darkgrey" => Some(Color::DarkGrey),
+            "grey" | "gray" => Some(Color::Grey),
+            "white" => Some(Color::White),
+            _ => {
+                // Hex #RRGGBB
+                if name.starts_with('#') && name.len() == 7 {
+                    let r = u8::from_str_radix(&name[1..3], 16).ok()?;
+                    let g = u8::from_str_radix(&name[3..5], 16).ok()?;
+                    let b = u8::from_str_radix(&name[5..7], 16).ok()?;
+                    Some(Color::Rgb { r, g, b })
+                } else { None }
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -205,5 +239,22 @@ mod tests {
         
         // Note: Double Esc detection is handled in the UI layer, not by keybinding parser
         // The quit keybinding "Esc Esc" is a special marker that the UI interprets
+    }
+
+    #[test]
+    fn default_color_values_present() {
+        let (_tmp, _guard) = crate::env::set_temp_home();
+        let s = Settings::load().expect("load settings");
+        assert_eq!(s.header_bg, "#001848");
+        assert_eq!(s.footer_bg, "#001848");
+        assert_eq!(s.line_numbers_bg, "#001848");
+        assert!(Settings::parse_color(&s.header_bg).is_some());
+    }
+
+    #[test]
+    fn parse_color_hex() {
+        assert!(Settings::parse_color("#001848").is_some());
+        assert!(Settings::parse_color("#ffffff").is_some());
+        assert!(Settings::parse_color("#zzzzzz").is_none());
     }
 }
