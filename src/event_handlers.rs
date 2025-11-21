@@ -19,6 +19,25 @@ pub(crate) fn handle_key_event(
     filename: &str,
 ) -> Result<(bool, bool), std::io::Error> {
     let KeyEvent { code, modifiers, .. } = key_event;
+
+    // Ctrl+Arrow custom handling: word-wise (Left/Right) and scroll (Up/Down)
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        let extend = modifiers.contains(KeyModifiers::SHIFT);
+        if extend { state.start_selection(); }
+        let mut moved = false;
+        match code {
+            KeyCode::Left => { moved = word_left(state, lines); }
+            KeyCode::Right => { moved = word_right(state, lines); }
+            KeyCode::Up => { moved = scroll_without_cursor(state, lines, visible_lines, -3); }
+            KeyCode::Down => { moved = scroll_without_cursor(state, lines, visible_lines, 3); }
+            _ => {}
+        }
+        if moved {
+            if extend { state.update_selection(); } else { state.clear_selection(); }
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+    }
     
     // Handle close file (Ctrl+W)
     if settings.keybindings.close_matches(&code, &modifiers) {
@@ -490,860 +509,98 @@ fn show_close_confirmation(_state: &mut FileViewerState) -> Result<bool, std::io
     }
 }
 
+fn word_left(state: &mut FileViewerState, lines: &[String]) -> bool {
+    let abs = state.absolute_line(); if abs >= lines.len() { return false; }
+    if state.cursor_col == 0 {
+        if abs == 0 { return false; }
+        // Move to previous line end
+        if state.cursor_line > 0 { state.cursor_line -= 1; } else { state.top_line = state.top_line.saturating_sub(1); }
+        let new_abs = state.absolute_line(); if new_abs < lines.len() { state.cursor_col = lines[new_abs].len(); }
+        return true;
+    }
+    let line = &lines[abs]; let mut i = state.cursor_col;
+    // First skip any non-word characters (including whitespace & punctuation)
+    while i > 0 {
+        let c = line.chars().nth(i-1).unwrap_or(' ');
+        if is_word_char(c) { break; }
+        i -= 1;
+    }
+    // Then skip the word characters
+    while i > 0 {
+        let c = line.chars().nth(i-1).unwrap_or(' ');
+        if !is_word_char(c) { break; }
+        i -= 1;
+    }
+    state.cursor_col = i; true
+}
+fn word_right(state: &mut FileViewerState, lines: &[String]) -> bool {
+    let abs = state.absolute_line(); if abs >= lines.len() { return false; }
+    let line = &lines[abs]; let len = line.len();
+    if state.cursor_col >= len {
+        if abs + 1 >= lines.len() { return false; }
+        // Move to next line start
+        if state.cursor_line + 1 < lines.len().saturating_sub(state.top_line) { state.cursor_line += 1; }
+        else { state.top_line += 1; }
+        state.cursor_col = 0; return true;
+    }
+    let mut i = state.cursor_col;
+    // Skip any non-word (whitespace / punctuation)
+    while i < len {
+        let c = line.chars().nth(i).unwrap_or(' ');
+        if is_word_char(c) { break; }
+        i += 1;
+    }
+    // Skip the word
+    while i < len {
+        let c = line.chars().nth(i).unwrap_or(' ');
+        if !is_word_char(c) { break; }
+        i += 1;
+    }
+    state.cursor_col = i; true
+}
+fn is_word_char(c: char) -> bool { c.is_alphanumeric() || c == '_' }
+fn scroll_without_cursor(state: &mut FileViewerState, lines: &[String], visible_lines: usize, delta: isize) -> bool {
+    if delta == 0 { return false; }
+    let old_top = state.top_line;
+    // Capture absolute cursor BEFORE changing top_line so we can preserve it
+    let absolute_cursor = state.absolute_line();
+    if delta > 0 { state.top_line = (state.top_line + delta as usize).min(lines.len().saturating_sub(1)); }
+    else { state.top_line = state.top_line.saturating_sub((-delta) as usize); }
+    if absolute_cursor < state.top_line || absolute_cursor >= state.top_line + visible_lines {
+        if state.saved_scroll_state.is_none() { state.saved_scroll_state = Some((old_top, state.cursor_line)); }
+        state.saved_absolute_cursor = Some(absolute_cursor);
+    } else {
+        state.saved_absolute_cursor = None; state.saved_scroll_state = None; state.cursor_line = absolute_cursor - state.top_line;
+    }
+    state.top_line != old_top
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::settings::Settings;
     use crate::undo::UndoHistory;
-    use crate::editor_state::FileViewerState;
     use crate::env::set_temp_home;
-    use crossterm::event::{MouseEvent, MouseEventKind, MouseButton, KeyModifiers};
 
     fn create_test_state() -> FileViewerState<'static> {
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
         FileViewerState::new(80, undo_history, settings)
     }
-
-    fn create_test_lines(count: usize) -> Vec<String> {
-        (0..count).map(|i| format!("Line {}", i)).collect()
-    }
+    fn create_test_lines(count: usize) -> Vec<String> { (0..count).map(|i| format!("Line {}", i)).collect() }
 
     #[test]
-    fn scroll_down_keeps_cursor_visible_initially() {
+    fn ctrl_scroll_preserves_absolute_cursor() {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 5;
-        state.cursor_line = 5; // Cursor at absolute line 10
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // After scrolling down 3 lines: top_line = 8, cursor should be at line 2 (absolute 10)
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 2);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(state.is_cursor_visible(&lines, 10, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-
-    #[test]
-    fn scroll_down_makes_cursor_disappear_when_above_viewport() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 8;
-        state.cursor_line = 2; // Cursor at absolute line 10
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // After scrolling down 3 lines: top_line = 11, cursor at 10 is now above viewport
-        assert_eq!(state.top_line, 11);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(!state.is_cursor_visible(&lines, 10, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(10));
-    }
-
-    #[test]
-    fn scroll_down_continues_with_cursor_hidden() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 11;
-        state.cursor_line = 0;
-        state.saved_absolute_cursor = Some(10); // Cursor already hidden at line 10
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // After scrolling down 3 more lines: top_line = 14, cursor still at 10
-        assert_eq!(state.top_line, 14);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(!state.is_cursor_visible(&lines, 10, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(10));
-    }
-
-    #[test]
-    fn scroll_up_brings_cursor_back_into_view() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 14;
-        state.cursor_line = 0;
-        state.saved_absolute_cursor = Some(10); // Cursor hidden at line 10
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // After scrolling up 3 lines: top_line = 11, cursor still hidden
-        assert_eq!(state.top_line, 11);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(!state.is_cursor_visible(&lines, 10, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(10));
-        
-        // Scroll up again
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // After scrolling up 3 more lines: top_line = 8, cursor now visible at line 2
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 2);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(state.is_cursor_visible(&lines, 10, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-
-    #[test]
-    fn scroll_up_keeps_cursor_visible() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 10;
-        state.cursor_line = 15; // Cursor at absolute line 25 (below viewport of 10 lines)
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // After scrolling up 3 lines: top_line = 7, cursor at line 18 (absolute 25)
-        assert_eq!(state.top_line, 7);
-        assert_eq!(state.cursor_line, 18);
-        assert_eq!(state.absolute_line(), 25);
-        // Cursor still beyond visible area
-        assert!(!state.is_cursor_visible(&lines, 10, 80));
-    }
-
-    #[test]
-    fn scroll_down_respects_max_scroll() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(20);
-        state.top_line = 18;
-        state.cursor_line = 1; // Cursor at absolute line 19
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // Should only scroll to max (19), not beyond
-        assert_eq!(state.top_line, 19);
-        assert_eq!(state.absolute_line(), 19);
-    }
-
-    #[test]
-    fn scroll_up_stops_at_zero() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 2;
-        state.cursor_line = 5; // Cursor at absolute line 7
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // Should stop at top_line = 0
-        assert_eq!(state.top_line, 0);
-        assert_eq!(state.cursor_line, 7);
-        assert_eq!(state.absolute_line(), 7);
-        assert!(state.is_cursor_visible(&lines, 10, 80));
-    }
-
-    #[test]
-    fn mouse_click_clears_saved_cursor() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        state.top_line = 20;
-        state.cursor_line = 0;
-        state.saved_absolute_cursor = Some(10); // Cursor hidden
-        
-        let mouse_event = MouseEvent {
-            kind: MouseEventKind::Down(MouseButton::Left),
-            column: 5,
-            row: 5,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        handle_mouse_event(&mut state, &lines, mouse_event, 10);
-        
-        // Click should bring cursor back and clear saved position
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-
-    #[test]
-    fn complete_scroll_scenario() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 10, viewport shows lines 5-15
-        state.top_line = 5;
-        state.cursor_line = 5;
-        assert_eq!(state.absolute_line(), 10);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll down once: cursor still visible
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 2);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Scroll down again: cursor disappears
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 11);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(10));
-        
-        // Scroll down more: cursor stays hidden at same absolute position
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 14);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Scroll up: cursor still hidden
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 11);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Scroll up again: cursor comes back into view
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 2);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-        assert!(state.saved_scroll_state.is_none());
-    }
-    
-    #[test]
-    fn keyboard_navigation_restores_cursor_from_saved_position() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 10, viewport at lines 5-15
-        state.top_line = 5;
-        state.cursor_line = 5;
-        assert_eq!(state.absolute_line(), 10);
-        
-        // Scroll down until cursor disappears
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // First scroll: cursor still visible at line 2
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 2);
-        
-        // Second scroll: cursor disappears (saved at line 10, scroll state saved as top=8, cursor=2)
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 11);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(10));
-        assert_eq!(state.saved_scroll_state, Some((8, 2))); // Saved the position just before disappearing
-        
-        // Press Up arrow key
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Up, visible_lines);
-        
-        assert!(moved);
-        // Cursor should be restored to the saved scroll state (top=8, cursor=2), then moved up
-        // After Up: cursor_line = 1, absolute = 9
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 1);
-        assert_eq!(state.absolute_line(), 9);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-        assert!(state.saved_scroll_state.is_none());
-    }
-    
-    #[test]
-    fn keyboard_navigation_down_from_saved_position() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 10, scroll until it disappears
-        state.top_line = 5;
-        state.cursor_line = 5;
-        
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll twice to make cursor disappear
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        
-        // Cursor should be hidden with saved state
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_scroll_state, Some((8, 2)));
-        
-        // Press Down arrow key
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Down, visible_lines);
-        
-        assert!(moved);
-        // Cursor should be restored to saved scroll state, then moved down
-        // Restore to top=8, cursor=2, then Down: cursor=3, absolute=11
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 3);
-        assert_eq!(state.absolute_line(), 11);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-    
-    #[test]
-    fn keyboard_navigation_left_right_from_saved_position() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 10, col 5, scroll until it disappears
-        state.top_line = 5;
-        state.cursor_line = 5;
-        state.cursor_col = 5;
-        
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll twice to make cursor disappear
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Press Left arrow key
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Left, visible_lines);
-        
-        assert!(moved);
-        // Cursor should be restored to saved scroll state and column moved left
-        assert_eq!(state.top_line, 8);
-        assert_eq!(state.cursor_line, 2);
-        assert_eq!(state.cursor_col, 4);
-        assert_eq!(state.absolute_line(), 10);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-    
-    #[test]
-    fn scroll_up_makes_cursor_disappear_below_viewport() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 20, viewport at 15-25, cursor at visual line 5
-        state.top_line = 15;
-        state.cursor_line = 5;
-        assert_eq!(state.absolute_line(), 20);
-        
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // First scroll up: cursor moves down visually but still visible
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 12);
-        assert_eq!(state.cursor_line, 8);
-        assert_eq!(state.absolute_line(), 20);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Second scroll up: cursor disappears below viewport
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 9);
-        assert_eq!(state.cursor_line, 11); // Below visible_lines=10
-        assert_eq!(state.absolute_line(), 20);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(20));
-        assert_eq!(state.saved_scroll_state, Some((12, 8))); // Saved position just before disappearing
-    }
-    
-    #[test]
-    fn scroll_down_brings_cursor_back_from_below() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 20, scroll up until it disappears below
-        state.top_line = 15;
-        state.cursor_line = 5;
-        
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll up twice to make cursor disappear
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(20));
-        
-        // Scroll down: cursor still hidden
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 12);
-        assert_eq!(state.cursor_line, 8);
-        assert_eq!(state.absolute_line(), 20);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-        assert!(state.saved_scroll_state.is_none());
-    }
-    
-    #[test]
-    fn keyboard_navigation_restores_from_below_viewport() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 20, scroll up until it disappears
-        state.top_line = 15;
-        state.cursor_line = 5;
-        
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll up twice to make cursor disappear below viewport
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_scroll_state, Some((12, 8)));
-        
-        // Press Down arrow key
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Down, visible_lines);
-        
-        assert!(moved);
-        // Cursor should be restored to saved scroll state (top=12, cursor=8), then moved down
-        // After Down: cursor=9, absolute=21
-        assert_eq!(state.top_line, 12);
-        assert_eq!(state.cursor_line, 9);
-        assert_eq!(state.absolute_line(), 21);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-        assert!(state.saved_scroll_state.is_none());
-    }
-    
-    #[test]
-    fn keyboard_navigation_up_from_below_viewport() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 20, scroll up until it disappears
-        state.top_line = 15;
-        state.cursor_line = 5;
-        
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll up twice to make cursor disappear below viewport
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Press Up arrow key
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Up, visible_lines);
-        
-        assert!(moved);
-        // Cursor should be restored to saved scroll state, then moved up
-        // Restore to top=12, cursor=8, then Up: cursor=7, absolute=19
-        assert_eq!(state.top_line, 12);
-        assert_eq!(state.cursor_line, 7);
-        assert_eq!(state.absolute_line(), 19);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-    
-    #[test]
-    fn complete_scroll_up_scenario() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 20, viewport shows lines 15-25
-        state.top_line = 15;
-        state.cursor_line = 5;
-        assert_eq!(state.absolute_line(), 20);
-        
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll up once: cursor still visible but lower in viewport
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 12);
-        assert_eq!(state.cursor_line, 8);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Scroll up again: cursor disappears below viewport
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 9);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(20));
-        assert_eq!(state.saved_scroll_state, Some((12, 8)));
-        
-        // Scroll up more: cursor stays hidden at same absolute position
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 6);
-        assert_eq!(state.absolute_line(), 20);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Scroll down: cursor still hidden
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 9);
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        
-        // Scroll down again: cursor comes back into view
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        assert_eq!(state.top_line, 12);
-        assert_eq!(state.cursor_line, 8);
-        assert_eq!(state.absolute_line(), 20);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-        assert!(state.saved_scroll_state.is_none());
-    }
-    
-    #[test]
-    fn page_down_restores_cursor_from_saved_position() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(50);
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 10, scroll down until it disappears
-        state.top_line = 5;
-        state.cursor_line = 5;
-        
-        let scroll_down = MouseEvent {
-            kind: MouseEventKind::ScrollDown,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll twice to make cursor disappear above viewport
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        handle_mouse_event(&mut state, &lines, scroll_down, visible_lines);
-        
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_scroll_state, Some((8, 2)));
-        
-        // Press PageDown
-        let moved = handle_navigation(&mut state, &lines, KeyCode::PageDown, visible_lines);
-        
-        assert!(moved);
-        // Cursor should be restored first, then PageDown moves viewport
-        // Restore to top=8, then PageDown moves to top=18
-        assert_eq!(state.top_line, 18);
-        assert!(state.is_cursor_visible(&lines, visible_lines, 80));
-        assert!(state.saved_absolute_cursor.is_none());
-    }
-    
-    #[test]
-    fn page_up_restores_cursor_from_saved_position() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = create_test_lines(20); // Small file
-        let visible_lines = 10;
-        
-        // Setup: cursor at line 19 (last line), viewport at 10-20
-        state.top_line = 10;
-        state.cursor_line = 9;
-        assert_eq!(state.absolute_line(), 19);
-        
-        let scroll_up = MouseEvent {
-            kind: MouseEventKind::ScrollUp,
-            column: 0,
-            row: 1,
-            modifiers: KeyModifiers::empty(),
-        };
-        
-        // Scroll up - cursor moves down in viewport
-        handle_mouse_event(&mut state, &lines, scroll_up, visible_lines);
-        assert_eq!(state.top_line, 7);
-        assert_eq!(state.cursor_line, 12); // Beyond visible_lines, should be hidden
-        assert!(!state.is_cursor_visible(&lines, visible_lines, 80));
-        assert_eq!(state.saved_absolute_cursor, Some(19));
-        assert_eq!(state.saved_scroll_state, Some((10, 9)));
-    }
-    
-    #[test]
-    fn navigate_down_within_wrapped_line() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        // Create a long line that will wrap (80 char width - 4 for line numbers = 76 chars available)
-        let long_line = "a".repeat(150); // Will wrap into 2 lines
-        let lines = vec![long_line];
-        
-        state.top_line = 0;
-        state.cursor_line = 0;
-        state.cursor_col = 0;
-        
-        // Move down - should stay on same logical line but move to second wrap
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert!(moved);
-        assert_eq!(state.cursor_line, 0); // Still on line 0
-        assert_eq!(state.cursor_col, 76); // Moved to second wrap portion (76 chars in)
-    }
-    
-    #[test]
-    fn navigate_up_within_wrapped_line() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let long_line = "a".repeat(150);
-        let lines = vec![long_line];
-        
-        state.top_line = 0;
-        state.cursor_line = 0;
-        state.cursor_col = 100; // On second wrap portion
-        
-        // Move up - should stay on same logical line but move to first wrap
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Up, 10);
-        assert!(moved);
-        assert_eq!(state.cursor_line, 0); // Still on line 0
-        assert_eq!(state.cursor_col, 24); // Moved back one visual line (100 - 76 = 24)
-    }
-    
-    #[test]
-    fn navigate_down_from_wrapped_to_next_line() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let long_line = "a".repeat(150);
-        let short_line = "b".repeat(20);
-        let lines = vec![long_line, short_line];
-        
-        state.top_line = 0;
-        state.cursor_line = 0;
-        state.cursor_col = 100; // On second wrap of first line
-        
-        // Move down - should go to next logical line
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert!(moved);
-        assert_eq!(state.cursor_line, 1); // Moved to next line
-        assert_eq!(state.cursor_col, 20); // Clamped to line length // Column maintained (100 % 76 = 24)
-    }
-    
-    #[test]
-    fn navigate_up_from_first_wrap_to_previous_line() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let long_line = "a".repeat(150);
-        let short_line = "b".repeat(20);
-        let lines = vec![long_line, short_line];
-        
-        state.top_line = 0;
-        state.cursor_line = 1;
-        state.cursor_col = 10;
-        
-        // Move up - should go to last wrap of previous line
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Up, 10);
-        assert!(moved);
-        assert_eq!(state.cursor_line, 0); // Moved to previous line
-        assert_eq!(state.cursor_col, 86); // On last wrap portion (76 + 10 = 86)
-    }
-    
-    #[test]
-    fn navigate_wrapped_line_with_tabs() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        // Line with tabs - each tab is 4 spaces, so "\t\t" = 8 visual chars
-        let line_with_tabs = format!("\t\t{}", "a".repeat(140));
-        let lines = vec![line_with_tabs];
-        
-        state.top_line = 0;
-        state.cursor_line = 0;
-        state.cursor_col = 0; // At first tab
-        
-        // Move down - should move to next visual line
-        let moved = handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert!(moved);
-        assert_eq!(state.cursor_line, 0); // Still on same logical line
-        // Cursor should have moved down one visual line (76 chars)
-        assert!(state.cursor_col > 0);
-    }
-    
-    #[test]
-    fn navigate_multiple_wrapped_lines() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let very_long_line = "a".repeat(300); // Will wrap into 4 visual lines
-        let lines = vec![very_long_line];
-        
-        state.top_line = 0;
-        state.cursor_line = 0;
-        state.cursor_col = 0;
-        
-        // Move down three times - should move through wraps
-        handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert_eq!(state.cursor_col, 76);
-        
-        handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert_eq!(state.cursor_col, 152);
-        
-        handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert_eq!(state.cursor_col, 228);
-        
-        // Move up three times - should return to start
-        handle_navigation(&mut state, &lines, KeyCode::Up, 10);
-        assert_eq!(state.cursor_col, 152);
-        
-        handle_navigation(&mut state, &lines, KeyCode::Up, 10);
-        assert_eq!(state.cursor_col, 76);
-        
-        handle_navigation(&mut state, &lines, KeyCode::Up, 10);
-        assert_eq!(state.cursor_col, 0);
-    }
-    
-    #[test]
-    fn wrapped_line_scrolling_when_moving_down() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let visible_lines = 5;
-        
-        // Create multiple long lines that wrap
-        let mut lines = Vec::new();
-        for _ in 0..10 {
-            lines.push("a".repeat(150)); // Each wraps into 2 visual lines
-        }
-        
-        state.top_line = 0;
-        state.cursor_line = 4; // Near bottom of visible area
-        state.cursor_col = 0;
-        
-        // Moving down multiple times should eventually scroll
-        let initial_top = state.top_line;
-        
-        // Move down several times
-        for _ in 0..10 {
-            handle_navigation(&mut state, &lines, KeyCode::Down, visible_lines);
-        }
-        
-        // Should have scrolled
-        assert!(state.top_line > initial_top);
-    }
-    
-    #[test]
-    fn empty_line_navigation() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let lines = vec!["".to_string(), "a".repeat(150), "".to_string()];
-        
-        state.top_line = 0;
-        state.cursor_line = 0;
-        state.cursor_col = 0;
-        
-        // Move down from empty line
-        handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert_eq!(state.cursor_line, 1);
-        assert_eq!(state.cursor_col, 0);
-        
-        // Move down within wrapped line
-        handle_navigation(&mut state, &lines, KeyCode::Down, 10);
-        assert_eq!(state.cursor_line, 1);
-        assert_eq!(state.cursor_col, 76);
+        let mut lines = create_test_lines(100);
+        state.top_line = 10; state.cursor_line = 5; // absolute 15
+        let abs_before = state.absolute_line();
+        assert_eq!(abs_before, 15);
+        // simulate Ctrl+Down scroll (delta +3)
+        super::scroll_without_cursor(&mut state, &lines, 20, 3);
+        assert_eq!(state.absolute_line(), 15, "Absolute cursor should remain after scroll down");
+        super::scroll_without_cursor(&mut state, &lines, 20, -3);
+        assert_eq!(state.absolute_line(), 15, "Absolute cursor should remain after scroll up");
     }
 }

@@ -339,52 +339,62 @@ fn render_line_segment_with_selection_expanded(
     let (start, end) = normalize_selection(sel_start, sel_end);
     let (start_line, start_col) = start;
     let (end_line, end_col) = end;
-    
-    // If this line is not in the selection range, just render normally
+
+    // Outside selection range -> normal rendering
     if line_index < start_line || line_index > end_line {
         return render_line_segment_expanded(stdout, expanded_chars, original_line, start_visual, end_visual, file, state, tab_width);
     }
-    
-    // Convert character-based selection to visual positions
-    let start_visual_col = if line_index == start_line {
-        visual_width_up_to(original_line, start_col, tab_width)
-    } else {
-        0
-    };
-    
-    let end_visual_col = if line_index == end_line {
-        visual_width_up_to(original_line, end_col, tab_width)
-    } else {
-        usize::MAX
-    };
-    
-    // Get syntax highlighting spans once for the entire line if enabled
-    let spans = if state.settings.enable_syntax_highlighting {
-        let s = get_highlight_spans(original_line, file, state.settings);
-        if s.is_empty() { None } else { Some(s) }
+
+    // Convert selection character indices to visual column range
+    let start_visual_col = if line_index == start_line { visual_width_up_to(original_line, start_col, tab_width) } else { 0 };
+    let end_visual_col = if line_index == end_line { visual_width_up_to(original_line, end_col, tab_width) } else { usize::MAX };
+
+    // Optional syntax spans
+    let spans_opt = if state.settings.enable_syntax_highlighting {
+        let spans = get_highlight_spans(original_line, file, state.settings);
+        if spans.is_empty() { None } else { Some(spans) }
     } else { None };
-    
-    // Render each character in the segment, applying selection styling where appropriate
-    for visual_i in start_visual..end_visual {
-        if visual_i >= expanded_chars.len() {
-            break;
+
+    // Build mapping from visual position to original character index (tabs expand)
+    let mut visual_to_char = Vec::new();
+    let mut vis = 0;
+    for (idx, ch) in original_line.chars().enumerate() {
+        if ch == '\t' {
+            let spaces = tab_width - (vis % tab_width);
+            for _ in 0..spaces { visual_to_char.push(idx); vis += 1; }
+        } else {
+            visual_to_char.push(idx); vis += 1;
         }
-        
+    }
+
+    for visual_i in start_visual..end_visual {
+        if visual_i >= expanded_chars.len() { break; }
         let ch = expanded_chars[visual_i];
         let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
-        
+        let orig_idx = if visual_i < visual_to_char.len() { visual_to_char[visual_i] } else { original_line.chars().count() };
+
         if is_selected {
-            // Selection overrides syntax highlighting
+            // Apply syntax color if available, then reverse
+            if let Some(ref spans) = spans_opt {
+                if let Some(span) = spans.iter().find(|s| orig_idx >= s.start && orig_idx < s.end) {
+                    span.apply_to_stdout(stdout)?;
+                }
+            }
             write!(stdout, "{}", ch.to_string().reverse())?;
-        } else if let Some(ref _spans) = spans {
-            // For now, just render without highlighting when we have tabs
-            // Proper implementation would need to map visual positions back to original
-            write!(stdout, "{}", ch)?;
+            execute!(stdout, ResetColor)?;
+        } else if let Some(ref spans) = spans_opt {
+            if let Some(span) = spans.iter().find(|s| orig_idx >= s.start && orig_idx < s.end) {
+                span.apply_to_stdout(stdout)?;
+                write!(stdout, "{}", ch)?;
+                execute!(stdout, ResetColor)?;
+            } else {
+                write!(stdout, "{}", ch)?;
+            }
         } else {
             write!(stdout, "{}", ch)?;
         }
     }
-    
+
     Ok(())
 }
 
