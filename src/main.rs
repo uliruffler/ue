@@ -17,7 +17,7 @@ mod recent;
 // #[cfg(test)] mod syntax_loading_tests;
 
 #[derive(Parser)]
-#[clap(name = "ed", version = env!("CARGO_PKG_VERSION"), about = "Simple terminal editor")]
+#[clap(name = "ue", version = env!("CARGO_PKG_VERSION"), about = "Simple terminal editor")]
 struct Cli {
     /// Files to be processed
     files: Vec<String>,

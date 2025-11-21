@@ -115,7 +115,7 @@
 │ Configuration & keybindings                                  │
 │ • Settings struct - Configuration                            │
 │ • KeyBindings - Key mapping                                  │
-│ • load() - Read from ~/.ed/settings.toml                     │
+│ • load() - Read from ~/.ue/settings.toml                     │
 │ • *_matches() - Check keybinding match                       │
 │ • enable_syntax_highlighting flag                            │
 │ + 7 tests                                                    │
@@ -129,7 +129,7 @@
 │ • SyntaxDefinition - Keywords, matches, colors               │
 │ • ColorSpec - ANSI colors, bold/italic attributes            │
 │ • SyntaxMatch - Regex-based patterns                         │
-│ • get_syntax_for_extension() - Load from ~/.ed/syntax/       │
+│ • get_syntax_for_extension() - Load from ~/.ue/syntax/       │
 │ • parse_vim_syntax() - Parse simplified Vim syntax           │
 │ • ColorSpec::apply_to_stdout() - Apply colors to terminal    │
 │ • SYNTAX_CACHE - Cache parsed definitions                    │
@@ -190,7 +190,7 @@ rendering::get_highlight_spans()
          ▼
 syntax::get_syntax_for_extension()
   1. Check SYNTAX_CACHE
-  2. If miss: load ~/.ed/syntax/{ext}.vim
+  2. If miss: load ~/.ue/syntax/{ext}.vim
   3. parse_vim_syntax() - Parse keywords, matches, colors
   4. Cache result
   Returns: SyntaxDefinition

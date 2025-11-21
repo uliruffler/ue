@@ -48,7 +48,7 @@ To copy text:
 
 ## Configuration
 
-The application reads key bindings from `~/.ed/settings.toml`. If this file doesn't exist, it will be created automatically with default settings on first run.
+The application reads key bindings from `~/.ue/settings.toml`. If this file doesn't exist, it will be created automatically with default settings on first run.
 
 The default configuration is stored in `settings.toml` in the repository and is embedded into the binary at compile time.
 
@@ -104,11 +104,11 @@ This would:
 The editor supports syntax highlighting using simplified Vim syntax files. See [SYNTAX.md](SYNTAX.md) for details.
 
 Quick setup:
-1. Create directory: `~/.ed/syntax/`
+1. Create directory: `~/.ue/syntax/`
 2. Add `.vim` files named after extensions (e.g., `rs.vim` for Rust, `py.vim` for Python)
-3. Enable in `~/.ed/settings.toml`: `enable_syntax_highlighting = true` (default)
+3. Enable in `~/.ue/settings.toml`: `enable_syntax_highlighting = true` (default)
 
-Sample syntax files for Rust and Python are automatically created in `~/.ed/syntax/` on first run.
+Sample syntax files for Rust and Python are automatically created in `~/.ue/syntax/` on first run.
 
 ## Usage
 

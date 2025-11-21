@@ -6,7 +6,7 @@
 # and so on...
 line_number_digits = 3
 
-# Enable syntax highlighting from ~/.ed/syntax/*.vim files
+# Enable syntax highlighting from ~/.ue/syntax/*.vim files
 enable_syntax_highlighting = true
 
 # Width of tab character (number of spaces)
