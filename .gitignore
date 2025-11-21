@@ -1,0 +1,25 @@
+# Rust build artifacts
+/target/
+
+# Cargo.lock for libraries (keep it for binaries)
+# Cargo.lock is kept by default for binary projects
+
+# IDE/Editor files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# RustRover/IntelliJ
+*.iml
+.idea/
+
+# Debug files
+*.pdb
+
+# Backup files
+*.bak
+*.orig
+

@@ -1,0 +1,24 @@
+# Number of digits for line numbering
+# 0 = no line numbers (and no space)
+# 1 = count 10s (0-9)
+# 2 = count 100s (0-99)
+# 3 = count 1000s (0-999)
+# and so on...
+line_number_digits = 3
+
+# Enable syntax highlighting from ~/.ed/syntax/*.vim files
+enable_syntax_highlighting = true
+
+# Width of tab character (number of spaces)
+tab_width = 4
+
+[keybindings]
+quit = "Ctrl+q"
+file_selector = "Esc"
+copy = "Ctrl+c"
+paste = "Ctrl+v"
+cut = "Ctrl+x"
+close = "Ctrl+w"
+save = "Ctrl+s"
+undo = "Ctrl+z"
+redo = "Ctrl+y"
