@@ -179,9 +179,11 @@ fn run_file_selector(files: &[FileEntry]) -> io::Result<Option<String>> {
         if let Event::Key(key_event) = event::read()? {
             match key_event.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
+                    let _ = crate::session::save_selector_session();
                     return Ok(None);
                 }
                 KeyCode::Char('c') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    let _ = crate::session::save_selector_session();
                     return Ok(None);
                 }
                 KeyCode::Enter => {

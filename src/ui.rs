@@ -202,11 +202,16 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
             if Instant::now().duration_since(last_press) >= double_press_threshold {
                 // Timeout - open file selector now
                 last_esc_press = None;
+                // Persist current cursor & history before leaving editor view
+                state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+                let _ = state.undo_history.save(file);
                 match run_file_selector_overlay(file, &mut visible_lines, settings)? {
                     SelectorResult::Selected(selected_file) => {
                         return Ok((state.modified, Some(selected_file), false, false));
                     }
                     SelectorResult::Quit => {
+                        // Quit from selector: save selector session
+                        let _ = crate::session::save_selector_session();
                         return Ok((state.modified, None, true, false));
                     }
                     SelectorResult::Cancelled => {
@@ -230,15 +235,18 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
             // Timeout reached - open file selector if Esc is pending
             if last_esc_press.is_some() {
                 last_esc_press = None;
+                // Persist current cursor & history before overlay
+                state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+                let _ = state.undo_history.save(file);
                 match run_file_selector_overlay(file, &mut visible_lines, settings)? {
                     SelectorResult::Selected(selected_file) => {
                         return Ok((state.modified, Some(selected_file), false, false));
                     }
                     SelectorResult::Quit => {
+                        let _ = crate::session::save_selector_session();
                         return Ok((state.modified, None, true, false));
                     }
                     SelectorResult::Cancelled => {
-                        // Cancelled - redraw editor
                         state.needs_redraw = true;
                         continue;
                     }
@@ -256,11 +264,13 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                     let now = Instant::now();
                     if let Some(last_press) = last_esc_press {
                         if now.duration_since(last_press) < double_press_threshold {
-                            // Double Esc detected - quit immediately
+                            // Double Esc detected - quit immediately: persist cursor & history and save editor session
+                            state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+                            let _ = state.undo_history.save(file);
+                            let _ = crate::session::save_editor_session(file);
                             return Ok((state.modified, None, true, false));
                         }
                     }
-                    
                     // First Esc - record time and wait for potential second press
                     last_esc_press = Some(now);
                     continue; // Don't process other handlers, wait for timeout or second Esc

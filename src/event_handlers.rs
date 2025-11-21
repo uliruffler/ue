@@ -65,6 +65,8 @@ pub(crate) fn handle_key_event(
         let abs = state.absolute_line();
         state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
         let _ = state.undo_history.save(filename);
+        // Save session as editor
+        let _ = crate::session::save_editor_session(filename);
         return Ok((true, false));
     }
 
@@ -593,7 +595,7 @@ mod tests {
     fn ctrl_scroll_preserves_absolute_cursor() {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
-        let mut lines = create_test_lines(100);
+        let lines = create_test_lines(100);
         state.top_line = 10; state.cursor_line = 5; // absolute 15
         let abs_before = state.absolute_line();
         assert_eq!(abs_before, 15);
