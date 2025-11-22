@@ -259,7 +259,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                 let (new_top, rel_cursor) = adjust_view_for_resize(state.top_line, absolute_cursor_line, visible_lines, lines.len());
                 state.top_line = new_top; state.cursor_line = rel_cursor; state.cursor_col = cursor_col; execute!(stdout, terminal::Clear(ClearType::All))?; state.needs_redraw = true;
             }
-            Event::Mouse(mouse_event) => { handle_mouse_event(&mut state, &lines, mouse_event, visible_lines); }
+            Event::Mouse(mouse_event) => { handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines); }
             _ => {}
         }
     }

@@ -1,14 +1,14 @@
-use crossterm::event::{MouseEvent, MouseEventKind, MouseButton};
+use crossterm::event::{MouseEvent, MouseEventKind, MouseButton, KeyModifiers};
 use crate::coordinates::visual_to_logical_position;
 use crate::editor_state::FileViewerState;
 /// Main entry point for all mouse event handling
 pub(crate) fn handle_mouse_event(
     state: &mut FileViewerState,
-    lines: &[String],
+    lines: &mut Vec<String>,
     mouse_event: MouseEvent,
     visible_lines: usize,
 ) {
-    let MouseEvent { kind, column, row, .. } = mouse_event;
+    let MouseEvent { kind, column, row, modifiers, .. } = mouse_event;
     // Ignore clicks on header row
     if row == 0 {
         return;
@@ -20,12 +20,32 @@ pub(crate) fn handle_mouse_event(
     }
     match kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            handle_mouse_click(state, lines, visual_line, column);
+            let pos_opt = visual_to_logical_position(state, lines, visual_line, column);
+            if let Some((logical_line, col)) = pos_opt {
+                let clicked = (logical_line, col.min(lines[logical_line].len()));
+                if state.is_point_in_selection(clicked) {
+                    // Start drag operation
+                    state.start_drag();
+                } else {
+                    // Normal cursor move
+                    handle_mouse_click(state, lines, visual_line, column);
+                }
+            }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
-            handle_mouse_drag(state, lines, visual_line, column);
+            if state.dragging_selection_active {
+                if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column) {
+                    state.drag_target = Some((logical_line, col.min(lines[logical_line].len())));
+                    state.needs_redraw = true; // could render a placeholder caret
+                }
+            } else {
+                handle_mouse_drag(state, lines, visual_line, column);
+            }
         }
         MouseEventKind::Up(MouseButton::Left) => {
+            if state.dragging_selection_active {
+                finalize_drag(state, lines, modifiers.contains(KeyModifiers::CONTROL));
+            }
             state.mouse_dragging = false;
         }
         MouseEventKind::ScrollDown => {
@@ -149,4 +169,12 @@ fn save_cursor_state_if_needed(state: &mut FileViewerState, old_top: usize, old_
 fn restore_cursor_to_screen(state: &mut FileViewerState) {
     state.saved_absolute_cursor = None;
     state.saved_scroll_state = None;
+}
+/// Finalize a drag operation: move or copy selected text to drag_target
+fn finalize_drag(state: &mut FileViewerState, lines: &mut Vec<String>, copy: bool) {
+    use crate::editing::apply_drag;
+    if let (Some(start), Some(end), Some(dest)) = (state.drag_source_start, state.drag_source_end, state.drag_target) {
+        apply_drag(state, lines, start, end, dest, copy);
+    }
+    state.clear_drag();
 }

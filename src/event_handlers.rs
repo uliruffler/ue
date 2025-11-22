@@ -135,7 +135,7 @@ pub(crate) fn handle_key_event(
 }
 
 /// Delegate mouse event handling to mouse_handlers module
-pub(crate) use crate::mouse_handlers::handle_mouse_event;
+pub(crate) use crate::mouse_handlers::handle_mouse_event; // now takes &mut Vec<String>
 
 fn is_exit_command(code: &KeyCode, modifiers: &KeyModifiers, settings: &Settings) -> bool {
     settings.keybindings.quit_matches(code, modifiers)

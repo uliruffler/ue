@@ -22,6 +22,11 @@ pub(crate) struct FileViewerState<'a> {
     /// Saved scroll state (top_line, cursor_line) when cursor first goes off-screen
     /// Used to restore original viewport when navigating back
     pub(crate) saved_scroll_state: Option<(usize, usize)>,
+    pub(crate) drag_source_start: Option<Position>,
+    pub(crate) drag_source_end: Option<Position>,
+    pub(crate) drag_text: Option<String>,
+    pub(crate) dragging_selection_active: bool,
+    pub(crate) drag_target: Option<Position>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -40,6 +45,11 @@ impl<'a> FileViewerState<'a> {
             mouse_dragging: false,
             saved_absolute_cursor: None,
             saved_scroll_state: None,
+            dragging_selection_active: false,
+            drag_source_start: None,
+            drag_source_end: None,
+            drag_text: None,
+            drag_target: None,
         }
     }
 
@@ -122,6 +132,41 @@ impl<'a> FileViewerState<'a> {
             self.cursor_line = 0;
             self.top_line = absolute;
         }
+    }
+
+    pub(crate) fn selection_range(&self) -> Option<(Position, Position)> {
+        if let (Some(s), Some(e)) = (self.selection_start, self.selection_end) {
+            let (start, end) = if s.0 < e.0 || (s.0 == e.0 && s.1 <= e.1) { (s, e) } else { (e, s) };
+            Some((start, end))
+        } else { None }
+    }
+
+    pub(crate) fn is_point_in_selection(&self, pos: Position) -> bool {
+        if let Some((start, end)) = self.selection_range() {
+            let (l,c) = pos; let (sl, sc) = start; let (el, ec) = end;
+            if l < sl || l > el { return false; }
+            if sl == el { return c >= sc && c < ec; }
+            if l == sl { return c >= sc; }
+            if l == el { return c < ec; }
+            true
+        } else { false }
+    }
+
+    pub(crate) fn start_drag(&mut self) {
+        if let Some((start, end)) = self.selection_range() {
+            self.drag_source_start = Some(start);
+            self.drag_source_end = Some(end);
+            self.dragging_selection_active = true;
+            self.drag_target = None;
+        }
+    }
+
+    pub(crate) fn clear_drag(&mut self) {
+        self.drag_source_start = None;
+        self.drag_source_end = None;
+        self.drag_text = None;
+        self.dragging_selection_active = false;
+        self.drag_target = None;
     }
 }
 
