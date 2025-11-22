@@ -15,6 +15,7 @@ use crate::event_handlers::{handle_key_event, handle_mouse_event};
 use crate::rendering::render_screen;
 use crate::settings::Settings;
 use crate::undo::UndoHistory;
+use crate::double_esc::{DoubleEscDetector, EscResult};
 
 /// Result of file selector overlay: Selected(path), Cancelled, or Quit
 enum SelectorResult {
@@ -191,65 +192,37 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     state.needs_redraw = true;
 
     // Track last Esc press time for double-press detection
-    let mut last_esc_press: Option<Instant> = None;
-    let double_press_threshold = Duration::from_millis(settings.double_tap_speed_ms);
+    let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
 
     loop {
         if state.needs_redraw { render_screen(&mut stdout, file, &lines, &state, visible_lines)?; state.needs_redraw = false; }
         
         // Check if we should open file selector after timeout
-        if let Some(last_press) = last_esc_press {
-            if Instant::now().duration_since(last_press) >= double_press_threshold {
-                // Timeout - open file selector now
-                last_esc_press = None;
-                // Persist current cursor & history before leaving editor view
-                state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-                let _ = state.undo_history.save(file);
-                match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                    SelectorResult::Selected(selected_file) => {
-                        return Ok((state.modified, Some(selected_file), false, false));
-                    }
-                    SelectorResult::Quit => {
-                        // Quit from selector: save selector session
-                        let _ = crate::session::save_selector_session();
-                        return Ok((state.modified, None, true, false));
-                    }
-                    SelectorResult::Cancelled => {
-                        // Cancelled - redraw editor
-                        state.needs_redraw = true;
-                        continue;
-                    }
-                }
+        if last_esc.timed_out() {
+            last_esc.clear();
+            // Persist before selector
+            state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+            if let Err(e) = state.undo_history.save(file) { eprintln!("Warning: failed to save undo history: {}", e); }
+            match run_file_selector_overlay(file, &mut visible_lines, settings)? {
+                SelectorResult::Selected(selected_file) => { return Ok((state.modified, Some(selected_file), false, false)); }
+                SelectorResult::Quit => { if let Err(e) = crate::session::save_selector_session() { eprintln!("Warning: failed to save selector session: {}", e); } return Ok((state.modified, None, true, false)); }
+                SelectorResult::Cancelled => { state.needs_redraw = true; continue; }
             }
         }
         
         // Use poll with timeout to detect when to open file selector
-        let timeout = if last_esc_press.is_some() {
-            let elapsed = Instant::now().duration_since(last_esc_press.unwrap());
-            double_press_threshold.checked_sub(elapsed).unwrap_or(Duration::from_millis(0))
-        } else {
-            Duration::from_secs(86400) // 24 hours if no Esc pending
-        };
+        let timeout = last_esc.remaining_timeout();
         
         if !event::poll(timeout)? {
-            // Timeout reached - open file selector if Esc is pending
-            if last_esc_press.is_some() {
-                last_esc_press = None;
-                // Persist current cursor & history before overlay
+            if last_esc.timed_out() {
+                last_esc.clear();
+                // Persist before selector
                 state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-                let _ = state.undo_history.save(file);
+                if let Err(e) = state.undo_history.save(file) { eprintln!("Warning: failed to save undo history: {}", e); }
                 match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                    SelectorResult::Selected(selected_file) => {
-                        return Ok((state.modified, Some(selected_file), false, false));
-                    }
-                    SelectorResult::Quit => {
-                        let _ = crate::session::save_selector_session();
-                        return Ok((state.modified, None, true, false));
-                    }
-                    SelectorResult::Cancelled => {
-                        state.needs_redraw = true;
-                        continue;
-                    }
+                    SelectorResult::Selected(selected_file) => { return Ok((state.modified, Some(selected_file), false, false)); }
+                    SelectorResult::Quit => { if let Err(e) = crate::session::save_selector_session() { eprintln!("Warning: failed to save selector session: {}", e); } return Ok((state.modified, None, true, false)); }
+                    SelectorResult::Cancelled => { state.needs_redraw = true; continue; }
                 }
             }
             continue;
@@ -257,27 +230,20 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         
         match event::read()? {
             Event::Key(key_event) => {
-                use crossterm::event::KeyCode;
-                
-                // Check for double Esc press to quit
-                if key_event.code == KeyCode::Esc && key_event.modifiers.is_empty() {
-                    let now = Instant::now();
-                    if let Some(last_press) = last_esc_press {
-                        if now.duration_since(last_press) < double_press_threshold {
-                            // Double Esc detected - quit immediately: persist cursor & history and save editor session
-                            state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-                            let _ = state.undo_history.save(file);
-                            let _ = crate::session::save_editor_session(file);
-                            return Ok((state.modified, None, true, false));
-                        }
+                // Double-Esc processing
+                match last_esc.process_key(&key_event) {
+                    EscResult::Double => {
+                        state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+                        if let Err(e) = state.undo_history.save(file) { eprintln!("Warning: failed to save undo history: {}", e); }
+                        if let Err(e) = crate::session::save_editor_session(file) { eprintln!("Warning: failed to save editor session: {}", e); }
+                        return Ok((state.modified, None, true, false));
                     }
-                    // First Esc - record time and wait for potential second press
-                    last_esc_press = Some(now);
-                    continue; // Don't process other handlers, wait for timeout or second Esc
+                    EscResult::First => { continue; } // wait for second or timeout
+                    EscResult::None => { /* normal key handling */ }
                 }
                 
                 // Any other key clears the pending Esc
-                last_esc_press = None;
+                last_esc.clear();
                 
                 // Handle key event and check for quit or close signals
                 let (should_quit, should_close) = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, file)?;

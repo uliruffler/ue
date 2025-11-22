@@ -20,10 +20,22 @@ pub(crate) struct Settings {
     pub(crate) line_numbers_bg: String,
     #[serde(default = "default_syntax_max_bytes")]
     pub(crate) syntax_max_bytes: u64,
+    #[serde(default = "default_mouse_scroll_lines")]
+    pub(crate) mouse_scroll_lines: usize,
+    #[serde(default = "default_keyboard_scroll_lines")]
+    pub(crate) keyboard_scroll_lines: usize,
 }
 
 fn default_syntax_highlighting() -> bool {
     true
+}
+
+fn default_mouse_scroll_lines() -> usize {
+    3
+}
+
+fn default_keyboard_scroll_lines() -> usize {
+    3
 }
 
 fn default_tab_width() -> usize {

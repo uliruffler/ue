@@ -1,8 +1,8 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseEvent, MouseEventKind, MouseButton};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use std::io::Write;
 
-use crate::coordinates::{visual_to_logical_position, line_number_width, visual_col_to_char_index};
+use crate::coordinates::{line_number_width, visual_col_to_char_index};
 use crate::editor_state::FileViewerState;
 use crate::editing::{
     apply_redo, apply_undo, handle_copy, handle_cut, handle_editing_keys, handle_paste, save_file, delete_file_history,
@@ -25,11 +25,12 @@ pub(crate) fn handle_key_event(
         let extend = modifiers.contains(KeyModifiers::SHIFT);
         if extend { state.start_selection(); }
         let mut moved = false;
+        let scroll_delta = settings.keyboard_scroll_lines as isize;
         match code {
             KeyCode::Left => { moved = word_left(state, lines); }
             KeyCode::Right => { moved = word_right(state, lines); }
-            KeyCode::Up => { moved = scroll_without_cursor(state, lines, visible_lines, -3); }
-            KeyCode::Down => { moved = scroll_without_cursor(state, lines, visible_lines, 3); }
+            KeyCode::Up => { moved = scroll_without_cursor(state, lines, visible_lines, -scroll_delta); }
+            KeyCode::Down => { moved = scroll_without_cursor(state, lines, visible_lines, scroll_delta); }
             _ => {}
         }
         if moved {
@@ -133,148 +134,8 @@ pub(crate) fn handle_key_event(
     Ok((false, false))
 }
 
-pub(crate) fn handle_mouse_event(
-    state: &mut FileViewerState,
-    lines: &[String],
-    mouse_event: MouseEvent,
-    visible_lines: usize,
-) {
-    let MouseEvent { kind, column, row, .. } = mouse_event;
-    
-    // Calculate the position in the file based on mouse coordinates
-    // Row 0 is the header, row 1+ is content
-    if row == 0 {
-        return; // Ignore clicks on header
-    }
-    
-    let visual_line = (row as usize).saturating_sub(1); // Subtract header line
-    
-    // Don't process clicks beyond visible content area
-    if visual_line >= visible_lines {
-        return;
-    }
-    
-    match kind {
-        MouseEventKind::Down(MouseButton::Left) => {
-            // Calculate which logical line and column was clicked
-            if let Some((logical_line, col)) = visual_to_logical_position(
-                state,
-                lines,
-                visual_line,
-                column,
-            ) {
-                // Move cursor to clicked position
-                if logical_line < lines.len() {
-                    state.saved_absolute_cursor = None; // Cursor is back on screen
-                    state.saved_scroll_state = None; // Clear saved scroll state
-                    state.cursor_line = logical_line.saturating_sub(state.top_line);
-                    state.cursor_col = col.min(lines[logical_line].len());
-                    state.clear_selection();
-                    state.mouse_dragging = true;
-                    state.needs_redraw = true;
-                }
-            }
-        }
-        MouseEventKind::Drag(MouseButton::Left) => {
-            if state.mouse_dragging {
-                // Start or update selection
-                if state.selection_start.is_none() {
-                    state.selection_start = Some(state.current_position());
-                }
-                
-                if let Some((logical_line, col)) = visual_to_logical_position(
-                    state,
-                    lines,
-                    visual_line,
-                    column,
-                ) {
-                    if logical_line < lines.len() {
-                        state.saved_absolute_cursor = None; // Cursor is back on screen
-                        state.saved_scroll_state = None; // Clear saved scroll state
-                        state.cursor_line = logical_line.saturating_sub(state.top_line);
-                        state.cursor_col = col.min(lines[logical_line].len());
-                        state.selection_end = Some(state.current_position());
-                        state.needs_redraw = true;
-                    }
-                }
-            }
-        }
-        MouseEventKind::Up(MouseButton::Left) => {
-            state.mouse_dragging = false;
-        }
-        MouseEventKind::ScrollDown => {
-            // Scroll down by 3 lines, keeping cursor at its absolute position
-            let scroll_amount = 3;
-            let max_scroll = lines.len().saturating_sub(1);
-            let absolute_cursor = state.absolute_line();
-            let old_top = state.top_line;
-            let old_cursor_line = state.cursor_line;
-            state.top_line = (state.top_line + scroll_amount).min(max_scroll);
-            
-            // Check if cursor is now above the visible area
-            if absolute_cursor < state.top_line {
-                // Cursor is above visible area
-                // Save scroll state if this is the first time cursor goes off-screen
-                if state.saved_scroll_state.is_none() {
-                    state.saved_scroll_state = Some((old_top, old_cursor_line));
-                }
-                state.saved_absolute_cursor = Some(absolute_cursor);
-                state.cursor_line = 0; // Doesn't matter, cursor is hidden
-            } else {
-                // Cursor is on or below the screen - clear saved state
-                state.saved_absolute_cursor = None;
-                state.saved_scroll_state = None;
-                state.cursor_line = absolute_cursor - state.top_line;
-            }
-            
-            // Only redraw if we actually scrolled
-            if state.top_line != old_top {
-                state.needs_redraw = true;
-            }
-        }
-        MouseEventKind::ScrollUp => {
-            // Scroll up by 3 lines, keeping cursor at its absolute position
-            let scroll_amount = 3;
-            let absolute_cursor = state.absolute_line();
-            let old_top = state.top_line;
-            let old_cursor_line = state.cursor_line;
-            state.top_line = state.top_line.saturating_sub(scroll_amount);
-            
-            // Check if cursor should come back into view or stay/go off-screen
-            if absolute_cursor >= state.top_line {
-                // Calculate new cursor_line
-                let new_cursor_line = absolute_cursor - state.top_line;
-                
-                // Check if cursor is now below the visible area
-                if new_cursor_line >= visible_lines {
-                    // Cursor is below visible area
-                    // Save scroll state if this is the first time cursor goes off-screen
-                    if state.saved_scroll_state.is_none() {
-                        state.saved_scroll_state = Some((old_top, old_cursor_line));
-                    }
-                    state.saved_absolute_cursor = Some(absolute_cursor);
-                    state.cursor_line = new_cursor_line; // Keep tracking even though invisible
-                } else {
-                    // Cursor is visible - clear saved state
-                    state.saved_absolute_cursor = None;
-                    state.saved_scroll_state = None;
-                    state.cursor_line = new_cursor_line;
-                }
-            } else {
-                // Cursor is still above the visible area (shouldn't normally happen when scrolling up,
-                // but keep it for consistency)
-                state.saved_absolute_cursor = Some(absolute_cursor);
-                state.cursor_line = 0;
-            }
-            
-            // Only redraw if we actually scrolled
-            if state.top_line != old_top {
-                state.needs_redraw = true;
-            }
-        }
-        _ => {}
-    }
-}
+/// Delegate mouse event handling to mouse_handlers module
+pub(crate) use crate::mouse_handlers::handle_mouse_event;
 
 fn is_exit_command(code: &KeyCode, modifiers: &KeyModifiers, settings: &Settings) -> bool {
     settings.keybindings.quit_matches(code, modifiers)

@@ -204,24 +204,54 @@ pub(crate) fn highlight_line(line: &str, filename: &str, settings: &crate::setti
 }
 
 #[cfg(test)]
+#[cfg(test)]
 mod tests {
     use super::*;
-    fn test_settings() -> crate::settings::Settings { crate::settings::Settings { keybindings: crate::settings::KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into() }, line_number_digits:3, enable_syntax_highlighting:true, tab_width:4, double_tap_speed_ms:300, header_bg:"#001848".into(), footer_bg:"#001848".into(), line_numbers_bg:"#001848".into(), syntax_max_bytes:500_000 } }
+    use crate::env::set_temp_home;
+    fn test_settings() -> crate::settings::Settings {
+        crate::settings::Settings::load().expect("Failed to load test settings")
+    }
     #[test]
-    fn test_rust_syntax_highlighting() { let line = "fn main() {"; let spans = highlight_line(line, "test.rs", &test_settings()); assert!(!spans.is_empty(), "Rust syntax should produce highlights"); }
+    fn test_rust_syntax_highlighting() {
+        let (_tmp, _guard) = set_temp_home();
+        let line = "fn main() {";
+        let spans = highlight_line(line, "test.rs", &test_settings());
+        assert!(!spans.is_empty(), "Rust syntax should produce highlights");
+    }
     #[test]
-    fn test_python_syntax_highlighting() { let line = "def hello():"; let spans = highlight_line(line, "test.py", &test_settings()); assert!(!spans.is_empty(), "Python syntax should produce highlights"); }
+    fn test_python_syntax_highlighting() {
+        let (_tmp, _guard) = set_temp_home();
+        let line = "def hello():";
+        let spans = highlight_line(line, "test.py", &test_settings());
+        assert!(!spans.is_empty(), "Python syntax should produce highlights");
+    }
     #[test]
-    fn test_unknown_extension() { let line = "some text"; let spans = highlight_line(line, "test.unknown", &test_settings()); assert!(spans.is_empty(), "Unknown extension should not highlight"); }
+    fn test_unknown_extension() {
+        let (_tmp, _guard) = set_temp_home();
+        let line = "some text";
+        let spans = highlight_line(line, "test.unknown", &test_settings());
+        assert!(spans.is_empty(), "Unknown extension should not highlight");
+    }
     #[test]
-    fn test_no_extension() { let line = "#!/bin/bash"; let spans = highlight_line(line, "script", &test_settings()); let _ = spans; }
+    fn test_no_extension() {
+        let (_tmp, _guard) = set_temp_home();
+        let line = "#!/bin/bash";
+        let spans = highlight_line(line, "script", &test_settings());
+        let _ = spans;
+    }
     #[test]
-    fn test_large_file_skips() { 
-        let s = test_settings(); 
+    fn test_large_file_skips() {
+        let (_tmp, _guard) = set_temp_home();
+        let s = test_settings();
         let tmp_path = tempfile::Builder::new().suffix(".rs").tempfile().unwrap();
-        std::fs::write(tmp_path.path(), "fn a() {}\n").unwrap(); // small file highlights
+        std::fs::write(tmp_path.path(), "fn a() {}\n").unwrap();
         let fname = tmp_path.path().to_str().unwrap();
-        let spans_small = highlight_line("fn a() {}", fname, &s); assert!(!spans_small.is_empty(), "Expected highlighting for small Rust file");
+        let spans_small = highlight_line("fn a() {}", fname, &s);
+        assert!(!spans_small.is_empty(), "Expected highlighting for small Rust file");
         // simulate large by setting threshold tiny
-        let mut s2 = s.clone(); s2.syntax_max_bytes = 1; let spans_large = highlight_line("fn a() {}", fname, &s2); assert!(spans_large.is_empty(), "Expected skip for large threshold"); }
+        let mut s2 = s.clone();
+        s2.syntax_max_bytes = 1;
+        let spans_large = highlight_line("fn a() {}", fname, &s2);
+        assert!(spans_large.is_empty(), "Expected skip for large threshold");
+    }
 }

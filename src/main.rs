@@ -7,6 +7,7 @@ mod editor_state;
 mod editing;
 mod event_handlers;
 mod file_selector;
+mod mouse_handlers;
 mod rendering;
 mod settings;
 mod syntax;
@@ -14,6 +15,7 @@ mod ui;
 mod undo;
 mod recent;
 mod session;
+mod double_esc;
 #[cfg(test)] mod env; // only compile env helpers for tests
 // #[cfg(test)] mod syntax_integration_tests;
 // #[cfg(test)] mod syntax_loading_tests;
