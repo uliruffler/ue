@@ -550,7 +550,8 @@ pub(crate) fn apply_drag(
     let removed_lines = end.0 - start.0;
     // Remove original if move
     if !copy {
-        let mut tmp_state = FileViewerState::new(state.term_width, state.undo_history.clone(), state.settings);
+        let hl = Box::leak(Box::new(crate::syntax::SyntectHighlighter::new()));
+        let mut tmp_state = FileViewerState::new(state.term_width, state.undo_history.clone(), state.settings, hl);
         tmp_state.selection_start = Some(start); tmp_state.selection_end = Some(end);
         remove_selection(&mut tmp_state, lines, "__drag__");
         // Adjust destination line if original block removed above
@@ -594,7 +595,8 @@ mod tests {
     fn create_test_state() -> FileViewerState<'static> {
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        FileViewerState::new(80, undo_history, settings)
+        let hl = Box::leak(Box::new(crate::syntax::SyntectHighlighter::new()));
+        FileViewerState::new(80, undo_history, settings, hl)
     }
 
     #[test]

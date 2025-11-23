@@ -8,7 +8,6 @@ use crossterm::{
 
 use crate::coordinates::{calculate_cursor_visual_line, calculate_wrapped_lines_for_line, line_number_width, visual_width_up_to};
 use crate::editor_state::{FileViewerState, Position};
-use crate::syntax::{highlight_line, StyledSpan};
 
 /// Expand tabs in a string to spaces, considering tab stops
 fn expand_tabs(s: &str, tab_width: usize) -> String {
@@ -241,9 +240,6 @@ fn render_line(
 
 
 
-fn get_highlight_spans(line: &str, file: &str, settings: &crate::settings::Settings) -> Vec<StyledSpan> { highlight_line(line, file, settings) }
-
-
 fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Position) {
     if sel_start.0 < sel_end.0 || (sel_start.0 == sel_end.0 && sel_start.1 <= sel_end.1) {
         (sel_start, sel_end)
@@ -317,16 +313,12 @@ fn render_line_segment_expanded(
 ) -> Result<(), std::io::Error> {
     let line_segment: String = expanded_chars[start_visual..end_visual].iter().collect();
     
-    // Apply syntax highlighting if enabled
-    // Note: We need to map visual positions back to original positions for highlighting
     if state.settings.enable_syntax_highlighting {
-        let spans = get_highlight_spans(original_line, file, state.settings);
+        let spans = state.highlighter.highlight_line(original_line, file, state.settings);
         if !spans.is_empty() {
             return render_with_highlighting_expanded(stdout, expanded_chars, original_line, start_visual, end_visual, &spans, tab_width);
         }
     }
-    
-    // Fallback: no highlighting
     write!(stdout, "{}", line_segment)?;
     Ok(())
 }
@@ -360,7 +352,7 @@ fn render_line_segment_with_selection_expanded(
 
     // Optional syntax spans
     let spans_opt = if state.settings.enable_syntax_highlighting {
-        let spans = get_highlight_spans(original_line, file, state.settings);
+        let spans = state.highlighter.highlight_line(original_line, file, state.settings);
         if spans.is_empty() { None } else { Some(spans) }
     } else { None };
 

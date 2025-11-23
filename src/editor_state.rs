@@ -1,5 +1,6 @@
 use crate::settings::Settings;
 use crate::undo::UndoHistory;
+use crate::syntax::Highlighter;
 
 /// Type alias for cursor/selection position (line, column)
 pub(crate) type Position = (usize, usize);
@@ -27,10 +28,11 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) drag_text: Option<String>,
     pub(crate) dragging_selection_active: bool,
     pub(crate) drag_target: Option<Position>,
+    pub(crate) highlighter: &'a dyn Highlighter,
 }
 
 impl<'a> FileViewerState<'a> {
-    pub(crate) fn new(term_width: u16, undo_history: UndoHistory, settings: &'a Settings) -> Self {
+    pub(crate) fn new(term_width: u16, undo_history: UndoHistory, settings: &'a Settings, highlighter: &'a dyn Highlighter) -> Self {
         Self {
             top_line: 0,
             cursor_line: 0,
@@ -50,6 +52,7 @@ impl<'a> FileViewerState<'a> {
             drag_source_end: None,
             drag_text: None,
             drag_target: None,
+            highlighter,
         }
     }
 
@@ -174,13 +177,15 @@ impl<'a> FileViewerState<'a> {
 mod tests {
     use super::*;
     use crate::env::set_temp_home;
+    use crate::syntax::SyntectHighlighter;
     
     #[test]
     fn cursor_visible_when_on_screen() {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let state = FileViewerState::new(80, undo_history, settings, hl);
         let lines: Vec<String> = vec!["test".to_string(); 20];
         
         assert!(state.is_cursor_visible(&lines, 10, 80));
@@ -192,7 +197,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         let lines: Vec<String> = vec!["test".to_string(); 20];
         
         state.top_line = 5;
@@ -208,7 +214,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         let lines: Vec<String> = vec!["test".to_string(); 30];
         
         state.top_line = 5;
@@ -222,7 +229,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         
         state.top_line = 20;
         state.cursor_line = 0;
@@ -237,7 +245,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         
         state.top_line = 20;
         state.cursor_line = 5;
@@ -251,7 +260,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         
         state.top_line = 10;
         state.cursor_line = 15; // Beyond visible area of 10 lines
@@ -269,7 +279,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         
         state.top_line = 20;
         state.cursor_line = 0;
@@ -288,7 +299,8 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+        let mut state = FileViewerState::new(80, undo_history, settings, hl);
         
         state.top_line = 5;
         state.cursor_line = 3;
