@@ -24,6 +24,8 @@ pub(crate) struct Settings {
     pub(crate) mouse_scroll_lines: usize,
     #[serde(default = "default_keyboard_scroll_lines")]
     pub(crate) keyboard_scroll_lines: usize,
+    #[serde(default = "default_cursor_shape")]
+    pub(crate) cursor_shape: String,
 }
 
 fn default_syntax_highlighting() -> bool {
@@ -50,6 +52,7 @@ fn default_header_bg() -> String { "#001848".into() } // dark blue tone
 fn default_footer_bg() -> String { "#001848".into() }
 fn default_line_numbers_bg() -> String { "#001848".into() }
 fn default_syntax_max_bytes() -> u64 { 500_000 } // 500 KB threshold
+fn default_cursor_shape() -> String { "bar".into() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct KeyBindings {
@@ -278,5 +281,12 @@ mod tests {
         let (_tmp, _guard) = crate::env::set_temp_home();
         let s = Settings::load().unwrap();
         assert_eq!(s.syntax_max_bytes, 500_000);
+    }
+
+    #[test]
+    fn cursor_shape_default() {
+        let (_tmp, _guard) = set_temp_home();
+        let s = Settings::load().expect("load settings");
+        assert_eq!(s.cursor_shape, "bar");
     }
 }

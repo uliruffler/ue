@@ -9,6 +9,14 @@ pub enum Edit {
     DeleteLine { line: usize, content: String },
     SplitLine { line: usize, col: usize, before: String, after: String },
     MergeLine { line: usize, first: String, second: String },
+    DragBlock {
+        before: Vec<String>,
+        after: Vec<String>,
+        source_start: (usize, usize),
+        source_end: (usize, usize),
+        dest: (usize, usize),
+        copy: bool,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

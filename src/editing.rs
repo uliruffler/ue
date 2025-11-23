@@ -335,6 +335,11 @@ pub(crate) fn apply_undo(state: &mut FileViewerState, lines: &mut Vec<String>, f
                     false
                 }
             }
+            Edit::DragBlock { before, .. } => {
+                *lines = before.clone();
+                // Cursor remains; ensure visibility
+                true
+            }
         };
         
         if result {
@@ -425,6 +430,10 @@ pub(crate) fn apply_redo(state: &mut FileViewerState, lines: &mut Vec<String>, f
                 } else {
                     false
                 }
+            }
+            Edit::DragBlock { after, .. } => {
+                *lines = after.clone();
+                true
             }
         };
         
@@ -533,6 +542,7 @@ pub(crate) fn apply_drag(
     copy: bool,
 ) {
     if state.is_point_in_selection(dest) { return; }
+    let before_snapshot = lines.clone();
     let (start, end) = normalize_selection(sel_start, sel_end);
     let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     let dragged_text = extract_selection(&lines_refs, start, end);
@@ -569,6 +579,7 @@ pub(crate) fn apply_drag(
     state.selection_start = None; state.selection_end = None; state.modified = true; state.needs_redraw = true;
     let abs = state.absolute_line();
     state.undo_history.update_state(state.top_line, abs, state.cursor_col, lines.clone());
+    state.undo_history.push(Edit::DragBlock { before: before_snapshot, after: lines.clone(), source_start: sel_start, source_end: sel_end, dest, copy });
     let _ = state.undo_history.save("__drag__");
 }
 

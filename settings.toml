@@ -29,6 +29,9 @@ mouse_scroll_lines = 3
 # Keyboard scroll amount (Ctrl+Up/Down without moving cursor)
 keyboard_scroll_lines = 3
 
+# Cursor shape: block | bar | underline
+cursor_shape = "bar"
+
 [keybindings]
 quit = "Esc Esc"
 file_selector = "Esc"

@@ -252,6 +252,18 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
     }
 }
 
+fn apply_cursor_shape(stdout: &mut impl Write, settings: &crate::settings::Settings) -> std::io::Result<()> {
+    // Use VT escape sequence to set cursor style.
+    // block: 2 (steady) or 0 (blinking), bar: 6 (steady) or 5 (blinking), underline: 4 (steady) or 3 (blinking)
+    let seq = match settings.cursor_shape.to_lowercase().as_str() {
+        "block" => "\x1b[2 q",
+        "underline" => "\x1b[4 q",
+        _ => "\x1b[6 q", // bar default
+    };
+    write!(stdout, "{}", seq)?;
+    Ok(())
+}
+
 fn position_cursor(
     stdout: &mut impl Write,
     lines: &[String],
@@ -260,37 +272,34 @@ fn position_cursor(
 ) -> Result<(), std::io::Error> {
     let line_num_width = line_number_width(state.settings);
     let text_width = state.term_width.saturating_sub(line_num_width);
-    
-    // Only show cursor if it's within the visible area
-    if !state.is_cursor_visible(lines, visible_lines, text_width) {
-        // Cursor is off-screen, keep it hidden
-        return Ok(());
+    if state.dragging_selection_active {
+        if let Some((target_line, target_col)) = state.drag_target {
+            let tab_width = state.settings.tab_width;
+            if target_line < lines.len() {
+                let mut cursor_y = 1u16;
+                for logical in state.top_line..target_line { cursor_y += calculate_wrapped_lines_for_line(lines, logical, text_width, tab_width); }
+                let visual_col = visual_width_up_to(&lines[target_line], target_col.min(lines[target_line].len()), tab_width);
+                let wrapped_line = visual_col / (text_width as usize);
+                cursor_y += wrapped_line as u16;
+                let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+                execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+                apply_cursor_shape(stdout, state.settings)?;
+                execute!(stdout, cursor::Show)?;
+                return Ok(());
+            }
+        }
     }
+    if !state.is_cursor_visible(lines, visible_lines, text_width) { return Ok(()); }
     let tab_width = state.settings.tab_width;
-    
-    // Start with Y position after header (line 1)
     let mut cursor_y = 1u16;
-    
-    // Calculate how many visual lines are used by wrapped lines before the cursor line
-    for i in 0..state.cursor_line {
-        cursor_y += calculate_wrapped_lines_for_line(lines, state.top_line + i, text_width, tab_width);
-    }
-    
-    // Calculate the visual column of the cursor (accounting for tabs)
+    for i in 0..state.cursor_line { cursor_y += calculate_wrapped_lines_for_line(lines, state.top_line + i, text_width, tab_width); }
     let cursor_line_idx = state.absolute_line();
-    let visual_col = if cursor_line_idx < lines.len() {
-        visual_width_up_to(&lines[cursor_line_idx], state.cursor_col, tab_width)
-    } else {
-        0
-    };
-    
-    // Calculate which wrapped line the cursor is on
+    let visual_col = if cursor_line_idx < lines.len() { visual_width_up_to(&lines[cursor_line_idx], state.cursor_col, tab_width) } else { 0 };
     let cursor_wrapped_line = visual_col / (text_width as usize);
     cursor_y += cursor_wrapped_line as u16;
-    
     let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
-    
     execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+    apply_cursor_shape(stdout, state.settings)?;
     execute!(stdout, cursor::Show)?;
     Ok(())
 }
