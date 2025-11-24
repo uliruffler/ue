@@ -36,11 +36,11 @@ pub(crate) fn visual_width_up_to(s: &str, char_index: usize, tab_width: usize) -
 
 /// Calculate the width of the line number column based on settings
 pub(crate) fn line_number_width(settings: &Settings) -> u16 {
-    if settings.line_number_digits == 0 {
+    if settings.appearance.line_number_digits == 0 {
         0
     } else {
         // digits + 1 space separator
-        settings.line_number_digits as u16 + 1
+        settings.appearance.line_number_digits as u16 + 1
     }
 }
 
@@ -218,4 +218,3 @@ mod tests {
         assert_eq!(rel, 0);
     }
 }
-

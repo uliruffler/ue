@@ -56,14 +56,14 @@ fn render_header(
     let path = std::path::Path::new(file);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
     let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
-    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.header_bg) {
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
         execute!(stdout, SetBackgroundColor(color))?;
     }
-    if state.settings.line_number_digits > 0 {
-        let modulus = 10usize.pow(state.settings.line_number_digits as u32);
+    if state.settings.appearance.line_number_digits > 0 {
+        let modulus = 10usize.pow(state.settings.appearance.line_number_digits as u32);
         let top_number = (state.top_line / modulus) * modulus;
         // Add trailing space explicitly after the block number
-        write!(stdout, "{:width$} ", top_number, width = state.settings.line_number_digits as usize)?;
+        write!(stdout, "{:width$} ", top_number, width = state.settings.appearance.line_number_digits as usize)?;
     }
     write!(stdout, "{} {} ({}){}", modified_char, filename, parent, mode_info)?;
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
@@ -82,7 +82,7 @@ fn render_footer(
     let col_num = state.cursor_col + 1;
     let position_info = format!("{}:{}", line_num, col_num);
     let total_width = state.term_width as usize;
-    let digits = state.settings.line_number_digits as usize;
+    let digits = state.settings.appearance.line_number_digits as usize;
     let mut bottom_number_str = String::new();
     if digits > 0 {
         let modulus = 10usize.pow(digits as u32);
@@ -97,7 +97,7 @@ fn render_footer(
         let bottom_number = (last_visible_line / modulus) * modulus;
         bottom_number_str = format!("{:width$} ", bottom_number, width = digits);
     }
-    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.footer_bg) {
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
         execute!(stdout, SetBackgroundColor(color))?;
     }
     write!(stdout, "\r{}", bottom_number_str)?;
@@ -150,11 +150,11 @@ fn render_visible_lines(
     
     // Fill remaining visible lines with empty lines
     while visual_lines_rendered < visible_lines {
-        if state.settings.line_number_digits > 0 {
-            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.line_numbers_bg) {
+        if state.settings.appearance.line_number_digits > 0 {
+            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg) {
                 execute!(stdout, SetBackgroundColor(color))?;
             }
-            write!(stdout, "{:width$} ", "", width = state.settings.line_number_digits as usize)?;
+            write!(stdout, "{:width$} ", "", width = state.settings.appearance.line_number_digits as usize)?;
             execute!(stdout, ResetColor)?;
         }
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
@@ -198,23 +198,17 @@ fn render_line(
         }
         
         // Show line number only if line_number_digits > 0
-        if state.settings.line_number_digits > 0 {
+        if state.settings.appearance.line_number_digits > 0 {
             // Show line number only on first wrapped line, spaces on continuation lines
             if wrap_index == 0 {
                 // Calculate line number to display (modulo based on digits)
-                let modulus = 10usize.pow(state.settings.line_number_digits as u32);
+                let modulus = 10usize.pow(state.settings.appearance.line_number_digits as u32);
                 let line_num = (logical_line_index + 1) % modulus;
-                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.line_numbers_bg) {
-                    execute!(stdout, SetBackgroundColor(color))?;
-                }
-                write!(stdout, "{:width$} ", line_num, width = state.settings.line_number_digits as usize)?;
-                execute!(stdout, ResetColor)?;
+                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg) { execute!(stdout, SetBackgroundColor(color))?; }
+                write!(stdout, "{:width$} ", line_num, width = state.settings.appearance.line_number_digits as usize)?; execute!(stdout, ResetColor)?;
             } else {
-                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.line_numbers_bg) {
-                    execute!(stdout, SetBackgroundColor(color))?;
-                }
-                write!(stdout, "{:width$} ", "", width = state.settings.line_number_digits as usize)?;
-                execute!(stdout, ResetColor)?;
+                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg) { execute!(stdout, SetBackgroundColor(color))?; }
+                write!(stdout, "{:width$} ", "", width = state.settings.appearance.line_number_digits as usize)?; execute!(stdout, ResetColor)?;
             }
         }
         
@@ -251,7 +245,7 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
 fn apply_cursor_shape(stdout: &mut impl Write, settings: &crate::settings::Settings) -> std::io::Result<()> {
     // Use VT escape sequence to set cursor style.
     // block: 2 (steady) or 0 (blinking), bar: 6 (steady) or 5 (blinking), underline: 4 (steady) or 3 (blinking)
-    let seq = match settings.cursor_shape.to_lowercase().as_str() {
+    let seq = match settings.appearance.cursor_shape.to_lowercase().as_str() {
         "block" => "\x1b[2 q",
         "underline" => "\x1b[4 q",
         _ => "\x1b[6 q", // bar default
@@ -313,10 +307,19 @@ fn render_line_segment_expanded(
 ) -> Result<(), std::io::Error> {
     let line_segment: String = expanded_chars[start_visual..end_visual].iter().collect();
     
-    if state.settings.enable_syntax_highlighting {
+    if state.settings.syntax.enable {
         let spans = state.highlighter.highlight_line(original_line, file, state.settings);
         if !spans.is_empty() {
-            return render_with_highlighting_expanded(stdout, expanded_chars, original_line, start_visual, end_visual, &spans, tab_width);
+            // Inline former render_with_highlighting_expanded
+            let mut visual_to_char = Vec::new();
+            let mut visual_pos = 0;
+            for (char_idx, ch) in original_line.chars().enumerate() {
+                if ch == '\t' {
+                    let spaces = tab_width - (visual_pos % tab_width);
+                    for _ in 0..spaces { visual_to_char.push(char_idx); visual_pos += 1; }
+                } else { visual_to_char.push(char_idx); visual_pos += 1; }
+            }
+            for visual_i in start_visual..end_visual { if visual_i >= expanded_chars.len() { break; } let ch = expanded_chars[visual_i]; let orig_char_idx = if visual_i < visual_to_char.len() { visual_to_char[visual_i] } else { original_line.chars().count() }; if let Some(span) = spans.iter().find(|s| orig_char_idx >= s.start && orig_char_idx < s.end) { span.apply_to_stdout(stdout)?; write!(stdout, "{}", ch)?; execute!(stdout, ResetColor)?; } else { write!(stdout, "{}", ch)?; } } return Ok(());
         }
     }
     write!(stdout, "{}", line_segment)?;
@@ -351,7 +354,7 @@ fn render_line_segment_with_selection_expanded(
     let end_visual_col = if line_index == end_line { visual_width_up_to(original_line, end_col, tab_width) } else { usize::MAX };
 
     // Optional syntax spans
-    let spans_opt = if state.settings.enable_syntax_highlighting {
+    let spans_opt = if state.settings.syntax.enable {
         let spans = state.highlighter.highlight_line(original_line, file, state.settings);
         if spans.is_empty() { None } else { Some(spans) }
     } else { None };
@@ -399,55 +402,3 @@ fn render_line_segment_with_selection_expanded(
     Ok(())
 }
 
-/// Render with syntax highlighting on expanded text
-fn render_with_highlighting_expanded(
-    stdout: &mut impl Write,
-    expanded_chars: &[char],
-    original_line: &str,
-    start_visual: usize,
-    end_visual: usize,
-    spans: &[StyledSpan],
-    tab_width: usize,
-) -> Result<(), std::io::Error> {
-    // Build a mapping from visual position to original character index
-    let mut visual_to_char = Vec::new();
-    let mut visual_pos = 0;
-    for (char_idx, ch) in original_line.chars().enumerate() {
-        if ch == '\t' {
-            let spaces = tab_width - (visual_pos % tab_width);
-            for _ in 0..spaces {
-                visual_to_char.push(char_idx);
-                visual_pos += 1;
-            }
-        } else {
-            visual_to_char.push(char_idx);
-            visual_pos += 1;
-        }
-    }
-    
-    for visual_i in start_visual..end_visual {
-        if visual_i >= expanded_chars.len() {
-            break;
-        }
-        
-        let ch = expanded_chars[visual_i];
-        
-        // Find the original character index for this visual position
-        let orig_char_idx = if visual_i < visual_to_char.len() {
-            visual_to_char[visual_i]
-        } else {
-            original_line.chars().count()
-        };
-        
-        // Find if this character is in a highlighted span
-        if let Some(span) = spans.iter().find(|s| orig_char_idx >= s.start && orig_char_idx < s.end) {
-            span.apply_to_stdout(stdout)?;
-            write!(stdout, "{}", ch)?;
-            execute!(stdout, ResetColor)?;
-        } else {
-            write!(stdout, "{}", ch)?;
-        }
-    }
-    
-    Ok(())
-}

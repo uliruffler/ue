@@ -3,58 +3,6 @@ use std::{fs, path::PathBuf, io::Write};
 use crossterm::event::{KeyCode, KeyModifiers};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct Settings {
-    pub(crate) keybindings: KeyBindings,
-    pub(crate) line_number_digits: u8,
-    #[serde(default = "default_syntax_highlighting")]
-    pub(crate) enable_syntax_highlighting: bool,
-    #[serde(default = "default_tab_width")]
-    pub(crate) tab_width: usize,
-    #[serde(default = "default_double_tap_speed_ms")]
-    pub(crate) double_tap_speed_ms: u64,
-    #[serde(default = "default_header_bg")]
-    pub(crate) header_bg: String,
-    #[serde(default = "default_footer_bg")]
-    pub(crate) footer_bg: String,
-    #[serde(default = "default_line_numbers_bg")]
-    pub(crate) line_numbers_bg: String,
-    #[serde(default = "default_syntax_max_bytes")]
-    pub(crate) syntax_max_bytes: u64,
-    #[serde(default = "default_mouse_scroll_lines")]
-    pub(crate) mouse_scroll_lines: usize,
-    #[serde(default = "default_keyboard_scroll_lines")]
-    pub(crate) keyboard_scroll_lines: usize,
-    #[serde(default = "default_cursor_shape")]
-    pub(crate) cursor_shape: String,
-}
-
-fn default_syntax_highlighting() -> bool {
-    true
-}
-
-fn default_mouse_scroll_lines() -> usize {
-    3
-}
-
-fn default_keyboard_scroll_lines() -> usize {
-    3
-}
-
-fn default_tab_width() -> usize {
-    4
-}
-
-fn default_double_tap_speed_ms() -> u64 {
-    300
-}
-
-fn default_header_bg() -> String { "#001848".into() } // dark blue tone
-fn default_footer_bg() -> String { "#001848".into() }
-fn default_line_numbers_bg() -> String { "#001848".into() }
-fn default_syntax_max_bytes() -> u64 { 500_000 } // 500 KB threshold
-fn default_cursor_shape() -> String { "bar".into() }
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct KeyBindings {
     pub(crate) quit: String,
     pub(crate) copy: String,
@@ -67,6 +15,78 @@ pub(crate) struct KeyBindings {
     pub(crate) file_selector: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct AppearanceSettings {
+    #[serde(default = "default_line_number_digits")]
+    pub(crate) line_number_digits: u8,
+    #[serde(default = "default_header_bg")]
+    pub(crate) header_bg: String,
+    #[serde(default = "default_footer_bg")]
+    pub(crate) footer_bg: String,
+    #[serde(default = "default_line_numbers_bg")]
+    pub(crate) line_numbers_bg: String,
+    #[serde(default = "default_cursor_shape")]
+    pub(crate) cursor_shape: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct SyntaxSettings {
+    #[serde(default = "default_enable_syntax")]
+    pub(crate) enable: bool,
+    #[serde(default = "default_syntax_max_bytes")]
+    pub(crate) max_bytes: u64,
+    #[serde(default = "default_syntax_dirs")]
+    pub(crate) dirs: Vec<String>,
+    #[serde(default)]
+    pub(crate) extension_aliases: std::collections::HashMap<String,String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub(crate) struct Settings {
+    pub(crate) keybindings: KeyBindings,
+    #[serde(default = "default_tab_width")]
+    pub(crate) tab_width: usize,
+    #[serde(default = "default_double_tap_speed_ms")]
+    pub(crate) double_tap_speed_ms: u64,
+    #[serde(default = "default_keyboard_scroll_lines")]
+    pub(crate) keyboard_scroll_lines: usize,
+    #[serde(default = "default_mouse_scroll_lines")]
+    pub(crate) mouse_scroll_lines: usize,
+    #[serde(default = "default_appearance")]
+    pub(crate) appearance: AppearanceSettings,
+    #[serde(default = "default_syntax_settings")]
+    pub(crate) syntax: SyntaxSettings,
+}
+
+fn default_enable_syntax() -> bool { true }
+fn default_tab_width() -> usize { 4 }
+fn default_double_tap_speed_ms() -> u64 { 300 }
+fn default_cursor_shape() -> String { "bar".into() }
+fn default_keyboard_scroll_lines() -> usize { 3 }
+fn default_mouse_scroll_lines() -> usize { 3 }
+fn default_line_number_digits() -> u8 { 3 }
+fn default_header_bg() -> String { "#001848".into() }
+fn default_footer_bg() -> String { "#001848".into() }
+fn default_line_numbers_bg() -> String { "#001848".into() }
+fn default_syntax_max_bytes() -> u64 { 500_000 }
+fn default_syntax_dirs() -> Vec<String> { vec!["~/.ue/syntax/".into()] }
+fn default_appearance() -> AppearanceSettings {
+    AppearanceSettings {
+        line_number_digits: default_line_number_digits(),
+        header_bg: default_header_bg(),
+        footer_bg: default_footer_bg(),
+        line_numbers_bg: default_line_numbers_bg(),
+        cursor_shape: default_cursor_shape(),
+    }
+}
+fn default_syntax_settings() -> SyntaxSettings {
+    SyntaxSettings {
+        enable: default_enable_syntax(),
+        max_bytes: default_syntax_max_bytes(),
+        dirs: default_syntax_dirs(),
+        extension_aliases: std::collections::HashMap::new(),
+    }
+}
 
 impl Settings {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
@@ -220,21 +240,21 @@ mod tests {
     fn default_settings_file_created() {
         let (_tmp, _guard) = set_temp_home();
         let settings = Settings::load().expect("load settings");
-        assert_eq!(settings.line_number_digits, 3);
+        assert_eq!(settings.appearance.line_number_digits, 3);
     }
 
     #[test]
     fn settings_default_creation_and_reload() {
         let (tmp, _guard) = set_temp_home();
         let settings_first = Settings::load().expect("first load");
-        assert_eq!(settings_first.line_number_digits, 3);
+        assert_eq!(settings_first.appearance.line_number_digits, 3);
         // Modify file to check reload
         let settings_path = tmp.path().join(".ue").join("settings.toml");
         let mut content = fs::read_to_string(&settings_path).unwrap();
         content = content.replace("line_number_digits = 3", "line_number_digits = 2");
         fs::write(&settings_path, content).unwrap();
         let settings_second = Settings::load().expect("second load");
-        assert_eq!(settings_second.line_number_digits, 2);
+        assert_eq!(settings_second.appearance.line_number_digits, 2);
     }
 
     #[test]
@@ -263,10 +283,10 @@ mod tests {
     fn default_color_values_present() {
         let (_tmp, _guard) = crate::env::set_temp_home();
         let s = Settings::load().expect("load settings");
-        assert_eq!(s.header_bg, "#001848");
-        assert_eq!(s.footer_bg, "#001848");
-        assert_eq!(s.line_numbers_bg, "#001848");
-        assert!(Settings::parse_color(&s.header_bg).is_some());
+        assert_eq!(s.appearance.header_bg, "#001848");
+        assert_eq!(s.appearance.footer_bg, "#001848");
+        assert_eq!(s.appearance.line_numbers_bg, "#001848");
+        assert!(Settings::parse_color(&s.appearance.header_bg).is_some());
     }
 
     #[test]
@@ -280,13 +300,13 @@ mod tests {
     fn syntax_max_bytes_default() {
         let (_tmp, _guard) = crate::env::set_temp_home();
         let s = Settings::load().unwrap();
-        assert_eq!(s.syntax_max_bytes, 500_000);
+        assert_eq!(s.syntax.max_bytes, 500_000);
     }
 
     #[test]
     fn cursor_shape_default() {
         let (_tmp, _guard) = set_temp_home();
         let s = Settings::load().expect("load settings");
-        assert_eq!(s.cursor_shape, "bar");
+        assert_eq!(s.appearance.cursor_shape, "bar");
     }
 }

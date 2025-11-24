@@ -1,0 +1,4 @@
+syntax sublime_syntax *.sublime-syntax
+color brightmagenta "\b(scope|name|contexts|variables)\b"
+color brightgreen "\b(meta|match|push|pop)\b"
+

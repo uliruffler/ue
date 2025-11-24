@@ -8,9 +8,10 @@ mod editing;
 mod event_handlers;
 mod file_selector;
 mod mouse_handlers;
-mod rendering;
 mod settings;
 mod syntax;
+mod syntax_nanorc; // new nanorc highlighter implementation
+mod rendering;
 mod ui;
 mod undo;
 mod recent;

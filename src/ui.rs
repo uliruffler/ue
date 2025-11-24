@@ -177,7 +177,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let undo_history = UndoHistory::load(file).unwrap_or_else(|_| UndoHistory::new());
     let mut lines: Vec<String> = if let Some(saved) = &undo_history.file_content { saved.clone() } else { content.lines().map(String::from).collect() };
     let (term_width, term_height) = size()?;
-    let hl = Box::leak(Box::new(SyntectHighlighter::new()));
+    let hl = Box::leak(SyntectHighlighter::factory());
     let mut state = FileViewerState::new(term_width, undo_history.clone(), settings, hl);
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
