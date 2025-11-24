@@ -34,7 +34,14 @@ pub(crate) trait Highlighter: Send + Sync { fn highlight_line(&self, line: &str,
 pub(crate) struct SyntectHighlighter { syntax_set: SyntaxSet, theme: Theme, file_size_cache: Mutex<HashMap<String, u64>> }
 impl SyntectHighlighter {
     pub(crate) fn new() -> Self { let (syntax_set, theme) = Self::load_assets(); Self { syntax_set, theme, file_size_cache: Mutex::new(HashMap::new()) } }
-    pub(crate) fn factory() -> Box<dyn Highlighter> { if std::env::var("UE_SYNTAX_MODE").map(|v| v.to_lowercase()) == Ok("nanorc".into()) { if let Ok(settings) = Settings::load() { return Box::new(crate::syntax_nanorc::NanorcHighlighter::new(&settings)); } } Box::new(SyntectHighlighter::new()) }
+    pub(crate) fn factory() -> Box<dyn Highlighter> { 
+        if std::env::var("UE_SYNTAX_MODE").map(|v| v.to_lowercase()) == Ok("nanorc".into()) {
+            if let Ok(settings) = Settings::load() {
+                return Box::new(crate::syntax_nanorc::NanorcHighlighter::new(&settings));
+            }
+        }
+        Box::new(SyntectHighlighter::new())
+    }
     fn load_assets() -> (SyntaxSet, Theme) {
         if let Ok(path) = std::env::var("UE_PRECOMPILED_SYNTECT") { if let Ok(data) = std::fs::read(&path) { if let Ok((ss, themes_vec)) = bincode::deserialize::<(SyntaxSet, Vec<(String, Theme)>)>(&data) { let theme = themes_vec.iter().find(|(n, _)| n == "base16-ocean.dark").or_else(|| themes_vec.iter().find(|(n, _)| n == "Monokai")).map(|(_, t)| t.clone()).unwrap_or_else(|| themes_vec.first().expect("at least one theme").1.clone()); return (ss, theme); } } }
         let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
