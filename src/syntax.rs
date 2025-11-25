@@ -3,7 +3,6 @@ use syntect::parsing::{SyntaxSet, SyntaxReference};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
-use bincode;
 use crate::settings::Settings;
 
 #[derive(Debug, Clone)]
