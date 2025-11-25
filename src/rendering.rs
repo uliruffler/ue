@@ -132,12 +132,12 @@ fn render_visible_lines(
     // Calculate which visual line the cursor is on
     let cursor_visual_line = calculate_cursor_visual_line(lines, state, text_width_u16);
     
+    let ctx = RenderContext { file, lines, state };
+    
     while visual_lines_rendered < visible_lines && logical_line_index < lines.len() {
         let lines_for_this_logical = render_line(
             stdout,
-            file,
-            lines,
-            state,
+            &ctx,
             logical_line_index,
             cursor_visual_line,
             visual_lines_rendered,
@@ -165,30 +165,41 @@ fn render_visible_lines(
     Ok(())
 }
 
+struct RenderContext<'a> {
+    file: &'a str,
+    lines: &'a [String],
+    state: &'a FileViewerState<'a>,
+}
+
+struct SegmentInfo {
+    line_index: usize,
+    start_visual: usize,
+    end_visual: usize,
+    tab_width: usize,
+}
+
 fn render_line(
     stdout: &mut impl Write,
-    file: &str,
-    lines: &[String],
-    state: &FileViewerState,
+    ctx: &RenderContext,
     logical_line_index: usize,
     _cursor_visual_line: usize,
     _current_visual_line: usize,
     remaining_visible_lines: usize,
 ) -> Result<usize, std::io::Error> {
-    if logical_line_index >= lines.len() {
+    if logical_line_index >= ctx.lines.len() {
         return Ok(0);
     }
     
-    let line = &lines[logical_line_index];
-    let line_num_width = line_number_width(state.settings);
-    let available_width = state.term_width.saturating_sub(line_num_width) as usize;
-    let tab_width = state.settings.tab_width;
+    let line = &ctx.lines[logical_line_index];
+    let line_num_width = line_number_width(ctx.state.settings);
+    let available_width = ctx.state.term_width.saturating_sub(line_num_width) as usize;
+    let tab_width = ctx.state.settings.tab_width;
     
     // Expand tabs to spaces for display
     let expanded_line = expand_tabs(line, tab_width);
     let chars: Vec<char> = expanded_line.chars().collect();
     
-    let num_wrapped_lines = calculate_wrapped_lines_for_line(lines, logical_line_index, state.term_width.saturating_sub(line_num_width), tab_width);
+    let num_wrapped_lines = calculate_wrapped_lines_for_line(ctx.lines, logical_line_index, ctx.state.term_width.saturating_sub(line_num_width), tab_width);
     
     let lines_to_render = (num_wrapped_lines as usize).min(remaining_visible_lines);
     
@@ -198,17 +209,17 @@ fn render_line(
         }
         
         // Show line number only if line_number_digits > 0
-        if state.settings.appearance.line_number_digits > 0 {
+        if ctx.state.settings.appearance.line_number_digits > 0 {
             // Show line number only on first wrapped line, spaces on continuation lines
             if wrap_index == 0 {
                 // Calculate line number to display (modulo based on digits)
-                let modulus = 10usize.pow(state.settings.appearance.line_number_digits as u32);
+                let modulus = 10usize.pow(ctx.state.settings.appearance.line_number_digits as u32);
                 let line_num = (logical_line_index + 1) % modulus;
-                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg) { execute!(stdout, SetBackgroundColor(color))?; }
-                write!(stdout, "{:width$} ", line_num, width = state.settings.appearance.line_number_digits as usize)?; execute!(stdout, ResetColor)?;
+                if let Some(color) = crate::settings::Settings::parse_color(&ctx.state.settings.appearance.line_numbers_bg) { execute!(stdout, SetBackgroundColor(color))?; }
+                write!(stdout, "{:width$} ", line_num, width = ctx.state.settings.appearance.line_number_digits as usize)?; execute!(stdout, ResetColor)?;
             } else {
-                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg) { execute!(stdout, SetBackgroundColor(color))?; }
-                write!(stdout, "{:width$} ", "", width = state.settings.appearance.line_number_digits as usize)?; execute!(stdout, ResetColor)?;
+                if let Some(color) = crate::settings::Settings::parse_color(&ctx.state.settings.appearance.line_numbers_bg) { execute!(stdout, SetBackgroundColor(color))?; }
+                write!(stdout, "{:width$} ", "", width = ctx.state.settings.appearance.line_number_digits as usize)?; execute!(stdout, ResetColor)?;
             }
         }
         
@@ -216,10 +227,17 @@ fn render_line(
         let end_visual = ((wrap_index + 1) * available_width).min(chars.len());
         
         if start_visual < chars.len() {
-            if let (Some(sel_start), Some(sel_end)) = (state.selection_start, state.selection_end) {
-                render_line_segment_with_selection_expanded(stdout, &chars, line, logical_line_index, sel_start, sel_end, start_visual, end_visual, file, state, tab_width)?;
+            let segment = SegmentInfo {
+                line_index: logical_line_index,
+                start_visual,
+                end_visual,
+                tab_width,
+            };
+            
+            if let (Some(sel_start), Some(sel_end)) = (ctx.state.selection_start, ctx.state.selection_end) {
+                render_line_segment_with_selection_expanded(stdout, &chars, line, sel_start, sel_end, ctx, &segment)?;
             } else {
-                render_line_segment_expanded(stdout, &chars, line, start_visual, end_visual, file, state, tab_width)?;
+                render_line_segment_expanded(stdout, &chars, line, ctx, &segment)?;
             }
         }
         
@@ -262,8 +280,8 @@ fn position_cursor(
 ) -> Result<(), std::io::Error> {
     let line_num_width = line_number_width(state.settings);
     let text_width = state.term_width.saturating_sub(line_num_width);
-    if state.dragging_selection_active {
-        if let Some((target_line, target_col)) = state.drag_target {
+    if state.dragging_selection_active
+        && let Some((target_line, target_col)) = state.drag_target {
             let tab_width = state.settings.tab_width;
             if target_line < lines.len() {
                 let mut cursor_y = 1u16;
@@ -278,7 +296,6 @@ fn position_cursor(
                 return Ok(());
             }
         }
-    }
     if !state.is_cursor_visible(lines, visible_lines, text_width) { return Ok(()); }
     let tab_width = state.settings.tab_width;
     let mut cursor_y = 1u16;
@@ -299,27 +316,24 @@ fn render_line_segment_expanded(
     stdout: &mut impl Write,
     expanded_chars: &[char],
     original_line: &str,
-    start_visual: usize,
-    end_visual: usize,
-    file: &str,
-    state: &FileViewerState,
-    tab_width: usize,
+    ctx: &RenderContext,
+    segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
-    let line_segment: String = expanded_chars[start_visual..end_visual].iter().collect();
+    let line_segment: String = expanded_chars[segment.start_visual..segment.end_visual].iter().collect();
     
-    if state.settings.syntax.enable {
-        let spans = state.highlighter.highlight_line(original_line, file, state.settings);
+    if ctx.state.settings.syntax.enable {
+        let spans = ctx.state.highlighter.highlight_line(original_line, ctx.file, ctx.state.settings);
         if !spans.is_empty() {
             // Inline former render_with_highlighting_expanded
             let mut visual_to_char = Vec::new();
             let mut visual_pos = 0;
             for (char_idx, ch) in original_line.chars().enumerate() {
                 if ch == '\t' {
-                    let spaces = tab_width - (visual_pos % tab_width);
+                    let spaces = segment.tab_width - (visual_pos % segment.tab_width);
                     for _ in 0..spaces { visual_to_char.push(char_idx); visual_pos += 1; }
                 } else { visual_to_char.push(char_idx); visual_pos += 1; }
             }
-            for visual_i in start_visual..end_visual { if visual_i >= expanded_chars.len() { break; } let ch = expanded_chars[visual_i]; let orig_char_idx = if visual_i < visual_to_char.len() { visual_to_char[visual_i] } else { original_line.chars().count() }; if let Some(span) = spans.iter().find(|s| orig_char_idx >= s.start && orig_char_idx < s.end) { span.apply_to_stdout(stdout)?; write!(stdout, "{}", ch)?; execute!(stdout, ResetColor)?; } else { write!(stdout, "{}", ch)?; } } return Ok(());
+            for visual_i in segment.start_visual..segment.end_visual { if visual_i >= expanded_chars.len() { break; } let ch = expanded_chars[visual_i]; let orig_char_idx = if visual_i < visual_to_char.len() { visual_to_char[visual_i] } else { original_line.chars().count() }; if let Some(span) = spans.iter().find(|s| orig_char_idx >= s.start && orig_char_idx < s.end) { span.apply_to_stdout(stdout)?; write!(stdout, "{}", ch)?; execute!(stdout, ResetColor)?; } else { write!(stdout, "{}", ch)?; } } return Ok(());
         }
     }
     write!(stdout, "{}", line_segment)?;
@@ -331,31 +345,27 @@ fn render_line_segment_with_selection_expanded(
     stdout: &mut impl Write,
     expanded_chars: &[char],
     original_line: &str,
-    line_index: usize,
     sel_start: Position,
     sel_end: Position,
-    start_visual: usize,
-    end_visual: usize,
-    file: &str,
-    state: &FileViewerState,
-    tab_width: usize,
+    ctx: &RenderContext,
+    segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
     let (start, end) = normalize_selection(sel_start, sel_end);
     let (start_line, start_col) = start;
     let (end_line, end_col) = end;
 
     // Outside selection range -> normal rendering
-    if line_index < start_line || line_index > end_line {
-        return render_line_segment_expanded(stdout, expanded_chars, original_line, start_visual, end_visual, file, state, tab_width);
+    if segment.line_index < start_line || segment.line_index > end_line {
+        return render_line_segment_expanded(stdout, expanded_chars, original_line, ctx, segment);
     }
 
     // Convert selection character indices to visual column range
-    let start_visual_col = if line_index == start_line { visual_width_up_to(original_line, start_col, tab_width) } else { 0 };
-    let end_visual_col = if line_index == end_line { visual_width_up_to(original_line, end_col, tab_width) } else { usize::MAX };
+    let start_visual_col = if segment.line_index == start_line { visual_width_up_to(original_line, start_col, segment.tab_width) } else { 0 };
+    let end_visual_col = if segment.line_index == end_line { visual_width_up_to(original_line, end_col, segment.tab_width) } else { usize::MAX };
 
     // Optional syntax spans
-    let spans_opt = if state.settings.syntax.enable {
-        let spans = state.highlighter.highlight_line(original_line, file, state.settings);
+    let spans_opt = if ctx.state.settings.syntax.enable {
+        let spans = ctx.state.highlighter.highlight_line(original_line, ctx.file, ctx.state.settings);
         if spans.is_empty() { None } else { Some(spans) }
     } else { None };
 
@@ -364,14 +374,14 @@ fn render_line_segment_with_selection_expanded(
     let mut vis = 0;
     for (idx, ch) in original_line.chars().enumerate() {
         if ch == '\t' {
-            let spaces = tab_width - (vis % tab_width);
+            let spaces = segment.tab_width - (vis % segment.tab_width);
             for _ in 0..spaces { visual_to_char.push(idx); vis += 1; }
         } else {
             visual_to_char.push(idx); vis += 1;
         }
     }
 
-    for visual_i in start_visual..end_visual {
+    for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() { break; }
         let ch = expanded_chars[visual_i];
         let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
@@ -379,11 +389,10 @@ fn render_line_segment_with_selection_expanded(
 
         if is_selected {
             // Apply syntax color if available, then reverse
-            if let Some(ref spans) = spans_opt {
-                if let Some(span) = spans.iter().find(|s| orig_idx >= s.start && orig_idx < s.end) {
+            if let Some(ref spans) = spans_opt
+                && let Some(span) = spans.iter().find(|s| orig_idx >= s.start && orig_idx < s.end) {
                     span.apply_to_stdout(stdout)?;
                 }
-            }
             write!(stdout, "{}", ch.to_string().reverse())?;
             execute!(stdout, ResetColor)?;
         } else if let Some(ref spans) = spans_opt {
