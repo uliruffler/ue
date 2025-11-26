@@ -500,7 +500,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Filesystem dependent - some filesystems don't change mtime within seconds
     fn validate_returns_modified_no_unsaved_when_file_changed() {
         use std::thread;
         use std::time::Duration;
@@ -527,7 +526,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Filesystem dependent - some filesystems don't change mtime within seconds
     fn validate_returns_modified_with_unsaved_when_file_changed_and_has_unsaved() {
         use std::thread;
         use std::time::Duration;
