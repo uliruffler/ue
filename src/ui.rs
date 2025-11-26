@@ -306,35 +306,41 @@ fn try_reload_undo_from_external_change(
         Err(_) => return (false, Some(current_mtime)),
     };
 
-    // Only reload if there's file content to restore
-    let Some(new_content) = &new_history.file_content else {
-        return (false, Some(current_mtime));
-    };
+    // Check if there's file content to restore
+    if let Some(new_content) = &new_history.file_content {
+        // Update document content
+        *lines = new_content.clone();
 
-    // Update document content
-    *lines = new_content.clone();
+        // Restore cursor and scroll position from the new history
+        state.top_line = new_history.scroll_top.min(lines.len());
+        let new_cursor_line = new_history.cursor_line;
+        let new_cursor_col = new_history.cursor_col;
 
-    // Restore cursor and scroll position from the new history
-    state.top_line = new_history.scroll_top.min(lines.len());
-    let new_cursor_line = new_history.cursor_line;
-    let new_cursor_col = new_history.cursor_col;
-
-    if new_cursor_line < lines.len() {
-        state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
-        if new_cursor_col <= lines[new_cursor_line].len() {
-            state.cursor_col = new_cursor_col;
+        if new_cursor_line < lines.len() {
+            state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
+            if new_cursor_col <= lines[new_cursor_line].len() {
+                state.cursor_col = new_cursor_col;
+            }
         }
+
+        // Ensure cursor is visible after reload (similar to undo/redo)
+        state.ensure_cursor_visible(visible_lines);
+
+        // Update the undo history in state
+        state.undo_history = new_history;
+        state.modified = state.undo_history.modified;
+        state.needs_redraw = true;
+
+        (true, Some(current_mtime))
+    } else {
+        // No file content (e.g., after save in another instance)
+        // But we should still sync the modified flag and other metadata
+        state.undo_history = new_history;
+        state.modified = state.undo_history.modified;
+        state.needs_redraw = true;
+        
+        (false, Some(current_mtime))
     }
-
-    // Ensure cursor is visible after reload (similar to undo/redo)
-    state.ensure_cursor_visible(visible_lines);
-
-    // Update the undo history in state
-    state.undo_history = new_history;
-    state.modified = state.undo_history.modified;
-    state.needs_redraw = true;
-
-    (true, Some(current_mtime))
 }
 
 /// Persist editor state (undo history and session) to disk

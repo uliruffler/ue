@@ -58,6 +58,8 @@ pub struct UndoHistory {
     pub scroll_top: usize, // persisted top_line (first visible logical line)
     #[serde(default, with = "optional_systemtime")]
     pub file_timestamp: Option<u64>, // UNIX epoch timestamp of file when undo was saved
+    #[serde(default)]
+    pub saved_at: usize, // Edit position where the file was last saved
 }
 
 impl UndoHistory {
@@ -71,6 +73,7 @@ impl UndoHistory {
             modified: false,
             scroll_top: 0,
             file_timestamp: None,
+            saved_at: 0,
         }
     }
 
@@ -87,8 +90,8 @@ impl UndoHistory {
         self.cursor_line = cursor_line;
         self.cursor_col = cursor_col;
         self.file_content = Some(file_content);
-        // Only mark as modified if there are pending edits (current > 0)
-        self.modified = self.current > 0;
+        // Mark as modified if current position differs from saved position
+        self.modified = self.current != self.saved_at;
     }
 
     // Update only cursor & scroll (no content change)
@@ -101,6 +104,8 @@ impl UndoHistory {
     pub fn clear_unsaved_state(&mut self) {
         self.file_content = None;
         self.modified = false;
+        // Mark current position as the saved baseline
+        self.saved_at = self.current;
     }
 
     pub fn can_undo(&self) -> bool { self.current > 0 }
@@ -1026,5 +1031,101 @@ mod tests {
         // mtimes should differ (though on fast systems with low-res fs, may be equal)
         // We just verify both are Some and the second is >= first
         assert!(mtime2.unwrap() >= mtime1.unwrap());
+    }
+
+    #[test]
+    fn modified_flag_tracks_save_baseline() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut h = UndoHistory::new();
+        
+        // Initially not modified, saved_at = 0
+        assert!(!h.modified);
+        assert_eq!(h.saved_at, 0);
+        assert_eq!(h.current, 0);
+        
+        // Make edit 1
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.update_state(0, 0, 1, vec!["a".into()]);
+        assert!(h.modified);
+        assert_eq!(h.current, 1);
+        assert_eq!(h.saved_at, 0);
+        
+        // Make edit 2
+        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.update_state(0, 0, 2, vec!["ab".into()]);
+        assert!(h.modified);
+        assert_eq!(h.current, 2);
+        
+        // Save - sets saved_at to current position
+        h.clear_unsaved_state();
+        assert!(!h.modified);
+        assert_eq!(h.saved_at, 2);
+        assert_eq!(h.current, 2);
+        
+        // Make edit 3
+        h.push(Edit::InsertChar { line: 0, col: 2, ch: 'c' });
+        h.update_state(0, 0, 3, vec!["abc".into()]);
+        assert!(h.modified);
+        assert_eq!(h.current, 3);
+        assert_eq!(h.saved_at, 2);
+        
+        // Undo to saved position - should not be modified
+        h.undo();
+        h.update_state(0, 0, 2, vec!["ab".into()]);
+        assert!(!h.modified, "Should not be modified when at saved position");
+        assert_eq!(h.current, 2);
+        assert_eq!(h.saved_at, 2);
+        
+        // Undo past saved position - should be modified
+        h.undo();
+        h.update_state(0, 0, 1, vec!["a".into()]);
+        assert!(h.modified, "Should be modified when before saved position");
+        assert_eq!(h.current, 1);
+        assert_eq!(h.saved_at, 2);
+        
+        // Redo back to saved position - should not be modified
+        h.redo();
+        h.update_state(0, 0, 2, vec!["ab".into()]);
+        assert!(!h.modified, "Should not be modified when back at saved position");
+        assert_eq!(h.current, 2);
+        
+        // Redo past saved position - should be modified
+        h.redo();
+        h.update_state(0, 0, 3, vec!["abc".into()]);
+        assert!(h.modified, "Should be modified when past saved position");
+        assert_eq!(h.current, 3);
+    }
+
+    #[test]
+    fn multi_instance_save_propagates_modified_flag() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("save_flag.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Instance 1: Make edits (modified=true)
+        let mut h1 = UndoHistory::new();
+        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'x' });
+        h1.update_state(0, 0, 1, vec!["xcontent".to_string()]);
+        assert!(h1.modified);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Load and verify modified=true
+        let h2 = UndoHistory::load(&file_str).unwrap();
+        assert!(h2.modified);
+        assert_eq!(h2.current, 1);
+        assert_eq!(h2.saved_at, 0);
+        
+        // Instance 1: Save the file (clears modified flag)
+        h1.clear_unsaved_state();
+        assert!(!h1.modified);
+        assert_eq!(h1.saved_at, 1);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Reload and verify modified=false
+        let h2_reloaded = UndoHistory::load(&file_str).unwrap();
+        assert!(!h2_reloaded.modified, "Modified flag should propagate from save in other instance");
+        assert_eq!(h2_reloaded.current, 1);
+        assert_eq!(h2_reloaded.saved_at, 1);
     }
 }
