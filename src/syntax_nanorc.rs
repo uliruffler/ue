@@ -116,24 +116,44 @@ impl NanorcHighlighter {
     fn tokenize(s: &str) -> Vec<String> {
         let mut v = Vec::new();
         let mut cur = String::new();
-        let mut q = false;
+        let mut in_quotes = false;
+        let chars: Vec<char> = s.chars().collect();
+        let mut i = 0;
         
-        for c in s.chars() {
-            match c {
-                '"' => {
-                    q = !q;
-                    if !q {
-                        v.push(cur.clone());
-                        cur.clear();
-                    }
+        while i < chars.len() {
+            let c = chars[i];
+            
+            if c == '\\' && i + 1 < chars.len() {
+                // Backslash escape - include both the backslash and next char
+                cur.push(c);
+                cur.push(chars[i + 1]);
+                i += 2;
+                continue;
+            }
+            
+            if c == '"' {
+                if in_quotes {
+                    // End of quoted string
+                    in_quotes = false;
+                    v.push(cur.clone());
+                    cur.clear();
+                } else {
+                    // Start of quoted string
+                    in_quotes = true;
                 }
-                ' ' | '\t' if !q => {
-                    if !cur.is_empty() {
-                        v.push(cur.clone());
-                        cur.clear();
-                    }
+                i += 1;
+                continue;
+            }
+            
+            if (c == ' ' || c == '\t') && !in_quotes {
+                if !cur.is_empty() {
+                    v.push(cur.clone());
+                    cur.clear();
                 }
-                _ => cur.push(c),
+                i += 1;
+            } else {
+                cur.push(c);
+                i += 1;
             }
         }
         
@@ -169,6 +189,18 @@ impl NanorcHighlighter {
     fn extract_extensions(p: &str) -> Vec<String> {
         let mut result = Vec::new();
         let s = p.replace('"', "");
+        
+        // Handle glob-style patterns like *.txt or *.sh
+        if let Some(stripped) = s.strip_prefix("*.") {
+            // Extract extension from *.ext pattern
+            let ext: String = stripped.chars()
+                .take_while(|c| c.is_alphanumeric())
+                .collect();
+            if !ext.is_empty() {
+                result.push(ext);
+                return result;
+            }
+        }
         
         // Strategy: scan for patterns like \.ext or \.(ext1|ext2|ext3)
         // This handles both simple cases and complex patterns like nano's sh.nanorc
@@ -219,18 +251,70 @@ impl NanorcHighlighter {
             }
         }
         
+        // Also look for literal words that might be filenames without dots
+        // like "profile", "Makefile", etc.
+        // Look for words that appear after )\. or )word) patterns
+        // This handles patterns like: |(/etc/|(^|/)\.)profile)$
+        let mut i = 0;
+        while i < chars.len() {
+            // Look for )word or .)word patterns near the end
+            if i > 0 && (chars[i-1] == ')' || chars[i-1] == '.') && chars[i].is_alphabetic() {
+                let start = i;
+                while i < chars.len() && chars[i].is_alphabetic() {
+                    i += 1;
+                }
+                let word: String = chars[start..i].iter().collect();
+                
+                // Check if this looks like the end of the pattern
+                // (followed by ) or $ or end of string)
+                let at_end = i >= chars.len() 
+                    || (i < chars.len() && (chars[i] == ')' || chars[i] == '$'))
+                    || (i + 1 < chars.len() && chars[i] == ')' && chars[i+1] == '$');
+                
+                // Only add if it looks like a reasonable filename
+                if at_end && word.len() >= 3 && word.len() <= 20 
+                    && word.chars().all(|c| c.is_lowercase() || c == '_') 
+                    && !result.contains(&word) {
+                    result.push(word);
+                }
+            } else {
+                i += 1;
+            }
+        }
+        
         result
     }
 
     fn compile_pattern(raw: &str) -> Vec<Regex> {
-        let mut r = raw.trim_matches('"').to_string();
-        if r.is_empty() {
+        if raw.is_empty() {
             return Vec::new();
         }
+        
+        let mut r = raw.to_string();
         
         // Convert nanorc regex syntax to Rust regex syntax
         // Replace \< and \> with \b (word boundaries)
         r = r.replace("\\<", "\\b").replace("\\>", "\\b");
+        
+        // Convert POSIX character classes to Rust regex equivalents
+        // [[:space:]] -> [\s]
+        r = r.replace("[[:space:]]", r"[\s]");
+        // [[:alnum:]] -> [a-zA-Z0-9]
+        r = r.replace("[[:alnum:]]", "[a-zA-Z0-9]");
+        // [[:alpha:]] -> [a-zA-Z]
+        r = r.replace("[[:alpha:]]", "[a-zA-Z]");
+        // [[:digit:]] -> [0-9]
+        r = r.replace("[[:digit:]]", "[0-9]");
+        // [[:xdigit:]] -> [0-9a-fA-F]
+        r = r.replace("[[:xdigit:]]", "[0-9a-fA-F]");
+        // [[:punct:]] -> punctuation characters
+        r = r.replace("[[:punct:]]", r"[!-/:-@\[-`{-~]");
+        // [[:blank:]] -> space and tab
+        r = r.replace("[[:blank:]]", "[ \\t]");
+        // [[:upper:]] -> [A-Z]
+        r = r.replace("[[:upper:]]", "[A-Z]");
+        // [[:lower:]] -> [a-z]
+        r = r.replace("[[:lower:]]", "[a-z]");
         
         // Try to compile the pattern as-is
         match Regex::new(&r) {
@@ -789,17 +873,30 @@ color green "\<(export|local)\>"
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
         let f = b.join("sh.nanorc");
-        fs::write(&f, r#"syntax sh "\.sh$"
-color green ";"
-color green "("
-color green ")"
-"#).unwrap();
+        // Use regular string with escapes, not raw string
+        fs::write(&f, "syntax sh \"\\.sh$\"\ncolor green \";\"\ncolor green \"\\(\"\ncolor green \"\\)\"\n").unwrap();
         let mut s = enabled();
         s.syntax.dirs.clear();
+        
+        // Test tokenization first
+        let test_line = "color green \"\\(\"";
+        let tokens = NanorcHighlighter::tokenize(test_line);
+        assert_eq!(tokens.len(), 3, "Should have 3 tokens");
+        assert_eq!(tokens[2], r"\(", "Third token should be backslash-paren");
+        
+        // Test pattern compilation
+        let patterns = NanorcHighlighter::compile_pattern(r"\(");
+        assert_eq!(patterns.len(), 1, "Pattern \\( should compile");
+        
         let h = NanorcHighlighter::new(&s);
+        
+        assert!(!h.rules.is_empty(), "Should have loaded rules");
+        assert!(!h.exts.is_empty(), "Should have loaded extensions");
         
         let line = "func(); other()";
         let spans = h.highlight_line(line, "test.sh", &s);
+        
+        assert!(!spans.is_empty(), "Should have some spans, got: {}", spans.len());
         
         // Check that each symbol is covered by a green span
         let semicolon_pos = line.find(';').unwrap();
@@ -941,7 +1038,7 @@ color cyan " #.*$"
         fs::create_dir_all(&b).unwrap();
         let f = b.join("test.nanorc");
         // Pattern: double-quoted string with [^"] meaning "any char except quote"
-        fs::write(&f, "syntax test *.txt\ncolor brightyellow \"\"[^\"]*\"\"\n").unwrap();
+        fs::write(&f, "syntax test *.txt\ncolor brightyellow \"\\\"[^\\\"]*\\\"\"\n").unwrap();
         let mut s = enabled();
         s.syntax.dirs.clear();
         let h = NanorcHighlighter::new(&s);
@@ -964,7 +1061,7 @@ color cyan " #.*$"
         fs::create_dir_all(&b).unwrap();
         let f = b.join("sh.nanorc");
         fs::write(&f, r#"syntax sh "\.sh$"
-color brightyellow ""[^"]*""
+color brightyellow "\"[^\"]*\""
 color brightyellow "'[^']*'"
 "#).unwrap();
         let mut s = enabled();
