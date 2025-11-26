@@ -714,3 +714,129 @@ fn render_line_segment_with_selection_expanded(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn expand_tabs_no_tabs_returns_original() {
+        let result = expand_tabs("hello world", 4);
+        assert_eq!(result, "hello world");
+    }
+
+    #[test]
+    fn expand_tabs_single_tab_at_start() {
+        let result = expand_tabs("\thello", 4);
+        assert_eq!(result, "    hello");
+    }
+
+    #[test]
+    fn expand_tabs_single_tab_in_middle() {
+        let result = expand_tabs("ab\tcd", 4);
+        assert_eq!(result, "ab  cd"); // 2 spaces to reach next tab stop at col 4
+    }
+
+    #[test]
+    fn expand_tabs_multiple_tabs() {
+        let result = expand_tabs("\t\t", 4);
+        assert_eq!(result, "        "); // 8 spaces (2 tabs × 4)
+    }
+
+    #[test]
+    fn expand_tabs_tab_width_8() {
+        let result = expand_tabs("a\tb", 8);
+        assert_eq!(result, "a       b"); // 7 spaces to reach col 8
+    }
+
+    #[test]
+    fn expand_tabs_respects_tab_stops() {
+        let result = expand_tabs("abc\tde\tf", 4);
+        // "abc" = col 3, tab goes to col 4 (1 space)
+        // "de" = col 6, tab goes to col 8 (2 spaces)
+        assert_eq!(result, "abc de  f");
+    }
+
+    #[test]
+    fn normalize_selection_ordered_returns_same() {
+        let start = (5, 10);
+        let end = (10, 20);
+        let (s, e) = normalize_selection(start, end);
+        assert_eq!(s, start);
+        assert_eq!(e, end);
+    }
+
+    #[test]
+    fn normalize_selection_reversed_swaps() {
+        let start = (10, 20);
+        let end = (5, 10);
+        let (s, e) = normalize_selection(start, end);
+        assert_eq!(s, end);
+        assert_eq!(e, start);
+    }
+
+    #[test]
+    fn normalize_selection_same_line_ordered() {
+        let start = (5, 10);
+        let end = (5, 20);
+        let (s, e) = normalize_selection(start, end);
+        assert_eq!(s, start);
+        assert_eq!(e, end);
+    }
+
+    #[test]
+    fn normalize_selection_same_line_reversed() {
+        let start = (5, 20);
+        let end = (5, 10);
+        let (s, e) = normalize_selection(start, end);
+        assert_eq!(s, end);
+        assert_eq!(e, start);
+    }
+
+    #[test]
+    fn get_search_matches_empty_pattern_returns_empty() {
+        let matches = get_search_matches("hello world", "");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn get_search_matches_simple_literal() {
+        let matches = get_search_matches("hello world", "world");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], (6, 11)); // "world" starts at char 6, ends at 11
+    }
+
+    #[test]
+    fn get_search_matches_multiple_occurrences() {
+        let matches = get_search_matches("hello hello", "hello");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (0, 5));
+        assert_eq!(matches[1], (6, 11));
+    }
+
+    #[test]
+    fn get_search_matches_regex_pattern() {
+        let matches = get_search_matches("test123 test456", r"\d+");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (4, 7));   // "123"
+        assert_eq!(matches[1], (12, 15)); // "456"
+    }
+
+    #[test]
+    fn get_search_matches_no_match_returns_empty() {
+        let matches = get_search_matches("hello world", "xyz");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn get_search_matches_invalid_regex_returns_empty() {
+        let matches = get_search_matches("hello world", "[invalid");
+        assert!(matches.is_empty());
+    }
+
+    #[test]
+    fn get_search_matches_handles_multibyte_chars() {
+        let matches = get_search_matches("hello 世界 world", "世界");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], (6, 8)); // Character positions, not bytes
+    }
+}

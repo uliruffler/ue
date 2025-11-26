@@ -333,4 +333,61 @@ mod tests {
         // Verify Shift+F3 does NOT match find_next
         assert!(!kb.find_next_matches(&KeyCode::F(3), &KeyModifiers::SHIFT));
     }
+
+    #[test]
+    fn settings_color_validation() {
+        // Test valid colors
+        assert!(Settings::parse_color("#FF0000").is_some());
+        assert!(Settings::parse_color("#00FF00").is_some());
+        assert!(Settings::parse_color("#0000FF").is_some());
+        assert!(Settings::parse_color("#123456").is_some());
+        
+        // Test invalid colors
+        assert!(Settings::parse_color("").is_none());
+        assert!(Settings::parse_color("FF0000").is_none()); // Missing #
+        assert!(Settings::parse_color("#FF00").is_none()); // Too short
+        assert!(Settings::parse_color("#FF00000").is_none()); // Too long
+        assert!(Settings::parse_color("#GGGGGG").is_none()); // Invalid hex
+        assert!(Settings::parse_color("rgb(255,0,0)").is_none()); // Wrong format
+    }
+    
+    #[test]
+    fn settings_tab_width_validation() {
+        let settings = Settings::load().expect("load settings");
+        assert!(settings.tab_width > 0);
+        assert!(settings.tab_width <= 16); // Reasonable max
+    }
+    
+    #[test]
+    fn settings_line_number_digits_validation() {
+        let settings = Settings::load().expect("load settings");
+        // Should be 0 (disabled) or between 1 and 10
+        assert!(settings.appearance.line_number_digits <= 10);
+    }
+    
+    #[test]
+    fn settings_cursor_shape_values() {
+        let settings = Settings::load().expect("load settings");
+        let valid_shapes = ["bar", "block", "underline"];
+        assert!(valid_shapes.contains(&settings.appearance.cursor_shape.to_lowercase().as_str()));
+    }
+    
+    #[test]
+    fn settings_all_keybindings_valid() {
+        let settings = Settings::load().expect("load settings");
+        
+        // Check that all keybindings are non-empty
+        assert!(!settings.keybindings.quit.is_empty());
+        assert!(!settings.keybindings.file_selector.is_empty());
+        assert!(!settings.keybindings.copy.is_empty());
+        assert!(!settings.keybindings.paste.is_empty());
+        assert!(!settings.keybindings.cut.is_empty());
+        assert!(!settings.keybindings.close.is_empty());
+        assert!(!settings.keybindings.save.is_empty());
+        assert!(!settings.keybindings.undo.is_empty());
+        assert!(!settings.keybindings.redo.is_empty());
+        assert!(!settings.keybindings.find.is_empty());
+        assert!(!settings.keybindings.find_next.is_empty());
+        assert!(!settings.keybindings.find_previous.is_empty());
+    }
 }

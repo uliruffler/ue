@@ -176,3 +176,184 @@ fn finalize_drag(state: &mut FileViewerState, lines: &mut Vec<String>, copy: boo
     }
     state.clear_drag();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::env::set_temp_home;
+    use crate::settings::Settings;
+    use crate::undo::UndoHistory;
+
+    fn create_test_state(settings: &'static Settings) -> FileViewerState<'static> {
+        FileViewerState::new(80, UndoHistory::new(), settings)
+    }
+
+    #[test]
+    fn mouse_click_on_header_row_is_ignored() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["line 1".to_string(), "line 2".to_string()];
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: 0,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        let original_cursor = state.cursor_line;
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        assert_eq!(state.cursor_line, original_cursor);
+    }
+
+    #[test]
+    fn mouse_click_beyond_visible_lines_is_ignored() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["line 1".to_string(), "line 2".to_string()];
+        let visible_lines = 5;
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 5,
+            row: (visible_lines + 2) as u16,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        let original_cursor = state.cursor_line;
+        handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines);
+        assert_eq!(state.cursor_line, original_cursor);
+    }
+
+    #[test]
+    fn mouse_scroll_down_updates_top_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![];
+        for i in 0..100 {
+            lines.push(format!("line {}", i));
+        }
+        state.top_line = 10;
+        
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        assert!(state.top_line > 10);
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn mouse_scroll_up_updates_top_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![];
+        for i in 0..100 {
+            lines.push(format!("line {}", i));
+        }
+        state.top_line = 20;
+        
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        assert!(state.top_line < 20);
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn mouse_scroll_up_at_top_stays_at_zero() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["line 1".to_string(), "line 2".to_string()];
+        state.top_line = 0;
+        
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        assert_eq!(state.top_line, 0);
+    }
+
+    #[test]
+    fn mouse_scroll_down_respects_max_scroll() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["line 1".to_string(), "line 2".to_string(), "line 3".to_string()];
+        state.top_line = 2;
+        
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column: 5,
+            row: 5,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        assert_eq!(state.top_line, 2); // Can't scroll past last line
+    }
+
+    #[test]
+    fn restore_cursor_to_screen_clears_saved_state() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        state.saved_absolute_cursor = Some(42);
+        state.saved_scroll_state = Some((10, 5));
+        
+        restore_cursor_to_screen(&mut state);
+        
+        assert!(state.saved_absolute_cursor.is_none());
+        assert!(state.saved_scroll_state.is_none());
+    }
+
+    #[test]
+    fn save_cursor_state_preserves_first_save() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        
+        save_cursor_state_if_needed(&mut state, 10, 5);
+        assert_eq!(state.saved_scroll_state, Some((10, 5)));
+        
+        // Second call should not overwrite
+        save_cursor_state_if_needed(&mut state, 20, 8);
+        assert_eq!(state.saved_scroll_state, Some((10, 5)));
+    }
+
+    #[test]
+    fn mouse_up_clears_dragging_state() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["line 1".to_string()];
+        state.mouse_dragging = true;
+        
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Up(MouseButton::Left),
+            column: 5,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        assert!(!state.mouse_dragging);
+    }
+}
+
