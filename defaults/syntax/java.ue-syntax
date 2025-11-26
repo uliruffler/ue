@@ -1,0 +1,29 @@
+# Java syntax highlighting
+# Format: priority|color|regex
+
+# Comments (line and block)
+10|dark_green|//.*$
+10|dark_green|/\*[\s\S]*?\*/
+
+# Strings and character literals
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)'
+
+# Numbers (integers, floats, hex, with optional suffixes)
+8|cyan|\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?[LlFfDd]?\b
+8|cyan|\b0[xX][0-9a-fA-F]+[Ll]?\b
+
+# Keywords (control flow, OOP modifiers, and declarations)
+7|blue|\b(?:abstract|assert|break|case|catch|class|const|continue|default|do|else|enum|extends|final|finally|for|goto|if|implements|import|instanceof|interface|native|new|package|private|protected|public|return|static|strictfp|super|switch|synchronized|this|throw|throws|transient|try|volatile|while)\b
+
+# Built-in types and wrapper classes
+6|yellow|\b(?:boolean|byte|char|double|float|int|long|short|void|String|Boolean|Byte|Character|Double|Float|Integer|Long|Short|Object)\b
+
+# Special values and constants
+5|magenta|\b(?:true|false|null)\b
+
+# Annotations (e.g., @Override, @Deprecated)
+4|dark_magenta|@[A-Za-z_][A-Za-z0-9_]*
+
+# User-defined types (capitalized identifiers)
+3|yellow|\b[A-Z][a-zA-Z0-9_]*\b

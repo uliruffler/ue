@@ -389,6 +389,9 @@ fn handle_file_selector_in_loop(
 }
 
 fn editing_session(file: &str, content: String, settings: &Settings) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
+    // Set the current file for syntax highlighting
+    crate::syntax::set_current_file(file);
+    
     let mut stdout = io::stdout();
     let mut undo_history = UndoHistory::load(file).unwrap_or_else(|_| UndoHistory::new());
     

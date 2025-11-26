@@ -1,0 +1,29 @@
+# Rust syntax highlighting
+# Format: priority|color|regex
+
+# Comments (highest priority - overrides everything else)
+10|dark_green|//.*$
+10|dark_green|/\*[\s\S]*?\*/
+
+# Strings and character literals
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)'
+
+# Numbers (integers, floats, with optional type suffixes)
+8|cyan|\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?(?:f32|f64|i8|i16|i32|i64|i128|u8|u16|u32|u64|u128|isize|usize)?\b
+
+# Keywords (control flow, declarations, and modifiers)
+7|blue|\b(?:as|async|await|break|const|continue|crate|dyn|else|enum|extern|false|fn|for|if|impl|in|let|loop|match|mod|move|mut|pub|ref|return|self|Self|static|struct|super|trait|true|type|unsafe|use|where|while)\b
+
+# Macros (identifiers ending with !)
+6|magenta|\b[a-z_][a-zA-Z0-9_]*!
+
+# Types (capitalized identifiers)
+5|yellow|\b[A-Z][a-zA-Z0-9_]*\b
+
+# Attributes (compiler directives)
+4|dark_magenta|#\[[\s\S]*?\]
+
+# Lifetimes (e.g., 'a, 'static)
+3|dark_cyan|'[a-z_][a-zA-Z0-9_]*\b
+

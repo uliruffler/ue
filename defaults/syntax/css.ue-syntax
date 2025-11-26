@@ -1,0 +1,29 @@
+# CSS syntax highlighting
+# Format: priority|color|regex
+
+# Comments
+10|dark_green|/\*[\s\S]*?\*/
+
+# Strings (in property values)
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)*'
+
+# Selectors (IDs and classes)
+8|yellow|#[a-zA-Z][a-zA-Z0-9_-]*
+8|cyan|\.[a-zA-Z][a-zA-Z0-9_-]*
+
+# Property names (before colon)
+7|blue|\b[a-zA-Z-]+(?=\s*:)
+
+# Color values (hex and functions)
+6|magenta|#[0-9a-fA-F]{3,6}\b
+6|magenta|\b(?:rgb|rgba|hsl|hsla)\([^)]*\)
+
+# Numbers with units
+5|cyan|\b[0-9]+(?:\.[0-9]+)?(?:px|em|rem|%|vh|vw|pt|cm|mm|in|ex|ch|vmin|vmax|deg|rad|turn|s|ms)?\b
+
+# Important declaration
+4|red|!important
+
+# Pseudo-classes and pseudo-elements
+3|dark_cyan|:(?:hover|active|focus|visited|link|first-child|last-child|nth-child|before|after|not|where|is)

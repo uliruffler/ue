@@ -1,0 +1,24 @@
+# Markdown syntax highlighting
+# Format: priority|color|regex
+# Headers (# ## ### etc.)
+10|blue|^#{1,6}\s+.*$
+# Bold text (** ** or __ __)
+9|yellow|\*\*[^*]+\*\*
+9|yellow|__[^_]+__
+# Italic text (* * or _ _)
+8|cyan|\*[^*]+\*
+8|cyan|_[^_]+_
+# Code blocks (``` ``` and inline ` `)
+7|green|```[\s\S]*?```
+7|green|`[^`]+`
+# Links ([text](url))
+6|dark_cyan|\[([^\]]+)\]\([^)]+\)
+# Images (![alt](url))
+5|magenta|!\[([^\]]*)\]\([^)]+\)
+# Lists (unordered: - * +, ordered: 1. 2. 3.)
+4|blue|^[\s]*[-*+]\s
+4|blue|^[\s]*[0-9]+\.\s
+# Blockquotes (> )
+3|dark_grey|^>\s.*$
+# Horizontal rules (--- *** ___)
+2|grey|^(?:---|\*\*\*|___)$

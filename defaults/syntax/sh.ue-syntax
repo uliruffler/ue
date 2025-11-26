@@ -1,0 +1,23 @@
+# Shell script syntax highlighting
+# Format: priority|color|regex
+
+# Comments
+10|dark_green|#.*$
+
+# Strings (double-quoted with variable expansion, single-quoted literal)
+9|green|"(?:[^"\\$]|\\.)*"
+9|green|'[^']*'
+
+# Variables ($ prefix and ${} expansion)
+8|cyan|\$[a-zA-Z_][a-zA-Z0-9_]*
+8|cyan|\$\{[^}]*\}
+8|cyan|\$[0-9@*#?$!-]
+
+# Keywords (control flow structures)
+7|blue|\b(?:if|then|else|elif|fi|case|esac|for|select|while|until|do|done|in|function|time)\b
+
+# Built-in shell commands
+6|magenta|\b(?:echo|printf|read|cd|pwd|pushd|popd|exit|return|source|export|local|declare|readonly|shift|test|eval|exec|set|unset)\b
+
+# Common external commands
+5|yellow|\b(?:ls|cat|grep|sed|awk|find|sort|uniq|wc|head|tail|cut|tr|chmod|chown|mkdir|rm|cp|mv)\b

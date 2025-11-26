@@ -84,7 +84,7 @@ impl Settings {
     }
     
     fn write_default_config(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-        const DEFAULT_CONFIG: &str = include_str!("../settings.toml");
+        const DEFAULT_CONFIG: &str = include_str!("../defaults/settings.toml");
         let mut file = fs::File::create(path)?;
         file.write_all(DEFAULT_CONFIG.as_bytes())?;
         Ok(())

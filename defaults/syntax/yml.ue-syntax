@@ -1,0 +1,22 @@
+# YAML syntax highlighting (yml extension)
+# Format: priority|color|regex
+# Comments
+10|dark_green|#.*$
+# Strings (quoted)
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)*'
+# Keys (before colon)
+8|cyan|^[\s]*[a-zA-Z0-9_-]+(?=:)
+8|cyan|\b[a-zA-Z0-9_-]+(?=:)
+# Anchors and aliases (& and *)
+7|dark_magenta|&[a-zA-Z0-9_-]+
+7|dark_magenta|\*[a-zA-Z0-9_-]+
+# Document separators (--- and ...)
+6|grey|^---$
+6|grey|^\.\.\.$
+# Booleans and special values
+5|magenta|\b(?:true|false|yes|no|on|off|null|~)\b
+# Numbers (integers and floats)
+4|cyan|\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b
+# List markers (-)
+3|blue|^[\s]*-\s

@@ -1,0 +1,6 @@
+# Plain text syntax highlighting (minimal)
+# Format: priority|color|regex
+# URLs (http and https)
+5|blue|https?://[^\s]+
+# Email addresses
+4|cyan|[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}

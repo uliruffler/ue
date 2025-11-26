@@ -1,0 +1,17 @@
+# SQL syntax highlighting
+# Format: priority|color|regex
+# Comments (-- and /* */)
+10|dark_green|--.*$
+10|dark_green|/\*[\s\S]*?\*/
+# Strings (single-quoted)
+9|green|'(?:[^'\\]|\\.)*'
+# Keywords (case-insensitive via (?i:))
+7|blue|\b(?i:SELECT|FROM|WHERE|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|INDEX|VIEW|DATABASE|DROP|ALTER|ADD|COLUMN|PRIMARY|KEY|FOREIGN|REFERENCES|JOIN|INNER|LEFT|RIGHT|OUTER|ON|AS|AND|OR|NOT|NULL|IS|IN|BETWEEN|LIKE|ORDER|BY|GROUP|HAVING|LIMIT|OFFSET|UNION|ALL|DISTINCT|ASC|DESC|EXISTS|CASE|WHEN|THEN|ELSE|END)\b
+# Data types
+6|yellow|\b(?i:INTEGER|INT|SMALLINT|BIGINT|DECIMAL|NUMERIC|FLOAT|REAL|DOUBLE|CHAR|VARCHAR|TEXT|DATE|TIME|TIMESTAMP|BOOLEAN|BOOL|BLOB|CLOB)\b
+# Built-in functions
+5|magenta|\b(?i:COUNT|SUM|AVG|MIN|MAX|UPPER|LOWER|LENGTH|SUBSTR|TRIM|NOW|COALESCE|CAST|CONVERT)\b
+# Numbers
+4|cyan|\b[0-9]+(?:\.[0-9]+)?\b
+# Special constants
+3|magenta|\b(?i:TRUE|FALSE|NULL)\b

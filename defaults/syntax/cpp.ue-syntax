@@ -1,0 +1,30 @@
+# C++ syntax highlighting
+# Format: priority|color|regex
+
+# Comments (line and block)
+10|dark_green|//.*$
+10|dark_green|/\*[\s\S]*?\*/
+
+# Strings and character literals
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)'
+
+# Numbers (integers, floats, hex, with optional suffixes)
+8|cyan|\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?[UuLlFf]*\b
+8|cyan|\b0[xX][0-9a-fA-F]+[UuLl]*\b
+
+# Keywords (control flow, OOP, templates, and modern C++ features)
+7|blue|\b(?:alignas|alignof|asm|auto|bool|break|case|catch|char|char8_t|char16_t|char32_t|class|const|constexpr|continue|decltype|default|delete|do|double|else|enum|explicit|export|extern|false|float|for|friend|goto|if|inline|int|long|mutable|namespace|new|nullptr|operator|private|protected|public|register|return|short|signed|sizeof|static|struct|switch|template|this|throw|true|try|typedef|typename|union|unsigned|using|virtual|void|volatile|wchar_t|while)\b
+
+# Preprocessor directives
+6|dark_magenta|#\s*(?:include|define|undef|ifdef|ifndef|if|else|elif|endif|pragma)\b
+
+# Standard library types and smart pointers
+5|yellow|\b(?:std::)?(?:string|vector|map|set|list|shared_ptr|unique_ptr)\b
+
+# User-defined types (capitalized identifiers and _t suffix)
+5|yellow|\b[A-Z][a-zA-Z0-9_]*\b
+5|yellow|\b[a-z_][a-zA-Z0-9_]*_t\b
+
+# Special constants
+4|magenta|\b(?:NULL|nullptr)\b

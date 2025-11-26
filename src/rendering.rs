@@ -314,12 +314,62 @@ fn position_cursor(
 fn render_line_segment_expanded(
     stdout: &mut impl Write,
     expanded_chars: &[char],
-    _original_line: &str,
+    original_line: &str,
     _ctx: &RenderContext,
     segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
-    let line_segment: String = expanded_chars[segment.start_visual..segment.end_visual].iter().collect();
-    write!(stdout, "{}", line_segment)?;
+    use crossterm::style::{SetForegroundColor, ResetColor};
+    
+    // Get syntax highlighting for the original line
+    let highlights = crate::syntax::highlight_line(original_line);
+    
+    // Convert byte positions to visual positions for the expanded line
+    let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; expanded_chars.len()];
+    
+    for (byte_start, byte_end, color) in highlights {
+        // Convert byte positions to character positions in original line
+        let char_start = original_line[..byte_start.min(original_line.len())].chars().count();
+        let char_end = original_line[..byte_end.min(original_line.len())].chars().count();
+        
+        // Convert character positions to visual positions (accounting for tabs)
+        let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+        let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+        
+        // Mark visual positions with color
+        for i in visual_start..visual_end.min(visual_to_color.len()) {
+            visual_to_color[i] = Some(color);
+        }
+    }
+    
+    // Render the segment with colors
+    let mut current_color: Option<crossterm::style::Color> = None;
+    
+    for visual_i in segment.start_visual..segment.end_visual {
+        if visual_i >= expanded_chars.len() {
+            break;
+        }
+        
+        let ch = expanded_chars[visual_i];
+        let desired_color = visual_to_color.get(visual_i).copied().flatten();
+        
+        // Change color if needed
+        if desired_color != current_color {
+            if let Some(color) = desired_color {
+                execute!(stdout, SetForegroundColor(color))?;
+            } else {
+                execute!(stdout, ResetColor)?;
+            }
+            current_color = desired_color;
+        }
+        
+        write!(stdout, "{}", ch)?;
+    }
+    
+    // Reset color at end
+    if current_color.is_some() {
+        execute!(stdout, ResetColor)?;
+    }
+    
     Ok(())
 }
 
@@ -333,6 +383,8 @@ fn render_line_segment_with_selection_expanded(
     ctx: &RenderContext,
     segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
+    use crossterm::style::{SetForegroundColor, ResetColor};
+    
     let (start, end) = normalize_selection(sel_start, sel_end);
     let (start_line, start_col) = start;
     let (end_line, end_col) = end;
@@ -342,9 +394,32 @@ fn render_line_segment_with_selection_expanded(
         return render_line_segment_expanded(stdout, expanded_chars, original_line, ctx, segment);
     }
 
+    // Get syntax highlighting for the original line
+    let highlights = crate::syntax::highlight_line(original_line);
+    
+    // Convert byte positions to visual positions for the expanded line
+    let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; expanded_chars.len()];
+    
+    for (byte_start, byte_end, color) in highlights {
+        // Convert byte positions to character positions in original line
+        let char_start = original_line[..byte_start.min(original_line.len())].chars().count();
+        let char_end = original_line[..byte_end.min(original_line.len())].chars().count();
+        
+        // Convert character positions to visual positions (accounting for tabs)
+        let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+        let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+        
+        // Mark visual positions with color
+        for i in visual_start..visual_end.min(visual_to_color.len()) {
+            visual_to_color[i] = Some(color);
+        }
+    }
+
     // Convert selection character indices to visual column range
     let start_visual_col = if segment.line_index == start_line { visual_width_up_to(original_line, start_col, segment.tab_width) } else { 0 };
     let end_visual_col = if segment.line_index == end_line { visual_width_up_to(original_line, end_col, segment.tab_width) } else { usize::MAX };
+
+    let mut current_color: Option<crossterm::style::Color> = None;
 
     for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() { break; }
@@ -352,11 +427,33 @@ fn render_line_segment_with_selection_expanded(
         let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
 
         if is_selected {
+            // Reset color before applying reverse video
+            if current_color.is_some() {
+                execute!(stdout, ResetColor)?;
+                current_color = None;
+            }
             write!(stdout, "{}", ch.to_string().reverse())?;
             execute!(stdout, ResetColor)?;
         } else {
+            let desired_color = visual_to_color.get(visual_i).copied().flatten();
+            
+            // Change color if needed
+            if desired_color != current_color {
+                if let Some(color) = desired_color {
+                    execute!(stdout, SetForegroundColor(color))?;
+                } else {
+                    execute!(stdout, ResetColor)?;
+                }
+                current_color = desired_color;
+            }
+            
             write!(stdout, "{}", ch)?;
         }
+    }
+    
+    // Reset color at end
+    if current_color.is_some() {
+        execute!(stdout, ResetColor)?;
     }
 
     Ok(())

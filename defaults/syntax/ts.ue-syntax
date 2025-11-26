@@ -1,0 +1,26 @@
+# TypeScript syntax highlighting
+# Format: priority|color|regex
+
+# Comments (line and block)
+10|dark_green|//.*$
+10|dark_green|/\*[\s\S]*?\*/
+
+# Strings (double quotes, single quotes, and template literals)
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)*'
+9|green|`(?:[^`\\]|\\.)*`
+
+# Numbers (integers and floats)
+8|cyan|\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b
+
+# Keywords (TypeScript-specific types and JavaScript keywords)
+7|blue|\b(?:abstract|any|as|async|await|boolean|break|case|catch|class|const|constructor|continue|debugger|declare|default|delete|do|else|enum|export|extends|finally|for|from|function|get|if|implements|import|in|instanceof|interface|is|keyof|let|module|namespace|never|new|number|of|private|protected|public|readonly|return|set|static|string|super|switch|this|throw|try|type|typeof|unknown|var|void|while|with|yield)\b
+
+# Built-in objects
+6|yellow|\b(?:Array|Boolean|Date|Error|Function|JSON|Math|Number|Object|Promise|RegExp|String|Symbol)\b
+
+# Special values and constants
+5|magenta|\b(?:true|false|null|undefined|NaN|Infinity)\b
+
+# User-defined types and interfaces (capitalized identifiers)
+4|yellow|\b[A-Z][a-zA-Z0-9_]*\b

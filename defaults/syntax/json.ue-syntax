@@ -1,0 +1,12 @@
+# JSON syntax highlighting
+# Format: priority|color|regex
+# Strings (keys and values)
+10|green|"(?:[^"\\]|\\.)*"
+# Numbers (integers and floats, with optional exponent)
+9|cyan|\b-?[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?\b
+# Booleans
+8|magenta|\b(?:true|false)\b
+# Null
+7|magenta|\bnull\b
+# Structural characters (braces, brackets, colons, commas)
+6|grey|[{}\[\]:,]

@@ -3,18 +3,20 @@
 use clap::{Parser};
 
 mod coordinates;
+mod default_syntax;
+mod double_esc;
 mod editor_state;
 mod editing;
 mod event_handlers;
 mod file_selector;
 mod mouse_handlers;
-mod settings;
+mod recent;
 mod rendering;
+mod session;
+mod settings;
+mod syntax;
 mod ui;
 mod undo;
-mod recent;
-mod session;
-mod double_esc;
 #[cfg(test)] mod env; // only compile env helpers for tests
 
 #[derive(Parser)]
@@ -25,6 +27,9 @@ struct Cli {
 }
 
 fn main() -> crossterm::Result<()> {
+    // Deploy default syntax files if they don't exist
+    let _ = default_syntax::deploy_default_syntax_files();
+    
     let cli = Cli::parse();
     let mut files = cli.files.clone();
 

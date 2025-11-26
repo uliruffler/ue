@@ -1,0 +1,26 @@
+# Python syntax highlighting
+# Format: priority|color|regex
+
+# Comments
+10|dark_green|#.*$
+
+# Strings (triple-quoted docstrings and regular strings)
+9|green|"""[\s\S]*?"""
+9|green|'''[\s\S]*?'''
+9|green|"(?:[^"\\]|\\.)*"
+9|green|'(?:[^'\\]|\\.)*'
+
+# Numbers (integers, floats, with optional complex suffix)
+8|cyan|\b[0-9]+(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?[jJ]?\b
+
+# Keywords (control flow, declarations, and operators)
+7|blue|\b(?:False|None|True|and|as|assert|async|await|break|class|continue|def|del|elif|else|except|finally|for|from|global|if|import|in|is|lambda|nonlocal|not|or|pass|raise|return|try|while|with|yield)\b
+
+# Built-in functions
+6|magenta|\b(?:abs|all|any|bin|bool|chr|dict|enumerate|filter|float|input|int|len|list|map|max|min|open|print|range|round|set|sorted|str|sum|tuple|type|zip)\b
+
+# Decorators (function and class decorators)
+5|dark_magenta|@[a-zA-Z_][a-zA-Z0-9_]*
+
+# Class names (capitalized identifiers)
+4|yellow|\b[A-Z][a-zA-Z0-9_]*\b

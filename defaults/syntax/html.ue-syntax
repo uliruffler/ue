@@ -1,0 +1,19 @@
+# HTML syntax highlighting
+# Format: priority|color|regex
+
+# Comments
+10|dark_green|<!--[\s\S]*?-->
+
+# Tags (opening, closing, and self-closing)
+9|blue|</?[a-zA-Z][a-zA-Z0-9]*\b
+9|blue|/?>
+
+# Attributes (attribute names before =)
+8|cyan|\b[a-zA-Z-]+(?==)
+
+# Attribute values (quoted strings)
+7|green|"[^"]*"
+7|green|'[^']*'
+
+# HTML entities (e.g., &nbsp;, &#123;)
+6|magenta|&[a-zA-Z0-9#]+;
