@@ -849,5 +849,182 @@ mod tests {
         assert!(mtime2.is_some(), "Should return timestamp after second save");
         // Note: mtime2 >= mtime1, but might be equal on fast systems
     }
-}
 
+    // Multi-instance synchronization tests
+
+    #[test]
+    fn multi_instance_detects_external_undo_file_change() {
+        use std::thread;
+        use std::time::Duration;
+        
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("shared.txt");
+        fs::write(&file, "original").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Instance 1: Create and save undo history
+        let mut h1 = UndoHistory::new();
+        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h1.update_state(0, 0, 1, vec!["aoriginal".to_string()]);
+        h1.save(&file_str).unwrap();
+        
+        let mtime1 = UndoHistory::get_undo_file_mtime(&file_str);
+        assert!(mtime1.is_some());
+        
+        // Wait to ensure mtime changes
+        thread::sleep(Duration::from_millis(10));
+        
+        // Instance 2: Make different changes and save
+        let mut h2 = UndoHistory::load(&file_str).unwrap();
+        h2.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h2.update_state(0, 0, 2, vec!["aboriginal".to_string()]);
+        h2.save(&file_str).unwrap();
+        
+        let mtime2 = UndoHistory::get_undo_file_mtime(&file_str);
+        assert!(mtime2.is_some());
+        
+        // mtimes should be different
+        assert_ne!(mtime1, mtime2);
+        
+        // Instance 1: Reload and verify it sees instance 2's changes
+        let h1_reloaded = UndoHistory::load(&file_str).unwrap();
+        assert_eq!(h1_reloaded.edits.len(), 2);
+        assert_eq!(h1_reloaded.cursor_col, 2);
+        assert_eq!(h1_reloaded.file_content, Some(vec!["aboriginal".to_string()]));
+    }
+
+    #[test]
+    fn multi_instance_cursor_position_restored_correctly() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("cursor_test.txt");
+        fs::write(&file, "line1\nline2\nline3").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Instance 1: Position cursor at line 2, column 3, scroll top at 1
+        let mut h1 = UndoHistory::new();
+        h1.push(Edit::InsertChar { line: 1, col: 0, ch: 'x' });
+        h1.update_state(1, 2, 3, vec!["line1".to_string(), "xline2".to_string(), "line3".to_string()]);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Load and verify cursor restoration
+        let h2 = UndoHistory::load(&file_str).unwrap();
+        assert_eq!(h2.scroll_top, 1);
+        assert_eq!(h2.cursor_line, 2);
+        assert_eq!(h2.cursor_col, 3);
+    }
+
+    #[test]
+    fn multi_instance_modified_flag_synchronized() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("modified_test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Instance 1: Make edits (modified=true)
+        let mut h1 = UndoHistory::new();
+        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h1.update_state(0, 0, 1, vec!["acontent".to_string()]);
+        assert!(h1.modified);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Load and verify modified flag is true
+        let h2 = UndoHistory::load(&file_str).unwrap();
+        assert!(h2.modified);
+        assert_eq!(h2.edits.len(), 1);
+        
+        // Instance 1: Undo all changes (modified=false)
+        h1.undo();
+        h1.update_state(0, 0, 0, vec!["content".to_string()]);
+        assert!(!h1.modified);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Reload and verify modified flag is now false
+        let h2_reloaded = UndoHistory::load(&file_str).unwrap();
+        assert!(!h2_reloaded.modified);
+    }
+
+    #[test]
+    fn multi_instance_concurrent_edits_last_write_wins() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("concurrent.txt");
+        fs::write(&file, "base").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Both instances start from same state
+        let h_base = UndoHistory::new();
+        h_base.save(&file_str).unwrap();
+        
+        // Instance 1: Add edit 'x'
+        let mut h1 = UndoHistory::load(&file_str).unwrap();
+        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'x' });
+        h1.update_state(0, 0, 1, vec!["xbase".to_string()]);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Add edit 'y' (loads instance 1's state first)
+        let mut h2 = UndoHistory::load(&file_str).unwrap();
+        h2.push(Edit::InsertChar { line: 0, col: 0, ch: 'y' });
+        h2.update_state(0, 0, 1, vec!["yxbase".to_string()]);
+        h2.save(&file_str).unwrap();
+        
+        // Final state should be instance 2's changes (which includes instance 1's edit)
+        let h_final = UndoHistory::load(&file_str).unwrap();
+        // h2 loaded h1's state (with 'x') then added 'y', so we have 2 edits
+        assert_eq!(h_final.edits.len(), 2);
+    }
+
+    #[test]
+    fn multi_instance_preserves_undo_redo_chain() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("chain.txt");
+        fs::write(&file, "text").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Instance 1: Create undo chain with redo capability
+        let mut h1 = UndoHistory::new();
+        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h1.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h1.push(Edit::InsertChar { line: 0, col: 2, ch: 'c' });
+        h1.undo(); // Undo 'c'
+        assert_eq!(h1.current, 2);
+        assert!(h1.can_redo());
+        h1.update_state(0, 0, 2, vec!["abtext".to_string()]);
+        h1.save(&file_str).unwrap();
+        
+        // Instance 2: Load and verify redo chain preserved
+        let h2 = UndoHistory::load(&file_str).unwrap();
+        assert_eq!(h2.current, 2);
+        assert_eq!(h2.edits.len(), 3);
+        assert!(h2.can_redo());
+        assert!(h2.can_undo());
+    }
+
+    #[test]
+    fn get_undo_file_mtime_changes_after_modification() {
+        use std::thread;
+        use std::time::Duration;
+        
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("mtime_change.txt");
+        fs::write(&file, "data").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Initial save
+        let h1 = UndoHistory::new();
+        h1.save(&file_str).unwrap();
+        let mtime1 = UndoHistory::get_undo_file_mtime(&file_str);
+        assert!(mtime1.is_some());
+        
+        // Wait and modify
+        thread::sleep(Duration::from_millis(10));
+        let mut h2 = UndoHistory::load(&file_str).unwrap();
+        h2.push(Edit::InsertChar { line: 0, col: 0, ch: 'z' });
+        h2.save(&file_str).unwrap();
+        
+        let mtime2 = UndoHistory::get_undo_file_mtime(&file_str);
+        assert!(mtime2.is_some());
+        
+        // mtimes should differ (though on fast systems with low-res fs, may be equal)
+        // We just verify both are Some and the second is >= first
+        assert!(mtime2.unwrap() >= mtime1.unwrap());
+    }
+}

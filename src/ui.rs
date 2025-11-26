@@ -22,9 +22,20 @@ use crate::syntax::SyntectHighlighter;
 const DEFAULT_VISIBLE_LINES: usize = 20;
 const STATUS_LINE_HEIGHT: usize = 2;
 const CURSOR_CONTEXT_LINES: usize = 5;
+
 // File watching constants for multi-instance synchronization
-const UNDO_FILE_CHECK_INTERVAL_MS: u64 = 150; // Check undo file every 150ms
-const SAVE_GRACE_PERIOD_MS: u64 = 200; // Don't reload within 200ms of our own save
+// 
+// UNDO_FILE_CHECK_INTERVAL_MS: How often to poll the undo file for changes from other instances.
+// - 150ms provides responsive updates without excessive I/O overhead
+// - Filesystem mtime resolution is typically 1ms on ext4/NTFS, so we can detect changes reliably
+// - Value is small enough that users won't notice lag when switching between instances
+//
+// SAVE_GRACE_PERIOD_MS: Time window after our own save to ignore undo file changes.
+// - 200ms prevents reload loops where we detect our own save as an "external" change
+// - Must be larger than UNDO_FILE_CHECK_INTERVAL_MS to ensure at least one poll skip
+// - Accounts for filesystem flush delays and clock skew between file mtime and Instant::now()
+const UNDO_FILE_CHECK_INTERVAL_MS: u64 = 150;
+const SAVE_GRACE_PERIOD_MS: u64 = 200;
 
 /// Result of file selector overlay: Selected(path), Cancelled, or Quit
 enum SelectorResult {
@@ -255,6 +266,77 @@ fn update_undo_timestamp(undo_history: &mut UndoHistory, file: &str) {
     }
 }
 
+/// Try to reload undo history if it was modified by another instance
+/// Returns true if reload occurred, false otherwise
+fn try_reload_undo_from_external_change(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+    file: &str,
+    last_known_mtime: Option<u128>,
+    visible_lines: usize,
+) -> (bool, Option<u128>) {
+    let current_mtime = match UndoHistory::get_undo_file_mtime(file) {
+        Some(mtime) => mtime,
+        None => return (false, last_known_mtime),
+    };
+
+    // First time seeing an mtime - just record it
+    let Some(last_mtime) = last_known_mtime else {
+        return (false, Some(current_mtime));
+    };
+
+    // No change detected
+    if current_mtime == last_mtime {
+        return (false, last_known_mtime);
+    }
+
+    // Check if we're within grace period of our own save
+    let now = Instant::now();
+    let within_grace_period = state.last_save_time
+        .map(|save_time| now.duration_since(save_time) < Duration::from_millis(SAVE_GRACE_PERIOD_MS))
+        .unwrap_or(false);
+
+    if within_grace_period {
+        return (false, last_known_mtime);
+    }
+
+    // Undo file was modified externally - reload it
+    let new_history = match UndoHistory::load(file) {
+        Ok(h) => h,
+        Err(_) => return (false, Some(current_mtime)),
+    };
+
+    // Only reload if there's file content to restore
+    let Some(new_content) = &new_history.file_content else {
+        return (false, Some(current_mtime));
+    };
+
+    // Update document content
+    *lines = new_content.clone();
+
+    // Restore cursor and scroll position from the new history
+    state.top_line = new_history.scroll_top.min(lines.len());
+    let new_cursor_line = new_history.cursor_line;
+    let new_cursor_col = new_history.cursor_col;
+
+    if new_cursor_line < lines.len() {
+        state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
+        if new_cursor_col <= lines[new_cursor_line].len() {
+            state.cursor_col = new_cursor_col;
+        }
+    }
+
+    // Ensure cursor is visible after reload (similar to undo/redo)
+    state.ensure_cursor_visible(visible_lines);
+
+    // Update the undo history in state
+    state.undo_history = new_history;
+    state.modified = state.undo_history.modified;
+    state.needs_redraw = true;
+
+    (true, Some(current_mtime))
+}
+
 /// Persist editor state (undo history and session) to disk
 /// This consolidates the common pattern of saving both undo history and editor session
 fn persist_editor_state(state: &mut FileViewerState, file: &str) {
@@ -374,47 +456,14 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         let now = Instant::now();
         if now.duration_since(last_undo_check) >= Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS) {
             last_undo_check = now;
-            
-            // Check if undo file was modified by another instance
-            if let Some(current_mtime) = UndoHistory::get_undo_file_mtime(file) {
-                if let Some(last_mtime) = last_known_undo_mtime {
-                    // Only reload if mtime changed AND we're not within grace period of our own save
-                    let within_grace_period = state.last_save_time
-                        .map(|save_time| now.duration_since(save_time) < Duration::from_millis(SAVE_GRACE_PERIOD_MS))
-                        .unwrap_or(false);
-                    
-                    if current_mtime != last_mtime && !within_grace_period {
-                        // Undo file was modified externally - reload it
-                        if let Ok(new_history) = UndoHistory::load(file) {
-                            // Update lines from the loaded history if it has file content
-                            if let Some(new_content) = &new_history.file_content {
-                                lines = new_content.clone();
-                                
-                                // Restore cursor and scroll position from the new history
-                                state.top_line = new_history.scroll_top.min(lines.len());
-                                let new_cursor_line = new_history.cursor_line;
-                                let new_cursor_col = new_history.cursor_col;
-                                
-                                if new_cursor_line < lines.len() {
-                                    state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
-                                    if new_cursor_col <= lines[new_cursor_line].len() {
-                                        state.cursor_col = new_cursor_col;
-                                    }
-                                }
-                                
-                                // Update the undo history in state
-                                state.undo_history = new_history;
-                                state.modified = state.undo_history.modified;
-                                state.needs_redraw = true;
-                            }
-                        }
-                        last_known_undo_mtime = Some(current_mtime);
-                    }
-                } else {
-                    // First time seeing an mtime
-                    last_known_undo_mtime = Some(current_mtime);
-                }
-            }
+            let (_reloaded, new_mtime) = try_reload_undo_from_external_change(
+                &mut state,
+                &mut lines,
+                file,
+                last_known_undo_mtime,
+                visible_lines,
+            );
+            last_known_undo_mtime = new_mtime;
         }
         
         // Check if we should open file selector after timeout
