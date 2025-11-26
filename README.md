@@ -6,7 +6,6 @@ A terminal-based file viewer with configurable key bindings.
 
 - Page-by-page file viewing
 - **Cursor navigation** with arrow keys
-- **Syntax highlighting** using Vim syntax files
 - Configurable key bindings via TOML configuration file
 - Automatic configuration file creation with sensible defaults
 
@@ -125,21 +124,6 @@ This would:
 - Use Ctrl+D to close current file
 - Use Ctrl+Shift+S to save
 
-## Syntax Highlighting
-
-The editor supports syntax highlighting for 100+ programming languages using the [syntect](https://github.com/trishume/syntect) library (based on Sublime Text's syntax definitions).
-
-Highlighting is **enabled by default** and works automatically based on file extension. Supported languages include:
-- Rust, Python, JavaScript, TypeScript, Java, C, C++, C#, Go, Ruby, PHP, Swift, Kotlin
-- HTML, CSS, SCSS, JSON, YAML, TOML, XML, Markdown
-- Shell scripts, SQL, Dockerfile, and many more
-
-To disable syntax highlighting, edit `~/.ue/settings.toml`:
-```toml
-enable_syntax_highlighting = false
-```
-
-The editor uses the "base16-ocean.dark" color theme optimized for terminal viewing.
 
 ## Usage
 

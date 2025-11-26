@@ -486,13 +486,11 @@ mod tests {
     use crate::settings::Settings;
     use crate::undo::UndoHistory;
     use crate::env::set_temp_home;
-    use crate::syntax::SyntectHighlighter;
 
     fn create_test_state() -> FileViewerState<'static> {
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let hl = Box::leak(Box::new(SyntectHighlighter::new()));
-        FileViewerState::new(80, undo_history, settings, hl)
+        FileViewerState::new(80, undo_history, settings)
     }
     fn create_test_lines(count: usize) -> Vec<String> { (0..count).map(|i| format!("Line {}", i)).collect() }
 

@@ -118,7 +118,7 @@ fn render_footer(
 
 fn render_visible_lines(
     stdout: &mut impl Write,
-    file: &str,
+    _file: &str,
     lines: &[String],
     state: &FileViewerState,
     visible_lines: usize,
@@ -132,7 +132,7 @@ fn render_visible_lines(
     // Calculate which visual line the cursor is on
     let cursor_visual_line = calculate_cursor_visual_line(lines, state, text_width_u16);
     
-    let ctx = RenderContext { file, lines, state };
+    let ctx = RenderContext { lines, state };
     
     while visual_lines_rendered < visible_lines && logical_line_index < lines.len() {
         let lines_for_this_logical = render_line(
@@ -166,7 +166,6 @@ fn render_visible_lines(
 }
 
 struct RenderContext<'a> {
-    file: &'a str,
     lines: &'a [String],
     state: &'a FileViewerState<'a>,
 }
@@ -315,27 +314,11 @@ fn position_cursor(
 fn render_line_segment_expanded(
     stdout: &mut impl Write,
     expanded_chars: &[char],
-    original_line: &str,
-    ctx: &RenderContext,
+    _original_line: &str,
+    _ctx: &RenderContext,
     segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
     let line_segment: String = expanded_chars[segment.start_visual..segment.end_visual].iter().collect();
-    
-    if ctx.state.settings.syntax.enable {
-        let spans = ctx.state.highlighter.highlight_line(original_line, ctx.file, ctx.state.settings);
-        if !spans.is_empty() {
-            // Inline former render_with_highlighting_expanded
-            let mut visual_to_char = Vec::new();
-            let mut visual_pos = 0;
-            for (char_idx, ch) in original_line.chars().enumerate() {
-                if ch == '\t' {
-                    let spaces = segment.tab_width - (visual_pos % segment.tab_width);
-                    for _ in 0..spaces { visual_to_char.push(char_idx); visual_pos += 1; }
-                } else { visual_to_char.push(char_idx); visual_pos += 1; }
-            }
-            for visual_i in segment.start_visual..segment.end_visual { if visual_i >= expanded_chars.len() { break; } let ch = expanded_chars[visual_i]; let orig_char_idx = if visual_i < visual_to_char.len() { visual_to_char[visual_i] } else { original_line.chars().count() }; if let Some(span) = spans.iter().find(|s| orig_char_idx >= s.start && orig_char_idx < s.end) { span.apply_to_stdout(stdout)?; write!(stdout, "{}", ch)?; execute!(stdout, ResetColor)?; } else { write!(stdout, "{}", ch)?; } } return Ok(());
-        }
-    }
     write!(stdout, "{}", line_segment)?;
     Ok(())
 }
@@ -363,46 +346,14 @@ fn render_line_segment_with_selection_expanded(
     let start_visual_col = if segment.line_index == start_line { visual_width_up_to(original_line, start_col, segment.tab_width) } else { 0 };
     let end_visual_col = if segment.line_index == end_line { visual_width_up_to(original_line, end_col, segment.tab_width) } else { usize::MAX };
 
-    // Optional syntax spans
-    let spans_opt = if ctx.state.settings.syntax.enable {
-        let spans = ctx.state.highlighter.highlight_line(original_line, ctx.file, ctx.state.settings);
-        if spans.is_empty() { None } else { Some(spans) }
-    } else { None };
-
-    // Build mapping from visual position to original character index (tabs expand)
-    let mut visual_to_char = Vec::new();
-    let mut vis = 0;
-    for (idx, ch) in original_line.chars().enumerate() {
-        if ch == '\t' {
-            let spaces = segment.tab_width - (vis % segment.tab_width);
-            for _ in 0..spaces { visual_to_char.push(idx); vis += 1; }
-        } else {
-            visual_to_char.push(idx); vis += 1;
-        }
-    }
-
     for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() { break; }
         let ch = expanded_chars[visual_i];
         let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
-        let orig_idx = if visual_i < visual_to_char.len() { visual_to_char[visual_i] } else { original_line.chars().count() };
 
         if is_selected {
-            // Apply syntax color if available, then reverse
-            if let Some(ref spans) = spans_opt
-                && let Some(span) = spans.iter().find(|s| orig_idx >= s.start && orig_idx < s.end) {
-                    span.apply_to_stdout(stdout)?;
-                }
             write!(stdout, "{}", ch.to_string().reverse())?;
             execute!(stdout, ResetColor)?;
-        } else if let Some(ref spans) = spans_opt {
-            if let Some(span) = spans.iter().find(|s| orig_idx >= s.start && orig_idx < s.end) {
-                span.apply_to_stdout(stdout)?;
-                write!(stdout, "{}", ch)?;
-                execute!(stdout, ResetColor)?;
-            } else {
-                write!(stdout, "{}", ch)?;
-            }
         } else {
             write!(stdout, "{}", ch)?;
         }

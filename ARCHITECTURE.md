@@ -117,30 +117,7 @@
 │ • KeyBindings - Key mapping                                  │
 │ • load() - Read from ~/.ue/settings.toml                     │
 │ • *_matches() - Check keybinding match                       │
-│ • enable_syntax_highlighting flag                            │
 │ + 7 tests                                                    │
-└──────────────────────────────────────────────────────────────┘
-
-
-┌──────────────────────────────────────────────────────────────┐
-│                     syntax.rs (~180 lines)                   │
-├──────────────────────────────────────────────────────────────┤
-│ Syntax highlighting using syntect library                    │
-│ • StyledSpan - Position + color for a text span              │
-│ • highlight_line() - Apply syntax to a line of text          │
-│   - Uses syntect's TextMate/Sublime grammar support          │
-│   - Supports 100+ languages out-of-the-box                   │
-│   - Converts syntect RGB colors to crossterm colors          │
-│ • SYNTAX_SET - Lazily loaded syntax definitions              │
-│ • THEME - Lazily loaded color theme (base16-ocean.dark)      │
-│ + 4 tests                                                    │
-└──────────────────────────────────────────────────────────────┘
-
-
-┌──────────────────────────────────────────────────────────────┐
-│                   highlighter.rs (REMOVED)                   │
-├──────────────────────────────────────────────────────────────┤
-│ *** Merged into syntax.rs for simplicity ***                 │
 └──────────────────────────────────────────────────────────────┘
 
 
@@ -169,36 +146,6 @@ rendering::render_screen()
          ▼
 Screen updated! ✨
 ```
-
-Data Flow Example (Syntax Highlighting):
-─────────────────────────────────────────
-
-rendering::render_line_segment()
-  Settings check: state.settings.enable_syntax_highlighting?
-         │
-         ▼
-rendering::get_highlight_spans()
-  Passes filename to syntax module
-         │
-         ▼
-syntax::highlight_line()
-  1. Extract file extension from filename
-  2. Look up syntax in SYNTAX_SET (lazy-loaded once)
-  3. Create HighlightLines with THEME (lazy-loaded once)
-  4. Call syntect to tokenize and style the line
-  5. Convert syntect RGB colors to crossterm colors
-  Returns: Vec<StyledSpan>
-         │
-         ▼
-rendering::render_with_highlighting()
-  For each character:
-    - Find matching span
-    - Apply StyledSpan::apply_to_stdout()
-    - Write character
-    - Reset color
-         │
-         ▼
-Highlighted text rendered! 🎨
 ```
 
 ## Key Design Principles

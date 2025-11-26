@@ -16,7 +16,9 @@ use crate::rendering::render_screen;
 use crate::settings::Settings;
 use crate::undo::{UndoHistory, ValidationResult};
 use crate::double_esc::{DoubleEscDetector, EscResult};
-use crate::syntax::SyntectHighlighter;
+
+// Type alias for file selector result: (modified, next_file, quit, close)
+type FileSelectorResult = Option<(bool, Option<String>, bool, bool)>;
 
 // Constants to eliminate magic numbers
 const DEFAULT_VISIBLE_LINES: usize = 20;
@@ -256,13 +258,11 @@ fn show_file_selector_and_return(
 /// Helper function to update undo history timestamp to current file time
 fn update_undo_timestamp(undo_history: &mut UndoHistory, file: &str) {
     use std::time::SystemTime;
-    if let Ok(metadata) = std::fs::metadata(file) {
-        if let Ok(modified) = metadata.modified() {
-            if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                undo_history.file_timestamp = Some(duration.as_secs());
-                let _ = undo_history.save(file);
-            }
-        }
+    if let Ok(metadata) = std::fs::metadata(file)
+        && let Ok(modified) = metadata.modified()
+        && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+        undo_history.file_timestamp = Some(duration.as_secs());
+        let _ = undo_history.save(file);
     }
 }
 
@@ -363,7 +363,7 @@ fn handle_file_selector_in_loop(
     state: &mut FileViewerState,
     visible_lines: &mut usize,
     settings: &Settings,
-) -> crossterm::Result<Option<(bool, Option<String>, bool, bool)>> {
+) -> crossterm::Result<FileSelectorResult> {
     // Persist state before showing selector
     state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
     if let Err(e) = state.undo_history.save(file) {
@@ -425,15 +425,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     
     let (term_width, term_height) = size()?;
     
-    // Create syntax highlighter with 'static lifetime using Box::leak
-    // This is intentional: the highlighter needs to live for the entire editing session,
-    // and FileViewerState requires a reference with lifetime 'a. Since we only create
-    // ONE highlighter per editing session and the program terminates after editing,
-    // the leaked memory (a few KB for syntax definitions) is acceptable.
-    // Alternative approaches (Rc/Arc or threading through all function calls) would
-    // add complexity or runtime overhead without meaningful benefit.
-    let hl = Box::leak(SyntectHighlighter::factory());
-    let mut state = FileViewerState::new(term_width, undo_history.clone(), settings, hl);
+    let mut state = FileViewerState::new(term_width, undo_history.clone(), settings);
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
     let saved_cursor_line = undo_history.cursor_line;

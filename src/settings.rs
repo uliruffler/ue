@@ -30,24 +30,6 @@ pub(crate) struct AppearanceSettings {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct SyntaxSettings {
-    #[serde(default = "default_enable_syntax")]
-    pub(crate) enable: bool,
-    #[serde(default = "default_syntax_max_bytes")]
-    pub(crate) max_bytes: u64,
-    #[serde(default = "default_syntax_dirs")]
-    pub(crate) dirs: Vec<String>,
-    #[serde(default)]
-    pub(crate) extension_aliases: std::collections::HashMap<String,String>,
-    #[serde(default = "default_syntax_mode")]
-    pub(crate) mode: String,
-    #[serde(default)]
-    pub(crate) precompiled_path: Option<String>,
-    #[serde(default = "default_include_system_nanorc")]
-    pub(crate) include_system_nanorc: bool,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct Settings {
     pub(crate) keybindings: KeyBindings,
     #[serde(default = "default_tab_width")]
@@ -60,11 +42,8 @@ pub(crate) struct Settings {
     pub(crate) mouse_scroll_lines: usize,
     #[serde(default = "default_appearance")]
     pub(crate) appearance: AppearanceSettings,
-    #[serde(default = "default_syntax_settings")]
-    pub(crate) syntax: SyntaxSettings,
 }
 
-fn default_enable_syntax() -> bool { true }
 fn default_tab_width() -> usize { 4 }
 fn default_double_tap_speed_ms() -> u64 { 300 }
 fn default_cursor_shape() -> String { "bar".into() }
@@ -74,10 +53,6 @@ fn default_line_number_digits() -> u8 { 3 }
 fn default_header_bg() -> String { "#001848".into() }
 fn default_footer_bg() -> String { "#001848".into() }
 fn default_line_numbers_bg() -> String { "#001848".into() }
-fn default_syntax_max_bytes() -> u64 { 500_000 }
-fn default_syntax_dirs() -> Vec<String> { vec!["~/.ue/syntax/".into()] }
-fn default_syntax_mode() -> String { "syntect".into() }
-fn default_include_system_nanorc() -> bool { true }
 fn default_appearance() -> AppearanceSettings {
     AppearanceSettings {
         line_number_digits: default_line_number_digits(),
@@ -85,17 +60,6 @@ fn default_appearance() -> AppearanceSettings {
         footer_bg: default_footer_bg(),
         line_numbers_bg: default_line_numbers_bg(),
         cursor_shape: default_cursor_shape(),
-    }
-}
-fn default_syntax_settings() -> SyntaxSettings {
-    SyntaxSettings {
-        enable: default_enable_syntax(),
-        max_bytes: default_syntax_max_bytes(),
-        dirs: default_syntax_dirs(),
-        extension_aliases: std::collections::HashMap::new(),
-        mode: default_syntax_mode(),
-        precompiled_path: None,
-        include_system_nanorc: default_include_system_nanorc(),
     }
 }
 
@@ -159,7 +123,7 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
     
     // Last part is the key, everything else are modifiers
     let key = parts.last().unwrap().to_lowercase();
-    let modifier_parts: Vec<&str> = parts[..parts.len() - 1].iter().map(|s| *s).collect();
+    let modifier_parts: Vec<&str> = parts[..parts.len() - 1].to_vec();
     
     // Check if the key matches
     let key_matches = match code {
@@ -307,12 +271,6 @@ mod tests {
         assert!(Settings::parse_color("#zzzzzz").is_none());
     }
 
-    #[test]
-    fn syntax_max_bytes_default() {
-        let (_tmp, _guard) = crate::env::set_temp_home();
-        let s = Settings::load().unwrap();
-        assert_eq!(s.syntax.max_bytes, 500_000);
-    }
 
     #[test]
     fn cursor_shape_default() {

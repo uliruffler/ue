@@ -20,7 +20,7 @@ pub(crate) fn handle_copy(state: &FileViewerState, lines: &[String]) -> Result<(
         let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         let selected_text = extract_selection(&lines_refs, sel_start, sel_end);
         let mut clipboard_guard = get_clipboard().lock().unwrap();
-        if let Some(ref mut cb) = *clipboard_guard { if let Err(e) = cb.set_text(selected_text) { eprintln!("Failed to copy to clipboard: {}", e); } }
+        if let Some(ref mut cb) = *clipboard_guard && let Err(e) = cb.set_text(selected_text) { eprintln!("Failed to copy to clipboard: {}", e); }
         let _ = copy_to_clipboard("");
     }
     Ok(())
@@ -126,8 +126,7 @@ pub(crate) fn remove_selection(state: &mut FileViewerState, lines: &mut Vec<Stri
             lines[s_line].truncate(s_col);
         }
         // Middle full lines
-        for line_idx in (s_line + 1)..e_line {
-            let content = lines[line_idx].clone();
+        for (line_idx, content) in lines.iter().enumerate().take(e_line).skip(s_line + 1) {
             state.undo_history.push(Edit::DeleteLine { line: line_idx, content: content.clone() });
         }
         // Head of end line
@@ -556,8 +555,7 @@ pub(crate) fn apply_drag(
     let removed_lines = end.0 - start.0;
     // Remove original if move
     if !copy {
-        let hl = Box::leak(Box::new(crate::syntax::SyntectHighlighter::new()));
-        let mut tmp_state = FileViewerState::new(state.term_width, state.undo_history.clone(), state.settings, hl);
+        let mut tmp_state = FileViewerState::new(state.term_width, state.undo_history.clone(), state.settings);
         tmp_state.selection_start = Some(start); tmp_state.selection_end = Some(end);
         remove_selection(&mut tmp_state, lines, "__drag__");
         // Adjust destination line if original block removed above
@@ -601,8 +599,7 @@ mod tests {
     fn create_test_state() -> FileViewerState<'static> {
         let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
         let undo_history = UndoHistory::new();
-        let hl = Box::leak(Box::new(crate::syntax::SyntectHighlighter::new()));
-        FileViewerState::new(80, undo_history, settings, hl)
+        FileViewerState::new(80, undo_history, settings)
     }
 
     #[test]

@@ -9,8 +9,6 @@ mod event_handlers;
 mod file_selector;
 mod mouse_handlers;
 mod settings;
-mod syntax;
-mod syntax_nanorc; // new nanorc highlighter implementation
 mod rendering;
 mod ui;
 mod undo;
@@ -18,8 +16,6 @@ mod recent;
 mod session;
 mod double_esc;
 #[cfg(test)] mod env; // only compile env helpers for tests
-// #[cfg(test)] mod syntax_integration_tests;
-// #[cfg(test)] mod syntax_loading_tests;
 
 #[derive(Parser)]
 #[clap(name = "ue", version = env!("CARGO_PKG_VERSION"), about = "Simple terminal editor")]
@@ -37,7 +33,7 @@ fn main() -> crossterm::Result<()> {
         if let Ok(Some(last)) = session::load_last_session() {
             match last.mode {
                 session::SessionMode::Editor => {
-                    if let Some(f) = last.file.as_ref() { if f.exists() { files = vec![f.to_string_lossy().to_string()]; } }
+                    if let Some(f) = last.file.as_ref() && f.exists() { files = vec![f.to_string_lossy().to_string()]; }
                     if files.is_empty() {
                         // Fall back to selector
                         match file_selector::select_file()? {

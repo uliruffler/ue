@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use crossterm::{
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
@@ -102,16 +102,15 @@ fn collect_files_recursive(base_dir: &PathBuf, current_dir: &PathBuf, files: &mu
 /// Check if a file has unsaved changes by reading its undo history
 fn check_unsaved_changes(undo_file: &PathBuf) -> bool {
     // Try to read and deserialize the undo history file
-    if let Ok(content) = fs::read_to_string(undo_file) {
-        if let Ok(history) = serde_json::from_str::<crate::undo::UndoHistory>(&content) {
-            return history.modified;
-        }
+    if let Ok(content) = fs::read_to_string(undo_file)
+        && let Ok(history) = serde_json::from_str::<crate::undo::UndoHistory>(&content) {
+        return history.modified;
     }
     false
 }
 
 /// Format file path as "FILENAME (/PATH/TO/DIRECTORY/)"
-fn format_file_display(path: &PathBuf) -> String {
+fn format_file_display(path: &Path) -> String {
     let filename = path.file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("");
@@ -213,7 +212,7 @@ fn run_file_selector(files: &[FileEntry]) -> io::Result<Option<String>> {
                 }
                 KeyCode::PageDown => {
                     selected_index = (selected_index + visible_lines).min(files.len().saturating_sub(1));
-                    scroll_offset = scroll_offset + visible_lines;
+                    scroll_offset += visible_lines;
                     if scroll_offset + visible_lines > files.len() {
                         scroll_offset = files.len().saturating_sub(visible_lines);
                     }

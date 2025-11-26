@@ -126,12 +126,10 @@ impl UndoHistory {
         // Create a copy with updated timestamp
         let mut history_to_save = self.clone();
         // Capture current file modification time
-        if let Ok(metadata) = fs::metadata(file_path) {
-            if let Ok(modified) = metadata.modified() {
-                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                    history_to_save.file_timestamp = Some(duration.as_secs());
-                }
-            }
+        if let Ok(metadata) = fs::metadata(file_path)
+            && let Ok(modified) = metadata.modified()
+            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+            history_to_save.file_timestamp = Some(duration.as_secs());
         }
         
         let serialized = serde_json::to_string(&history_to_save)?;
@@ -213,7 +211,7 @@ impl UndoHistory {
         
         // Get the path without leading /
         let path_str = canonical_path.to_string_lossy();
-        let normalized_path = if path_str.starts_with('/') { &path_str[1..] } else { &*path_str };
+        let normalized_path = if let Some(stripped) = path_str.strip_prefix('/') { stripped } else { &*path_str };
         
         // Get the filename with extension
         let filename = canonical_path.file_name()

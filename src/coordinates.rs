@@ -58,7 +58,7 @@ pub(crate) fn calculate_wrapped_lines_for_line(lines: &[String], line_index: usi
     }
     
     // Calculate how many visual lines this logical line needs
-    let wrapped_lines = (visual_len + width - 1) / width; // Ceiling division
+    let wrapped_lines = visual_len.div_ceil(width); // Ceiling division
     wrapped_lines.max(1) as u16
 }
 

@@ -66,15 +66,14 @@ fn handle_mouse_click(
     visual_line: usize,
     column: u16,
 ) {
-    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column) {
-        if logical_line < lines.len() {
-            restore_cursor_to_screen(state);
-            state.cursor_line = logical_line.saturating_sub(state.top_line);
-            state.cursor_col = col.min(lines[logical_line].len());
-            state.clear_selection();
-            state.mouse_dragging = true;
-            state.needs_redraw = true;
-        }
+    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column)
+        && logical_line < lines.len() {
+        restore_cursor_to_screen(state);
+        state.cursor_line = logical_line.saturating_sub(state.top_line);
+        state.cursor_col = col.min(lines[logical_line].len());
+        state.clear_selection();
+        state.mouse_dragging = true;
+        state.needs_redraw = true;
     }
 }
 /// Handle mouse drag for text selection
@@ -91,14 +90,13 @@ fn handle_mouse_drag(
     if state.selection_start.is_none() {
         state.selection_start = Some(state.current_position());
     }
-    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column) {
-        if logical_line < lines.len() {
-            restore_cursor_to_screen(state);
-            state.cursor_line = logical_line.saturating_sub(state.top_line);
-            state.cursor_col = col.min(lines[logical_line].len());
-            state.selection_end = Some(state.current_position());
-            state.needs_redraw = true;
-        }
+    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column)
+        && logical_line < lines.len() {
+        restore_cursor_to_screen(state);
+        state.cursor_line = logical_line.saturating_sub(state.top_line);
+        state.cursor_col = col;
+        state.update_selection();
+        state.needs_redraw = true;
     }
 }
 /// Handle mouse scroll down event
