@@ -62,7 +62,7 @@ impl NanorcHighlighter {
             }
         }
         
-        if std::env::var("UE_DISABLE_SYSTEM_NANORC").ok().as_deref() != Some("1") {
+        if settings.syntax.include_system_nanorc {
             let sys = PathBuf::from("/usr/share/nano");
             if sys.exists() {
                 v.push(sys);
@@ -428,6 +428,7 @@ mod tests {
     fn enabled() -> Settings {
         let mut s = Settings::load().unwrap();
         s.syntax.enable = true;
+        s.syntax.include_system_nanorc = false;
         s
     }
     
@@ -451,7 +452,6 @@ mod tests {
     
     #[test]
     fn debug_whitespace_pattern_matching() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -483,7 +483,6 @@ mod tests {
     
     #[test]
     fn test_comment_highlighting_entire_line() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -502,7 +501,6 @@ mod tests {
     
     #[test]
     fn test_no_overlapping_highlights() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -521,7 +519,6 @@ mod tests {
     
     #[test]
     fn test_anchored_patterns() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -545,7 +542,6 @@ mod tests {
     
     #[test]
     fn test_greedy_dot_star_matching() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -566,7 +562,6 @@ mod tests {
     
     #[test]
     fn test_character_class_matching() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -587,7 +582,6 @@ mod tests {
     
     #[test]
     fn test_keyword_alternation() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -613,7 +607,6 @@ mod tests {
     
     #[test]
     fn test_multiple_patterns_per_rule() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -636,7 +629,6 @@ mod tests {
     
     #[test]
     fn test_whitespace_character_class() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -657,7 +649,6 @@ mod tests {
     
     #[test]
     fn test_extension_matching() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -679,7 +670,6 @@ mod tests {
     
     #[test]
     fn test_syntax_disabled() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -698,7 +688,6 @@ mod tests {
     
     #[test]
     fn test_file_count_limit_prevents_excessive_loading() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -718,7 +707,6 @@ mod tests {
     
     #[test]
     fn test_line_count_limit_per_file() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -744,7 +732,6 @@ mod tests {
     
     #[test]
     fn test_rule_count_limit_per_file() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -766,7 +753,6 @@ mod tests {
     
     #[test]
     fn test_real_world_sh_nanorc_pattern() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -804,7 +790,6 @@ color brightblue "\<(echo|exit|return|break|continue)\>"
     
     #[test]
     fn test_sh_keywords() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -840,7 +825,6 @@ color green "\<(if|then|else|fi)\>"
     
     #[test]
     fn test_sh_builtins() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -868,7 +852,6 @@ color green "\<(export|local)\>"
     
     #[test]
     fn test_sh_symbols() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -916,7 +899,6 @@ color green "\<(export|local)\>"
     
     #[test]
     fn test_sh_comments() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -950,7 +932,6 @@ color cyan " #.*$"
     
     #[test]
     fn test_parse_sh_nanorc_file() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -1014,7 +995,6 @@ color cyan " #.*$"
     
     #[test]
     fn test_sh_extension_loaded_from_alternation_syntax_line() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -1032,7 +1012,6 @@ color cyan " #.*$"
     
     #[test]
     fn test_negated_character_class() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();
@@ -1055,7 +1034,6 @@ color cyan " #.*$"
     
     #[test]
     fn test_sh_string_highlighting() {
-        unsafe { std::env::set_var("UE_DISABLE_SYSTEM_NANORC", "1"); }
         let (tmp, _g) = set_temp_home();
         let b = tmp.path().join(".ue/syntax");
         fs::create_dir_all(&b).unwrap();

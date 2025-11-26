@@ -39,6 +39,12 @@ pub(crate) struct SyntaxSettings {
     pub(crate) dirs: Vec<String>,
     #[serde(default)]
     pub(crate) extension_aliases: std::collections::HashMap<String,String>,
+    #[serde(default = "default_syntax_mode")]
+    pub(crate) mode: String,
+    #[serde(default)]
+    pub(crate) precompiled_path: Option<String>,
+    #[serde(default = "default_include_system_nanorc")]
+    pub(crate) include_system_nanorc: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,6 +76,8 @@ fn default_footer_bg() -> String { "#001848".into() }
 fn default_line_numbers_bg() -> String { "#001848".into() }
 fn default_syntax_max_bytes() -> u64 { 500_000 }
 fn default_syntax_dirs() -> Vec<String> { vec!["~/.ue/syntax/".into()] }
+fn default_syntax_mode() -> String { "syntect".into() }
+fn default_include_system_nanorc() -> bool { true }
 fn default_appearance() -> AppearanceSettings {
     AppearanceSettings {
         line_number_digits: default_line_number_digits(),
@@ -85,6 +93,9 @@ fn default_syntax_settings() -> SyntaxSettings {
         max_bytes: default_syntax_max_bytes(),
         dirs: default_syntax_dirs(),
         extension_aliases: std::collections::HashMap::new(),
+        mode: default_syntax_mode(),
+        precompiled_path: None,
+        include_system_nanorc: default_include_system_nanorc(),
     }
 }
 

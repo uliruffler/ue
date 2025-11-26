@@ -34,18 +34,48 @@ pub(crate) struct SyntectHighlighter { syntax_set: SyntaxSet, theme: Theme, file
 impl SyntectHighlighter {
     pub(crate) fn new() -> Self { let (syntax_set, theme) = Self::load_assets(); Self { syntax_set, theme, file_size_cache: Mutex::new(HashMap::new()) } }
     pub(crate) fn factory() -> Box<dyn Highlighter> { 
-        if std::env::var("UE_SYNTAX_MODE").map(|v| v.to_lowercase()) == Ok("nanorc".into()) {
-            if let Ok(settings) = Settings::load() {
+        if let Ok(settings) = Settings::load() {
+            if settings.syntax.mode.to_lowercase() == "nanorc" {
                 return Box::new(crate::syntax_nanorc::NanorcHighlighter::new(&settings));
             }
         }
         Box::new(SyntectHighlighter::new())
     }
     fn load_assets() -> (SyntaxSet, Theme) {
-        if let Ok(path) = std::env::var("UE_PRECOMPILED_SYNTECT") { if let Ok(data) = std::fs::read(&path) { if let Ok((ss, themes_vec)) = bincode::deserialize::<(SyntaxSet, Vec<(String, Theme)>)>(&data) { let theme = themes_vec.iter().find(|(n, _)| n == "base16-ocean.dark").or_else(|| themes_vec.iter().find(|(n, _)| n == "Monokai")).map(|(_, t)| t.clone()).unwrap_or_else(|| themes_vec.first().expect("at least one theme").1.clone()); return (ss, theme); } } }
+        // Try to load precompiled syntect from settings or env var (env var for build-time injection)
+        let precompiled_path = Settings::load()
+            .ok()
+            .and_then(|s| s.syntax.precompiled_path.clone())
+            .or_else(|| std::env::var("UE_PRECOMPILED_SYNTECT").ok());
+        
+        if let Some(path) = precompiled_path {
+            if let Ok(data) = std::fs::read(&path) {
+                if let Ok((ss, themes_vec)) = bincode::deserialize::<(SyntaxSet, Vec<(String, Theme)>)>(&data) {
+                    let theme = themes_vec.iter().find(|(n, _)| n == "base16-ocean.dark")
+                        .or_else(|| themes_vec.iter().find(|(n, _)| n == "Monokai"))
+                        .map(|(_, t)| t.clone())
+                        .unwrap_or_else(|| themes_vec.first().expect("at least one theme").1.clone());
+                    return (ss, theme);
+                }
+            }
+        }
+        
         let mut builder = SyntaxSet::load_defaults_newlines().into_builder();
-        if let Ok(custom_dir) = Self::custom_syntax_dir() { if custom_dir.exists() { if let Err(e) = builder.add_from_folder(&custom_dir, false) { eprintln!("Warning: Failed to load custom syntax files from {:?}: {}", custom_dir, e); } } }
-        let ss = builder.build(); let ts = ThemeSet::load_defaults(); let theme = ts.themes.get("base16-ocean.dark").or_else(|| ts.themes.get("Monokai")).or_else(|| ts.themes.values().next()).expect("No themes available").clone(); (ss, theme)
+        if let Ok(custom_dir) = Self::custom_syntax_dir() {
+            if custom_dir.exists() {
+                if let Err(e) = builder.add_from_folder(&custom_dir, false) {
+                    eprintln!("Warning: Failed to load custom syntax files from {:?}: {}", custom_dir, e);
+                }
+            }
+        }
+        let ss = builder.build();
+        let ts = ThemeSet::load_defaults();
+        let theme = ts.themes.get("base16-ocean.dark")
+            .or_else(|| ts.themes.get("Monokai"))
+            .or_else(|| ts.themes.values().next())
+            .expect("No themes available")
+            .clone();
+        (ss, theme)
     }
     fn custom_syntax_dir() -> Result<PathBuf, Box<dyn std::error::Error>> { let home = std::env::var("UE_TEST_HOME").or_else(|_| std::env::var("HOME")).or_else(|_| std::env::var("USERPROFILE"))?; Ok(PathBuf::from(home).join(".ue").join("syntax")) }
     fn file_size(&self, filename: &str) -> Option<u64> { if let Ok(mut guard) = self.file_size_cache.lock() { if let Some(sz) = guard.get(filename) { return Some(*sz); } let sz = std::fs::metadata(filename).ok()?.len(); guard.insert(filename.to_string(), sz); Some(sz) } else { None } }

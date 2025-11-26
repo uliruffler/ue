@@ -8,8 +8,14 @@ mouse_scroll_lines = 3
 [syntax]
 enable = true
 max_bytes = 500000
+# Syntax highlighting mode: "syntect" | "nanorc"
+mode = "syntect"
+# Optional: path to precompiled syntect syntax set (for faster startup)
+# precompiled_path = ""
 # Directories to search for Nano syntax files (*.nanorc)
 dirs = ["~/.ue/syntax/"]
+# Include system nanorc files from /usr/share/nano (when mode = "nanorc")
+include_system_nanorc = true
 # Map alternative file extensions or names to a base extension
 extension_aliases = { zshrc = "sh", zsh = "sh", profile = "sh", ue = "json" }
 
