@@ -60,6 +60,8 @@ pub struct UndoHistory {
     pub file_timestamp: Option<u64>, // UNIX epoch timestamp of file when undo was saved
     #[serde(default)]
     pub saved_at: usize, // Edit position where the file was last saved
+    #[serde(default)]
+    pub find_history: Vec<String>, // Persisted search history
 }
 
 impl UndoHistory {
@@ -74,6 +76,7 @@ impl UndoHistory {
             scroll_top: 0,
             file_timestamp: None,
             saved_at: 0,
+            find_history: Vec::new(),
         }
     }
 

@@ -25,4 +25,7 @@ close = "Ctrl+w"
 save = "Ctrl+s"
 undo = "Ctrl+z"
 redo = "Ctrl+y"
+find = "Ctrl+f"
+find_next = "Ctrl+n"
+find_previous = "Ctrl+p"
 

@@ -30,6 +30,27 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) drag_target: Option<Position>,
     /// Timestamp of last save to prevent reload loops when current instance saves
     pub(crate) last_save_time: Option<Instant>,
+    /// Find mode active
+    pub(crate) find_active: bool,
+    /// Current find pattern being entered
+    pub(crate) find_pattern: String,
+    /// Cursor position within find pattern (character index, not byte index)
+    pub(crate) find_cursor_pos: usize,
+    /// Error message for invalid regex
+    pub(crate) find_error: Option<String>,
+    /// Find history (last 100 searches)
+    pub(crate) find_history: Vec<String>,
+    /// Current position in find history (when navigating with Up/Down)
+    pub(crate) find_history_index: Option<usize>,
+    /// Last successful search pattern (for F3/Shift+F3)
+    pub(crate) last_search_pattern: Option<String>,
+    /// Search pattern saved before entering find mode (to restore on Esc)
+    pub(crate) saved_search_pattern: Option<String>,
+    /// Whether we've wrapped around in search
+    pub(crate) search_wrapped: bool,
+    /// Whether we're showing a wrap warning (waiting for second press to actually wrap)
+    /// None = no warning, Some("next") = warning for next, Some("prev") = warning for prev
+    pub(crate) wrap_warning_pending: Option<String>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -54,6 +75,16 @@ impl<'a> FileViewerState<'a> {
             drag_text: None,
             drag_target: None,
             last_save_time: None,
+            find_active: false,
+            find_pattern: String::new(),
+            find_cursor_pos: 0,
+            find_error: None,
+            find_history: Vec::new(),
+            find_history_index: None,
+            last_search_pattern: None,
+            saved_search_pattern: None,
+            search_wrapped: false,
+            wrap_warning_pending: None,
         }
     }
 

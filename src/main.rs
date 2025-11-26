@@ -9,6 +9,7 @@ mod editor_state;
 mod editing;
 mod event_handlers;
 mod file_selector;
+mod find;
 mod mouse_handlers;
 mod recent;
 mod rendering;

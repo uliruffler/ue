@@ -10,6 +10,8 @@ fn get_clipboard() -> &'static Mutex<Option<arboard::Clipboard>> { GLOBAL_CLIPBO
 
 /// Save undo history and record the save timestamp to prevent reload loops
 fn save_undo_with_timestamp(state: &mut FileViewerState, filename: &str) {
+    // Update undo history with current find history before saving
+    state.undo_history.find_history = state.find_history.clone();
     let _ = state.undo_history.save(filename);
     state.last_save_time = Some(Instant::now());
 }

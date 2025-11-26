@@ -78,6 +78,60 @@ fn render_footer(
     lines: &[String],
     visible_lines: usize,
 ) -> Result<(), std::io::Error> {
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+        execute!(stdout, SetBackgroundColor(color))?;
+    }
+    
+    // If in find mode, show the find prompt
+    if state.find_active {
+        let digits = state.settings.appearance.line_number_digits as usize;
+        let mut prompt = String::new();
+        
+        // Add line number space if needed
+        if digits > 0 {
+            prompt.push_str(&format!("{:width$} ", "", width = digits));
+        }
+        
+        // Add find prompt and input field
+        let find_label = "Find (regex): ";
+        prompt.push_str(find_label);
+        let pattern_start_col = prompt.len();
+        prompt.push_str(&state.find_pattern);
+        
+        // Show error in red if present, followed by the input field
+        write!(stdout, "\r")?;
+        if let Some(ref error) = state.find_error {
+            use crossterm::style::SetForegroundColor;
+            execute!(stdout, SetForegroundColor(crossterm::style::Color::Red))?;
+            write!(stdout, "[{}] ", error)?;
+            execute!(stdout, ResetColor)?;
+            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+                execute!(stdout, SetBackgroundColor(color))?;
+            }
+        }
+        write!(stdout, "{}", prompt)?;
+        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        execute!(stdout, ResetColor)?;
+        
+        // Position cursor at find_cursor_pos within the search pattern
+        // Footer is at row: 1 (header) + visible_lines
+        // Account for error message length if present
+        let error_offset = if let Some(ref error) = state.find_error {
+            error.len() + 3 // "[" + error + "] "
+        } else {
+            0
+        };
+        // Calculate visual column for cursor position (accounting for multi-byte chars)
+        let chars: Vec<char> = state.find_pattern.chars().collect();
+        let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
+        let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
+        let cursor_y = (visible_lines + 1) as u16;
+        execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+        apply_cursor_shape(stdout, state.settings)?;
+        execute!(stdout, cursor::Show)?;
+        return Ok(());
+    }
+    // Normal footer with position info (or error message)
     let line_num = state.absolute_line() + 1;
     let col_num = state.cursor_col + 1;
     let position_info = format!("{}:{}", line_num, col_num);
@@ -97,17 +151,30 @@ fn render_footer(
         let bottom_number = (last_visible_line / modulus) * modulus;
         bottom_number_str = format!("{:width$} ", bottom_number, width = digits);
     }
-    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
-        execute!(stdout, SetBackgroundColor(color))?;
-    }
+    
     write!(stdout, "\r{}", bottom_number_str)?;
     let left_len = bottom_number_str.len();
-    let remaining = total_width.saturating_sub(left_len);
-    if position_info.len() >= remaining {
-        let truncated = &position_info[position_info.len() - remaining..];
+    let remaining_width = total_width.saturating_sub(left_len);
+    
+    // Show error/info message if present, otherwise show position
+    if let Some(ref error) = state.find_error {
+        use crossterm::style::SetForegroundColor;
+        let color = if error.contains("wrapped") {
+            crossterm::style::Color::Yellow
+        } else {
+            crossterm::style::Color::Red
+        };
+        execute!(stdout, SetForegroundColor(color))?;
+        write!(stdout, "{}", error)?;
+        execute!(stdout, ResetColor)?;
+        if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+            execute!(stdout, SetBackgroundColor(color))?;
+        }
+    } else if position_info.len() >= remaining_width {
+        let truncated = &position_info[position_info.len() - remaining_width..];
         write!(stdout, "{}", truncated)?;
     } else {
-        let pad = remaining - position_info.len();
+        let pad = remaining_width - position_info.len();
         for _ in 0..pad { write!(stdout, " ")?; }
         write!(stdout, "{}", position_info)?;
     }
@@ -259,6 +326,26 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
     }
 }
 
+/// Get character ranges for search matches in a line
+fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
+    if pattern.is_empty() {
+        return vec![];
+    }
+    
+    if let Ok(regex) = regex::Regex::new(pattern) {
+        regex.find_iter(line)
+            .map(|m| {
+                // Convert byte positions to character positions
+                let char_start = line[..m.start()].chars().count();
+                let char_end = line[..m.end()].chars().count();
+                (char_start, char_end)
+            })
+            .collect()
+    } else {
+        vec![]
+    }
+}
+
 fn apply_cursor_shape(stdout: &mut impl Write, settings: &crate::settings::Settings) -> std::io::Result<()> {
     // Use VT escape sequence to set cursor style.
     // block: 2 (steady) or 0 (blinking), bar: 6 (steady) or 5 (blinking), underline: 4 (steady) or 3 (blinking)
@@ -277,6 +364,11 @@ fn position_cursor(
     state: &FileViewerState,
     visible_lines: usize,
 ) -> Result<(), std::io::Error> {
+    // If in find mode, cursor is already positioned in the search field by render_footer
+    if state.find_active {
+        return Ok(());
+    }
+    
     let line_num_width = line_number_width(state.settings);
     let text_width = state.term_width.saturating_sub(line_num_width);
     if state.dragging_selection_active
@@ -315,17 +407,19 @@ fn render_line_segment_expanded(
     stdout: &mut impl Write,
     expanded_chars: &[char],
     original_line: &str,
-    _ctx: &RenderContext,
+    ctx: &RenderContext,
     segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
-    use crossterm::style::{SetForegroundColor, ResetColor};
+    use crossterm::style::{SetForegroundColor, SetBackgroundColor, ResetColor};
     
     // Get syntax highlighting for the original line
     let highlights = crate::syntax::highlight_line(original_line);
     
     // Convert byte positions to visual positions for the expanded line
     let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; expanded_chars.len()];
+    let mut visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
     
+    // Apply syntax highlighting
     for (byte_start, byte_end, color) in highlights {
         // Convert byte positions to character positions in original line
         let char_start = original_line[..byte_start.min(original_line.len())].chars().count();
@@ -341,8 +435,22 @@ fn render_line_segment_expanded(
         }
     }
     
+    // Apply search match highlighting
+    if let Some(ref pattern) = ctx.state.last_search_pattern {
+        let matches = get_search_matches(original_line, pattern);
+        for (char_start, char_end) in matches {
+            let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+            let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+            
+            for i in visual_start..visual_end.min(visual_to_search_match.len()) {
+                visual_to_search_match[i] = true;
+            }
+        }
+    }
+    
     // Render the segment with colors
     let mut current_color: Option<crossterm::style::Color> = None;
+    let mut current_bg: bool = false;
     
     for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() {
@@ -351,12 +459,28 @@ fn render_line_segment_expanded(
         
         let ch = expanded_chars[visual_i];
         let desired_color = visual_to_color.get(visual_i).copied().flatten();
+        let is_search_match = visual_to_search_match.get(visual_i).copied().unwrap_or(false);
         
-        // Change color if needed
+        // Apply background color for search matches
+        if is_search_match != current_bg {
+            if is_search_match {
+                // Light blue background for search matches
+                execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
+            } else {
+                execute!(stdout, ResetColor)?;
+                // Reapply foreground color if needed
+                if let Some(color) = current_color {
+                    execute!(stdout, SetForegroundColor(color))?;
+                }
+            }
+            current_bg = is_search_match;
+        }
+        
+        // Change foreground color if needed
         if desired_color != current_color {
             if let Some(color) = desired_color {
                 execute!(stdout, SetForegroundColor(color))?;
-            } else {
+            } else if !is_search_match {
                 execute!(stdout, ResetColor)?;
             }
             current_color = desired_color;
@@ -366,7 +490,7 @@ fn render_line_segment_expanded(
     }
     
     // Reset color at end
-    if current_color.is_some() {
+    if current_color.is_some() || current_bg {
         execute!(stdout, ResetColor)?;
     }
     
@@ -383,7 +507,7 @@ fn render_line_segment_with_selection_expanded(
     ctx: &RenderContext,
     segment: &SegmentInfo,
 ) -> Result<(), std::io::Error> {
-    use crossterm::style::{SetForegroundColor, ResetColor};
+    use crossterm::style::{SetForegroundColor, SetBackgroundColor, ResetColor};
     
     let (start, end) = normalize_selection(sel_start, sel_end);
     let (start_line, start_col) = start;
@@ -399,7 +523,9 @@ fn render_line_segment_with_selection_expanded(
     
     // Convert byte positions to visual positions for the expanded line
     let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; expanded_chars.len()];
+    let mut visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
     
+    // Apply syntax highlighting
     for (byte_start, byte_end, color) in highlights {
         // Convert byte positions to character positions in original line
         let char_start = original_line[..byte_start.min(original_line.len())].chars().count();
@@ -414,35 +540,81 @@ fn render_line_segment_with_selection_expanded(
             visual_to_color[i] = Some(color);
         }
     }
+    
+    // Apply search match highlighting
+    if let Some(ref pattern) = ctx.state.last_search_pattern {
+        let matches = get_search_matches(original_line, pattern);
+        for (char_start, char_end) in matches {
+            let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+            let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+            
+            for i in visual_start..visual_end.min(visual_to_search_match.len()) {
+                visual_to_search_match[i] = true;
+            }
+        }
+    }
 
     // Convert selection character indices to visual column range
     let start_visual_col = if segment.line_index == start_line { visual_width_up_to(original_line, start_col, segment.tab_width) } else { 0 };
     let end_visual_col = if segment.line_index == end_line { visual_width_up_to(original_line, end_col, segment.tab_width) } else { usize::MAX };
 
     let mut current_color: Option<crossterm::style::Color> = None;
+    let mut current_bg: Option<&str> = None; // Track background: None, "search", or "selection"
 
     for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() { break; }
         let ch = expanded_chars[visual_i];
         let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
+        let is_search_match = visual_to_search_match.get(visual_i).copied().unwrap_or(false);
+        
+        // Determine background (selection takes priority over search match)
+        let desired_bg = if is_selected {
+            Some("selection")
+        } else if is_search_match {
+            Some("search")
+        } else {
+            None
+        };
+        
+        // Apply background if it changed
+        if desired_bg != current_bg {
+            match desired_bg {
+                Some("selection") => {
+                    // Reset color before applying reverse video
+                    if current_color.is_some() || current_bg.is_some() {
+                        execute!(stdout, ResetColor)?;
+                        current_color = None;
+                    }
+                }
+                Some("search") => {
+                    // Light blue background for search matches
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
+                }
+                _ => {
+                    execute!(stdout, ResetColor)?;
+                    current_color = None;
+                }
+            }
+            current_bg = desired_bg;
+        }
 
         if is_selected {
-            // Reset color before applying reverse video
-            if current_color.is_some() {
-                execute!(stdout, ResetColor)?;
-                current_color = None;
-            }
             write!(stdout, "{}", ch.to_string().reverse())?;
             execute!(stdout, ResetColor)?;
+            current_color = None;
+            current_bg = None;
         } else {
             let desired_color = visual_to_color.get(visual_i).copied().flatten();
             
-            // Change color if needed
+            // Change foreground color if needed
             if desired_color != current_color {
                 if let Some(color) = desired_color {
                     execute!(stdout, SetForegroundColor(color))?;
-                } else {
+                } else if !is_search_match {
                     execute!(stdout, ResetColor)?;
+                    if is_search_match {
+                        execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
+                    }
                 }
                 current_color = desired_color;
             }
@@ -452,7 +624,7 @@ fn render_line_segment_with_selection_expanded(
     }
     
     // Reset color at end
-    if current_color.is_some() {
+    if current_color.is_some() || current_bg.is_some() {
         execute!(stdout, ResetColor)?;
     }
 

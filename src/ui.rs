@@ -262,6 +262,7 @@ fn update_undo_timestamp(undo_history: &mut UndoHistory, file: &str) {
         && let Ok(modified) = metadata.modified()
         && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
         undo_history.file_timestamp = Some(duration.as_secs());
+        // find_history is already in undo_history, no need to update it here
         let _ = undo_history.save(file);
     }
 }
@@ -327,7 +328,8 @@ fn try_reload_undo_from_external_change(
         state.ensure_cursor_visible(visible_lines);
 
         // Update the undo history in state
-        state.undo_history = new_history;
+        state.undo_history = new_history.clone();
+        state.find_history = new_history.find_history.clone(); // Sync find history
         state.modified = state.undo_history.modified;
         state.needs_redraw = true;
 
@@ -335,7 +337,8 @@ fn try_reload_undo_from_external_change(
     } else {
         // No file content (e.g., after save in another instance)
         // But we should still sync the modified flag and other metadata
-        state.undo_history = new_history;
+        state.undo_history = new_history.clone();
+        state.find_history = new_history.find_history.clone(); // Sync find history
         state.modified = state.undo_history.modified;
         state.needs_redraw = true;
         
@@ -347,6 +350,7 @@ fn try_reload_undo_from_external_change(
 /// This consolidates the common pattern of saving both undo history and editor session
 fn persist_editor_state(state: &mut FileViewerState, file: &str) {
     state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    state.undo_history.find_history = state.find_history.clone(); // Save find history
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
     }
@@ -431,6 +435,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let mut state = FileViewerState::new(term_width, undo_history.clone(), settings);
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
+    state.find_history = undo_history.find_history.clone(); // Restore find history
     let saved_cursor_line = undo_history.cursor_line;
     let saved_cursor_col = undo_history.cursor_col;
     if saved_cursor_line < lines.len() {
@@ -494,14 +499,20 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         
         match event::read()? {
             Event::Key(key_event) => {
-                // Double-Esc processing
-                match last_esc.process_key(&key_event) {
-                    EscResult::Double => {
-                        persist_editor_state(&mut state, file);
-                        return Ok((state.modified, None, true, false));
+                // If in find mode, skip double-Esc processing for single Esc
+                // so that Esc immediately exits find mode
+                let skip_double_esc = state.find_active && matches!(key_event.code, crossterm::event::KeyCode::Esc);
+                
+                // Double-Esc processing (only if not in find mode)
+                if !skip_double_esc {
+                    match last_esc.process_key(&key_event) {
+                        EscResult::Double => {
+                            persist_editor_state(&mut state, file);
+                            return Ok((state.modified, None, true, false));
+                        }
+                        EscResult::First => { continue; } // wait for second or timeout
+                        EscResult::None => { /* normal key handling */ }
                     }
-                    EscResult::First => { continue; } // wait for second or timeout
-                    EscResult::None => { /* normal key handling */ }
                 }
                 
                 // Any other key clears the pending Esc

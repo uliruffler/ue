@@ -61,11 +61,54 @@ pub(crate) fn handle_key_event(
         }
     }
     
+    // Handle find (Ctrl+F)
+    if settings.keybindings.find_matches(&code, &modifiers) {
+        // Save current search pattern to restore on Esc
+        state.saved_search_pattern = state.last_search_pattern.clone();
+        state.find_active = true;
+        state.find_pattern.clear();
+        state.find_cursor_pos = 0;
+        state.find_error = None;
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    
+    // Handle find next (configurable keybinding, default F3)
+    // Note: This must be before find mode input handling so it works when find is active
+    if settings.keybindings.find_next_matches(&code, &modifiers) {
+        crate::find::find_next_occurrence(state, lines, visible_lines);
+        return Ok((false, false));
+    }
+    
+    // Handle find previous (configurable keybinding, default Shift+F3)
+    // Note: This must be before find mode input handling so it works when find is active
+    // Some terminals report Shift+F3 as F(15) instead of F(3) with SHIFT modifier
+    if settings.keybindings.find_previous_matches(&code, &modifiers) 
+        || matches!(code, KeyCode::F(15)) {
+        crate::find::find_prev_occurrence(state, lines, visible_lines);
+        return Ok((false, false));
+    }
+    
+    // If in find mode, handle find input
+    if state.find_active {
+        let exited = crate::find::handle_find_input(state, lines, key_event, visible_lines);
+        // Save undo history to persist find history changes
+        state.undo_history.find_history = state.find_history.clone();
+        let _ = state.undo_history.save(filename);
+        state.last_save_time = Some(Instant::now());
+        // If find mode was exited, the return value indicates this
+        if exited {
+            // Find mode was closed, continue normal processing
+        }
+        return Ok((false, false));
+    }
+    
     // Check for exit commands
     if is_exit_command(&code, &modifiers, settings) {
         // Before exiting, persist final scroll and cursor position
         let abs = state.absolute_line();
         state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+        state.undo_history.find_history = state.find_history.clone(); // Save find history
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         // Save session as editor
@@ -81,6 +124,7 @@ pub(crate) fn handle_key_event(
         // Clear the unsaved file content since we just saved
         state.undo_history.clear_unsaved_state();
         // Save undo history when saving the file
+        state.undo_history.find_history = state.find_history.clone(); // Save find history
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         return Ok((false, false));
@@ -315,7 +359,7 @@ fn handle_navigation(
     }
     
     let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-    match code {
+    let moved = match code {
         KeyCode::Up => { 
             handle_up_navigation(state, lines, visible_lines);
             state.adjust_cursor_col(&lines_refs); 
@@ -333,7 +377,14 @@ fn handle_navigation(
         KeyCode::PageDown => { let new_top = (state.top_line + visible_lines).min(lines.len().saturating_sub(visible_lines)); state.top_line = new_top; if state.top_line + state.cursor_line >= lines.len() { state.cursor_line = lines.len().saturating_sub(state.top_line + 1); } true }
         KeyCode::PageUp => { state.top_line = state.top_line.saturating_sub(visible_lines); true }
         _ => false,
+    };
+    
+    // Clear wrap warning on any cursor movement
+    if moved {
+        state.wrap_warning_pending = None;
     }
+    
+    moved
 }
 
 /// Show confirmation prompt for closing file with unsaved changes

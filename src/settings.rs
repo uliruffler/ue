@@ -13,6 +13,9 @@ pub(crate) struct KeyBindings {
     pub(crate) undo: String,
     pub(crate) redo: String,
     pub(crate) file_selector: String,
+    pub(crate) find: String,
+    pub(crate) find_next: String,
+    pub(crate) find_previous: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -108,6 +111,9 @@ impl KeyBindings {
     pub fn save_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.save, code, modifiers) }
     pub fn undo_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.undo, code, modifiers) }
     pub fn redo_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.redo, code, modifiers) }
+    pub fn find_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find, code, modifiers) }
+    pub fn find_next_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find_next, code, modifiers) }
+    pub fn find_previous_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find_previous, code, modifiers) }
     
     #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
     pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.file_selector, code, modifiers) }
@@ -133,6 +139,18 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
         KeyCode::Tab => key == "tab",
         KeyCode::Backspace => key == "backspace",
         KeyCode::Delete => key == "delete" || key == "del",
+        KeyCode::F(n) => {
+            // Match F1-F12 keys
+            if let Some(num_str) = key.strip_prefix('f') {
+                if let Ok(num) = num_str.parse::<u8>() {
+                    num == *n
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        }
         _ => false,
     };
     
@@ -188,7 +206,7 @@ mod tests {
     #[test]
     fn ctrl_letter_matches() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into() };
+        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into() };
         assert!(kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
         assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::ALT));
     }
@@ -196,7 +214,7 @@ mod tests {
     #[test]
     fn esc_quit_variants() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Escape".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into() };
+        let kb = KeyBindings { quit:"Escape".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into() };
         assert!(kb.quit_matches(&KeyCode::Esc, &KeyModifiers::empty()));
         assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
     }
@@ -204,7 +222,7 @@ mod tests {
     #[test]
     fn shift_modifier_detection() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+Shift+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into() };
+        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+Shift+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into() };
         let mods = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
         assert!(kb.copy_matches(&KeyCode::Char('c'), &mods));
         let missing_shift = KeyModifiers::CONTROL;
@@ -244,7 +262,10 @@ mod tests {
             save: "Ctrl+s".into(), 
             undo: "Ctrl+z".into(), 
             redo: "Ctrl+y".into(), 
-            file_selector: "Esc".into() 
+            file_selector: "Esc".into(),
+            find: "Ctrl+f".into(),
+            find_next: "F3".into(),
+            find_previous: "Shift+F3".into(),
         };
         
         // Esc without modifiers should open file selector
@@ -277,5 +298,39 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let s = Settings::load().expect("load settings");
         assert_eq!(s.appearance.cursor_shape, "bar");
+    }
+    
+    #[test]
+    fn f_key_parsing() {
+        let (_tmp, _guard) = set_temp_home();
+        let kb = KeyBindings {
+            quit: "Esc".into(),
+            copy: "Ctrl+c".into(),
+            paste: "Ctrl+v".into(),
+            cut: "Ctrl+x".into(),
+            close: "Ctrl+w".into(),
+            save: "Ctrl+s".into(),
+            undo: "Ctrl+z".into(),
+            redo: "Ctrl+y".into(),
+            file_selector: "Esc".into(),
+            find: "Ctrl+f".into(),
+            find_next: "F3".into(),
+            find_previous: "Shift+F3".into(),
+        };
+        
+        // Test F3 for find next (no modifiers)
+        assert!(kb.find_next_matches(&KeyCode::F(3), &KeyModifiers::empty()));
+        
+        // Test Shift+F3 for find previous
+        assert!(kb.find_previous_matches(&KeyCode::F(3), &KeyModifiers::SHIFT));
+        
+        // Should not match with wrong modifiers
+        assert!(!kb.find_next_matches(&KeyCode::F(3), &KeyModifiers::SHIFT));
+        assert!(!kb.find_previous_matches(&KeyCode::F(3), &KeyModifiers::empty()));
+        
+        // Verify F3 without shift does NOT match find_previous
+        assert!(!kb.find_previous_matches(&KeyCode::F(3), &KeyModifiers::empty()));
+        // Verify Shift+F3 does NOT match find_next
+        assert!(!kb.find_next_matches(&KeyCode::F(3), &KeyModifiers::SHIFT));
     }
 }
