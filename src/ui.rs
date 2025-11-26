@@ -11,10 +11,10 @@ use crossterm::{
 
 use crate::coordinates::adjust_view_for_resize;
 use crate::editor_state::FileViewerState;
-use crate::event_handlers::{handle_key_event, handle_mouse_event};
+use crate::event_handlers::{handle_key_event, handle_mouse_event, show_undo_conflict_confirmation};
 use crate::rendering::render_screen;
 use crate::settings::Settings;
-use crate::undo::UndoHistory;
+use crate::undo::{UndoHistory, ValidationResult};
 use crate::double_esc::{DoubleEscDetector, EscResult};
 use crate::syntax::SyntectHighlighter;
 
@@ -174,8 +174,78 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
 
 fn editing_session(file: &str, content: String, settings: &Settings) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
     let mut stdout = io::stdout();
-    let undo_history = UndoHistory::load(file).unwrap_or_else(|_| UndoHistory::new());
-    let mut lines: Vec<String> = if let Some(saved) = &undo_history.file_content { saved.clone() } else { content.lines().map(String::from).collect() };
+    let mut undo_history = UndoHistory::load(file).unwrap_or_else(|_| UndoHistory::new());
+    
+    // Validate undo file against current file modification time
+    let validation_result = undo_history.validate(file);
+    match validation_result {
+        ValidationResult::Valid => {
+            // Normal case - use undo file
+        }
+        ValidationResult::ModifiedNoUnsaved => {
+            // File was modified externally and no unsaved changes - delete stale undo file and go to selector
+            let _ = crate::editing::delete_file_history(file);
+            let mut visible_lines = 20;
+            match run_file_selector_overlay(file, &mut visible_lines, settings)? {
+                SelectorResult::Selected(selected_file) => {
+                    return Ok((false, Some(selected_file), false, false));
+                }
+                SelectorResult::Quit => {
+                    if let Err(e) = crate::session::save_selector_session() {
+                        eprintln!("Warning: failed to save selector session: {}", e);
+                    }
+                    return Ok((false, None, true, false));
+                }
+                SelectorResult::Cancelled => {
+                    // User cancelled - just quit
+                    return Ok((false, None, true, false));
+                }
+            }
+        }
+        ValidationResult::ModifiedWithUnsaved => {
+            // File was modified externally but has unsaved changes - ask user
+            if !show_undo_conflict_confirmation()? {
+                // User pressed Esc (No) - go to file selector WITHOUT deleting undo file
+                // This allows them to select the same file again and keep the undo history
+                let mut visible_lines = 20;
+                match run_file_selector_overlay(file, &mut visible_lines, settings)? {
+                    SelectorResult::Selected(selected_file) => {
+                        return Ok((false, Some(selected_file), false, false));
+                    }
+                    SelectorResult::Quit => {
+                        if let Err(e) = crate::session::save_selector_session() {
+                            eprintln!("Warning: failed to save selector session: {}", e);
+                        }
+                        return Ok((false, None, true, false));
+                    }
+                    SelectorResult::Cancelled => {
+                        // User cancelled - just quit
+                        return Ok((false, None, true, false));
+                    }
+                }
+            } else {
+                // User pressed Enter (Yes) - open file anyway with unsaved changes
+                // Update the timestamp to current file time so future validations pass
+                use std::time::SystemTime;
+                if let Ok(metadata) = std::fs::metadata(file) {
+                    if let Ok(modified) = metadata.modified() {
+                        if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                            undo_history.file_timestamp = Some(duration.as_secs());
+                            // Save the updated undo history immediately
+                            let _ = undo_history.save(file);
+                        }
+                    }
+                }
+            }
+        }
+    };
+    
+    let mut lines: Vec<String> = if let Some(saved) = &undo_history.file_content { 
+        saved.clone() 
+    } else { 
+        content.lines().map(String::from).collect() 
+    };
+    
     let (term_width, term_height) = size()?;
     let hl = Box::leak(SyntectHighlighter::factory());
     let mut state = FileViewerState::new(term_width, undo_history.clone(), settings, hl);

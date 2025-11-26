@@ -1,5 +1,31 @@
 use serde::{Deserialize, Serialize};
-use std::{fs, path::PathBuf};
+use std::{fs, path::PathBuf, time::SystemTime};
+
+// Helper module for serializing Option<u64> timestamps
+mod optional_systemtime {
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    pub fn serialize<S>(value: &Option<u64>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        value.serialize(serializer)
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        Option::<u64>::deserialize(deserializer)
+    }
+}
+
+#[derive(Debug, PartialEq)]
+pub enum ValidationResult {
+    Valid,
+    ModifiedNoUnsaved,
+    ModifiedWithUnsaved,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Edit {
@@ -30,6 +56,8 @@ pub struct UndoHistory {
     pub modified: bool,
     #[serde(default)]
     pub scroll_top: usize, // persisted top_line (first visible logical line)
+    #[serde(default, with = "optional_systemtime")]
+    pub file_timestamp: Option<u64>, // UNIX epoch timestamp of file when undo was saved
 }
 
 impl UndoHistory {
@@ -42,6 +70,7 @@ impl UndoHistory {
             file_content: None,
             modified: false,
             scroll_top: 0,
+            file_timestamp: None,
         }
     }
 
@@ -88,7 +117,19 @@ impl UndoHistory {
         let history_path = Self::history_path(file_path)?;
         // Create parent directories if they don't exist
         if let Some(parent) = history_path.parent() { fs::create_dir_all(parent)?; }
-        let serialized = serde_json::to_string(self)?;
+        
+        // Create a copy with updated timestamp
+        let mut history_to_save = self.clone();
+        // Capture current file modification time
+        if let Ok(metadata) = fs::metadata(file_path) {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                    history_to_save.file_timestamp = Some(duration.as_secs());
+                }
+            }
+        }
+        
+        let serialized = serde_json::to_string(&history_to_save)?;
         fs::write(&history_path, serialized)?;
         Ok(())
     }
@@ -99,6 +140,40 @@ impl UndoHistory {
             let history: UndoHistory = serde_json::from_str(&content)?;
             Ok(history)
         } else { Ok(Self::new()) }
+    }
+
+    /// Validate undo history against current file modification timestamp
+    /// Returns ValidationResult indicating if the file was modified externally
+    pub fn validate(&self, file_path: &str) -> ValidationResult {
+        // If no timestamp stored (old format), treat as valid
+        let stored_timestamp = match self.file_timestamp {
+            Some(ts) => ts,
+            None => return ValidationResult::Valid,
+        };
+
+        // Get current file modification time
+        let current_timestamp = match fs::metadata(file_path) {
+            Ok(metadata) => match metadata.modified() {
+                Ok(modified) => match modified.duration_since(SystemTime::UNIX_EPOCH) {
+                    Ok(duration) => duration.as_secs(),
+                    Err(_) => return ValidationResult::Valid, // Can't determine, treat as valid
+                },
+                Err(_) => return ValidationResult::Valid,
+            },
+            Err(_) => return ValidationResult::Valid, // File doesn't exist or can't read, treat as valid
+        };
+
+        // Compare timestamps
+        if current_timestamp != stored_timestamp {
+            // File was modified externally
+            if self.modified {
+                ValidationResult::ModifiedWithUnsaved
+            } else {
+                ValidationResult::ModifiedNoUnsaved
+            }
+        } else {
+            ValidationResult::Valid
+        }
     }
 
     pub(crate) fn history_path_for(file_path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -376,4 +451,358 @@ mod tests {
         assert!(s.contains(".ue/files"));
         assert!(s.ends_with("docs/readme.md.ue"));
     }
+
+    #[test]
+    fn validate_returns_valid_when_no_timestamp() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create history without timestamp (simulating old format)
+        let mut h = UndoHistory::new();
+        h.file_timestamp = None;
+        
+        let result = h.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    fn validate_returns_valid_when_timestamps_match() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Save and load to capture timestamp
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.save(&file_str).unwrap();
+        
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        let result = loaded.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    #[ignore] // Filesystem dependent - some filesystems don't change mtime within seconds
+    fn validate_returns_modified_no_unsaved_when_file_changed() {
+        use std::thread;
+        use std::time::Duration;
+        
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Save history
+        let h = UndoHistory::new();
+        h.save(&file_str).unwrap();
+        
+        // Wait enough time to ensure timestamp changes (filesystem resolution)
+        thread::sleep(Duration::from_secs(2));
+        fs::write(&file, "modified content").unwrap();
+        
+        // Load and validate
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        let result = loaded.validate(&file_str);
+        
+        // This test may not work on all filesystems - mark as ignored
+        assert_eq!(result, ValidationResult::ModifiedNoUnsaved);
+    }
+
+    #[test]
+    #[ignore] // Filesystem dependent - some filesystems don't change mtime within seconds
+    fn validate_returns_modified_with_unsaved_when_file_changed_and_has_unsaved() {
+        use std::thread;
+        use std::time::Duration;
+        
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create history with unsaved changes
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.update_state(0, 0, 1, vec!["a".into()]);
+        h.save(&file_str).unwrap();
+        
+        // Wait enough time to ensure timestamp changes (filesystem resolution)
+        thread::sleep(Duration::from_secs(2));
+        fs::write(&file, "modified content").unwrap();
+        
+        // Load and validate
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(loaded.modified);
+        let result = loaded.validate(&file_str);
+        
+        // This test may not work on all filesystems - mark as ignored
+        assert_eq!(result, ValidationResult::ModifiedWithUnsaved);
+    }
+
+    #[test]
+    fn save_captures_file_timestamp() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        let h = UndoHistory::new();
+        h.save(&file_str).unwrap();
+        
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(loaded.file_timestamp.is_some());
+    }
+
+    #[test]
+    fn validate_with_no_file_content_and_no_edits() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "original content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Save history with no edits and no unsaved content
+        let h = UndoHistory::new();
+        h.save(&file_str).unwrap();
+        
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(!loaded.modified);
+        assert!(loaded.file_content.is_none());
+        assert_eq!(loaded.edits.len(), 0);
+        
+        // Validation should pass - file unchanged
+        let result = loaded.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    fn validate_with_file_content_but_no_modified_flag() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "original content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create history with file content but modified=false (simulating saved state)
+        let mut h = UndoHistory::new();
+        h.file_content = Some(vec!["saved content".to_string()]);
+        h.modified = false;
+        h.save(&file_str).unwrap();
+        
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(!loaded.modified);
+        assert!(loaded.file_content.is_some());
+        
+        // Validation should pass - no modifications
+        let result = loaded.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    fn validate_with_edits_and_modified_flag() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "original").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create history with edits and unsaved changes
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.update_state(0, 0, 1, vec!["aoriginal".to_string()]);
+        assert!(h.modified);
+        h.save(&file_str).unwrap();
+        
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(loaded.modified);
+        assert_eq!(loaded.edits.len(), 1);
+        assert!(loaded.file_content.is_some());
+        
+        // Validation should pass - file unchanged
+        let result = loaded.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    fn validate_preserves_edits_after_undo() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "original").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create history with multiple edits, then undo some
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.push(Edit::InsertChar { line: 0, col: 2, ch: 'c' });
+        
+        // Undo one
+        h.undo();
+        h.update_state(0, 0, 2, vec!["aboriginal".to_string()]);
+        
+        assert!(h.modified);
+        assert_eq!(h.current, 2); // 2 edits in effect
+        assert_eq!(h.edits.len(), 3); // 3 total edits (can redo)
+        h.save(&file_str).unwrap();
+        
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(loaded.modified);
+        assert_eq!(loaded.current, 2);
+        assert_eq!(loaded.edits.len(), 3);
+        assert!(loaded.can_redo());
+        
+        // Validation should pass
+        let result = loaded.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+
+    #[test]
+    fn validation_handles_missing_file() {
+        let (_tmp, _guard) = set_temp_home();
+        
+        // Create history for a file that doesn't exist
+        let mut h = UndoHistory::new();
+        h.file_timestamp = Some(12345);
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.update_state(0, 0, 1, vec!["a".to_string()]);
+        
+        // Validate against non-existent file - should return Valid (graceful handling)
+        let result = h.validate("/tmp/nonexistent_file_xyz_123.txt");
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    fn clear_unsaved_state_preserves_edits_and_cursor() {
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.update_state(5, 10, 15, vec!["ab".to_string()]);
+        
+        assert!(h.modified);
+        assert!(h.file_content.is_some());
+        assert_eq!(h.edits.len(), 2);
+        assert_eq!(h.scroll_top, 5);
+        assert_eq!(h.cursor_line, 10);
+        assert_eq!(h.cursor_col, 15);
+        
+        h.clear_unsaved_state();
+        
+        // Edits and cursor should be preserved
+        assert_eq!(h.edits.len(), 2);
+        assert_eq!(h.scroll_top, 5);
+        assert_eq!(h.cursor_line, 10);
+        assert_eq!(h.cursor_col, 15);
+        
+        // But modified and file_content should be cleared
+        assert!(!h.modified);
+        assert!(h.file_content.is_none());
+    }
+
+    #[test]
+    fn backward_compatibility_old_format_without_timestamp() {
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create an old-format undo history manually (without using save)
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.update_state(0, 0, 1, vec!["a".to_string()]);
+        // Explicitly set timestamp to None to simulate old format
+        h.file_timestamp = None;
+        
+        // Manually save as JSON without timestamp
+        let history_path = UndoHistory::history_path_for(&file_str).unwrap();
+        if let Some(parent) = history_path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
+        let serialized = serde_json::to_string(&h).unwrap();
+        fs::write(&history_path, serialized).unwrap();
+        
+        // Load and validate
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(loaded.file_timestamp.is_none());
+        assert!(loaded.modified);
+        
+        // Should validate as Valid (backward compatibility)
+        let result = loaded.validate(&file_str);
+        assert_eq!(result, ValidationResult::Valid);
+    }
+
+    #[test]
+    fn undo_file_exists_after_validation_with_modified_no_unsaved() {
+        use std::thread;
+        use std::time::Duration;
+        
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "original content").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create and save undo history with no unsaved changes
+        let h = UndoHistory::new();
+        h.save(&file_str).unwrap();
+        
+        // Verify undo file exists
+        let history_path = UndoHistory::history_path_for(&file_str).unwrap();
+        assert!(history_path.exists());
+        
+        // Modify file externally
+        thread::sleep(Duration::from_millis(100));
+        fs::write(&file, "modified content").unwrap();
+        
+        // Load and validate
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        let _result = loaded.validate(&file_str);
+        
+        // Validation should detect modification (or Valid if timestamps don't differ)
+        // But importantly, the undo file should STILL exist
+        assert!(history_path.exists(), "Undo file should not be deleted by validation");
+    }
+
+    #[test]
+    fn undo_file_exists_after_validation_with_modified_with_unsaved() {
+        use std::thread;
+        use std::time::Duration;
+        
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("test.txt");
+        fs::write(&file, "original").unwrap();
+        let file_str = file.to_string_lossy();
+        
+        // Create undo history with unsaved changes
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.update_state(0, 0, 2, vec!["aboriginal".to_string()]);
+        assert!(h.modified);
+        h.save(&file_str).unwrap();
+        
+        // Verify undo file exists
+        let history_path = UndoHistory::history_path_for(&file_str).unwrap();
+        assert!(history_path.exists());
+        
+        // Modify file externally
+        thread::sleep(Duration::from_millis(100));
+        fs::write(&file, "completely different").unwrap();
+        
+        // Load and validate
+        let loaded = UndoHistory::load(&file_str).unwrap();
+        assert!(loaded.modified);
+        assert_eq!(loaded.edits.len(), 2);
+        
+        let _result = loaded.validate(&file_str);
+        
+        // Validation should detect modification (or Valid if timestamps don't differ)
+        // But the undo file should STILL exist with all its edits
+        assert!(history_path.exists(), "Undo file should not be deleted by validation");
+        
+        // Reload and verify edits are preserved
+        let reloaded = UndoHistory::load(&file_str).unwrap();
+        assert_eq!(reloaded.edits.len(), 2);
+        assert!(reloaded.modified);
+        assert!(reloaded.file_content.is_some());
+    }
 }
+

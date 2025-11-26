@@ -372,6 +372,45 @@ fn show_close_confirmation(_state: &mut FileViewerState) -> Result<bool, std::io
     }
 }
 
+/// Show confirmation prompt when undo file has unsaved changes but source file was modified externally
+/// Returns true if user confirms opening file anyway (Enter), false if user wants to discard (Esc)
+pub(crate) fn show_undo_conflict_confirmation() -> Result<bool, std::io::Error> {
+    use crossterm::terminal;
+    use crossterm::event;
+    
+    let mut stdout = std::io::stdout();
+    let (_, term_height) = terminal::size()?;
+    let footer_row = term_height - 1;
+    
+    // Display warning message in footer
+    execute!(
+        stdout,
+        crossterm::cursor::MoveTo(0, footer_row),
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
+        crossterm::style::SetForegroundColor(crossterm::style::Color::Yellow)
+    )?;
+    write!(stdout, "File was modified. Open anyway? [Enter=Yes, Esc=No]")?;
+    execute!(stdout, crossterm::style::ResetColor)?;
+    stdout.flush()?;
+    
+    // Wait for user response
+    loop {
+        if let event::Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Enter => {
+                    return Ok(true); // User confirmed - open file
+                }
+                KeyCode::Esc => {
+                    return Ok(false); // User declined - exit to selector
+                }
+                _ => {
+                    // Ignore other keys, wait for Enter or Esc
+                }
+            }
+        }
+    }
+}
+
 fn word_left(state: &mut FileViewerState, lines: &[String]) -> bool {
     let abs = state.absolute_line(); if abs >= lines.len() { return false; }
     if state.cursor_col == 0 {
