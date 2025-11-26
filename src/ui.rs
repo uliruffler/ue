@@ -1,5 +1,6 @@
 use std::fs;
 use std::io;
+use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{SetCursorStyle, Hide, Show},
@@ -21,6 +22,9 @@ use crate::syntax::SyntectHighlighter;
 const DEFAULT_VISIBLE_LINES: usize = 20;
 const STATUS_LINE_HEIGHT: usize = 2;
 const CURSOR_CONTEXT_LINES: usize = 5;
+// File watching constants for multi-instance synchronization
+const UNDO_FILE_CHECK_INTERVAL_MS: u64 = 150; // Check undo file every 150ms
+const SAVE_GRACE_PERIOD_MS: u64 = 200; // Don't reload within 200ms of our own save
 
 /// Result of file selector overlay: Selected(path), Cancelled, or Quit
 enum SelectorResult {
@@ -258,6 +262,7 @@ fn persist_editor_state(state: &mut FileViewerState, file: &str) {
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
     }
+    state.last_save_time = Some(Instant::now());
     if let Err(e) = crate::session::save_editor_session(file) {
         eprintln!("Warning: failed to save editor session: {}", e);
     }
@@ -276,6 +281,7 @@ fn handle_file_selector_in_loop(
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
     }
+    state.last_save_time = Some(Instant::now());
     
     match run_file_selector_overlay(file, visible_lines, settings)? {
         SelectorResult::Selected(selected_file) => {
@@ -356,9 +362,60 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
 
     // Track last Esc press time for double-press detection
     let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
+    
+    // File watching state for multi-instance synchronization
+    let mut last_undo_check = Instant::now();
+    let mut last_known_undo_mtime = UndoHistory::get_undo_file_mtime(file);
 
     loop {
         if state.needs_redraw { render_screen(&mut stdout, file, &lines, &state, visible_lines)?; state.needs_redraw = false; }
+        
+        // Check for external undo file changes (multi-instance editing)
+        let now = Instant::now();
+        if now.duration_since(last_undo_check) >= Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS) {
+            last_undo_check = now;
+            
+            // Check if undo file was modified by another instance
+            if let Some(current_mtime) = UndoHistory::get_undo_file_mtime(file) {
+                if let Some(last_mtime) = last_known_undo_mtime {
+                    // Only reload if mtime changed AND we're not within grace period of our own save
+                    let within_grace_period = state.last_save_time
+                        .map(|save_time| now.duration_since(save_time) < Duration::from_millis(SAVE_GRACE_PERIOD_MS))
+                        .unwrap_or(false);
+                    
+                    if current_mtime != last_mtime && !within_grace_period {
+                        // Undo file was modified externally - reload it
+                        if let Ok(new_history) = UndoHistory::load(file) {
+                            // Update lines from the loaded history if it has file content
+                            if let Some(new_content) = &new_history.file_content {
+                                lines = new_content.clone();
+                                
+                                // Restore cursor and scroll position from the new history
+                                state.top_line = new_history.scroll_top.min(lines.len());
+                                let new_cursor_line = new_history.cursor_line;
+                                let new_cursor_col = new_history.cursor_col;
+                                
+                                if new_cursor_line < lines.len() {
+                                    state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
+                                    if new_cursor_col <= lines[new_cursor_line].len() {
+                                        state.cursor_col = new_cursor_col;
+                                    }
+                                }
+                                
+                                // Update the undo history in state
+                                state.undo_history = new_history;
+                                state.modified = state.undo_history.modified;
+                                state.needs_redraw = true;
+                            }
+                        }
+                        last_known_undo_mtime = Some(current_mtime);
+                    }
+                } else {
+                    // First time seeing an mtime
+                    last_known_undo_mtime = Some(current_mtime);
+                }
+            }
+        }
         
         // Check if we should open file selector after timeout
         if last_esc.timed_out() {
@@ -370,7 +427,10 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         }
         
         // Use poll with timeout to detect when to open file selector
-        let timeout = last_esc.remaining_timeout();
+        // Cap timeout to file check interval so we wake up regularly to check for external changes
+        let esc_timeout = last_esc.remaining_timeout();
+        let file_check_timeout = Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS);
+        let timeout = if esc_timeout < file_check_timeout { esc_timeout } else { file_check_timeout };
         
         if !event::poll(timeout)? {
             if last_esc.timed_out() {

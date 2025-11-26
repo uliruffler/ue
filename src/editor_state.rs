@@ -1,6 +1,7 @@
 use crate::settings::Settings;
 use crate::undo::UndoHistory;
 use crate::syntax::Highlighter;
+use std::time::Instant;
 
 /// Type alias for cursor/selection position (line, column)
 pub(crate) type Position = (usize, usize);
@@ -29,6 +30,8 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) dragging_selection_active: bool,
     pub(crate) drag_target: Option<Position>,
     pub(crate) highlighter: &'a dyn Highlighter,
+    /// Timestamp of last save to prevent reload loops when current instance saves
+    pub(crate) last_save_time: Option<Instant>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -53,6 +56,7 @@ impl<'a> FileViewerState<'a> {
             drag_text: None,
             drag_target: None,
             highlighter,
+            last_save_time: None,
         }
     }
 

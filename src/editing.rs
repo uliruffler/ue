@@ -1,5 +1,6 @@
 use std::{fs};
 use std::sync::{Mutex, OnceLock};
+use std::time::Instant;
 use crate::editor_state::{FileViewerState, Position};
 use crate::undo::Edit;
 
@@ -7,6 +8,11 @@ use crate::undo::Edit;
 static GLOBAL_CLIPBOARD: OnceLock<Mutex<Option<arboard::Clipboard>>> = OnceLock::new();
 fn get_clipboard() -> &'static Mutex<Option<arboard::Clipboard>> { GLOBAL_CLIPBOARD.get_or_init(|| Mutex::new(arboard::Clipboard::new().ok())) }
 
+/// Save undo history and record the save timestamp to prevent reload loops
+fn save_undo_with_timestamp(state: &mut FileViewerState, filename: &str) {
+    let _ = state.undo_history.save(filename);
+    state.last_save_time = Some(Instant::now());
+}
 
 
 pub(crate) fn handle_copy(state: &FileViewerState, lines: &[String]) -> Result<(), std::io::Error> {
@@ -55,7 +61,7 @@ pub(crate) fn handle_paste(state: &mut FileViewerState, lines: &mut Vec<String>,
     }
     let absolute_line = state.absolute_line();
     state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
-    let _ = state.undo_history.save(filename);
+    save_undo_with_timestamp(state, filename);
     true
 }
 
@@ -81,7 +87,7 @@ pub(crate) fn handle_cut(state: &mut FileViewerState, lines: &mut Vec<String>, f
     state.modified = true;
     let absolute_line = state.absolute_line();
     state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
-    let _ = state.undo_history.save(filename);
+    save_undo_with_timestamp(state, filename);
     state.needs_redraw = true;
     true
 }
@@ -148,7 +154,7 @@ pub(crate) fn remove_selection(state: &mut FileViewerState, lines: &mut Vec<Stri
     state.modified = true;
     let absolute_line = state.top_line + state.cursor_line;
     state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
-    let _ = state.undo_history.save(filename);
+    save_undo_with_timestamp(state, filename);
     state.needs_redraw = true;
     true
 }
@@ -160,7 +166,7 @@ pub(crate) fn insert_char(state: &mut FileViewerState, lines: &mut [String], c: 
         state.undo_history.push(Edit::InsertChar { line: idx, col: state.cursor_col, ch: c });
         state.cursor_col += 1;
         state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
-        let _ = state.undo_history.save(filename);
+        save_undo_with_timestamp(state, filename);
         true
     } else { false }
 }
@@ -178,7 +184,7 @@ pub(crate) fn split_line(state: &mut FileViewerState, lines: &mut Vec<String>, v
     state.cursor_col = 0;
     let absolute_line = state.absolute_line();
     state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
-    let _ = state.undo_history.save(filename);
+    save_undo_with_timestamp(state, filename);
     true
 }
 
@@ -191,7 +197,7 @@ pub(crate) fn delete_backward(state: &mut FileViewerState, lines: &mut Vec<Strin
         state.undo_history.push(Edit::DeleteChar { line: idx, col: state.cursor_col - 1, ch });
         state.cursor_col -= 1;
         state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
-        let _ = state.undo_history.save(filename);
+        save_undo_with_timestamp(state, filename);
         true
     } else if idx > 0 {
         let current = lines.remove(idx);
@@ -203,7 +209,7 @@ pub(crate) fn delete_backward(state: &mut FileViewerState, lines: &mut Vec<Strin
         state.cursor_col = prev_len;
         let absolute_line = state.absolute_line();
         state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
-        let _ = state.undo_history.save(filename);
+        save_undo_with_timestamp(state, filename);
         true
     } else { false }
 }
@@ -216,7 +222,7 @@ pub(crate) fn delete_forward(state: &mut FileViewerState, lines: &mut Vec<String
         lines[idx].remove(state.cursor_col);
         state.undo_history.push(Edit::DeleteChar { line: idx, col: state.cursor_col, ch });
         state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
-        let _ = state.undo_history.save(filename);
+        save_undo_with_timestamp(state, filename);
         true
     } else if idx + 1 < lines.len() {
         let next_line = lines.remove(idx + 1);
@@ -224,7 +230,7 @@ pub(crate) fn delete_forward(state: &mut FileViewerState, lines: &mut Vec<String
         lines[idx].push_str(&next_line);
         state.undo_history.push(Edit::MergeLine { line: idx, first: first_snapshot, second: next_line });
         state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.clone());
-        let _ = state.undo_history.save(filename);
+        save_undo_with_timestamp(state, filename);
         true
     } else { false }
 }
@@ -240,7 +246,7 @@ pub(crate) fn insert_tab(state: &mut FileViewerState, lines: &mut [String], file
         }
         state.cursor_col += tab_width;
         state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
-        let _ = state.undo_history.save(filename);
+        save_undo_with_timestamp(state, filename);
         true
     } else { false }
 }
@@ -351,7 +357,7 @@ pub(crate) fn apply_undo(state: &mut FileViewerState, lines: &mut Vec<String>, f
             state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
             // Sync modified flag from undo history
             state.modified = state.undo_history.modified;
-            let _ = state.undo_history.save(filename);
+            save_undo_with_timestamp(state, filename);
         }
         result
     } else {
@@ -445,7 +451,7 @@ pub(crate) fn apply_redo(state: &mut FileViewerState, lines: &mut Vec<String>, f
             state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
             // Sync modified flag from undo history
             state.modified = state.undo_history.modified;
-            let _ = state.undo_history.save(filename);
+            save_undo_with_timestamp(state, filename);
         }
         result
     } else {
@@ -581,7 +587,7 @@ pub(crate) fn apply_drag(
     let abs = state.absolute_line();
     state.undo_history.update_state(state.top_line, abs, state.cursor_col, lines.clone());
     state.undo_history.push(Edit::DragBlock { before: before_snapshot, after: lines.clone(), source_start: sel_start, source_end: sel_end, dest, copy });
-    let _ = state.undo_history.save("__drag__");
+    save_undo_with_timestamp(state, "__drag__");
 }
 
 #[cfg(test)]

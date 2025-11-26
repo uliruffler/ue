@@ -180,6 +180,16 @@ impl UndoHistory {
         Self::history_path(file_path)
     }
 
+    /// Get modification time of undo history file in seconds since UNIX epoch
+    /// Returns None if file doesn't exist or can't be read
+    pub(crate) fn get_undo_file_mtime(file_path: &str) -> Option<u128> {
+        let history_path = Self::history_path(file_path).ok()?;
+        let metadata = fs::metadata(&history_path).ok()?;
+        let modified = metadata.modified().ok()?;
+        let duration = modified.duration_since(SystemTime::UNIX_EPOCH).ok()?;
+        Some(duration.as_nanos())
+    }
+
     fn history_path(file_path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
         let home = std::env::var("UE_TEST_HOME")
             .or_else(|_| std::env::var("HOME"))
@@ -803,6 +813,41 @@ mod tests {
         assert_eq!(reloaded.edits.len(), 2);
         assert!(reloaded.modified);
         assert!(reloaded.file_content.is_some());
+    }
+
+    #[test]
+    fn get_undo_file_mtime_returns_none_for_nonexistent_file() {
+        let (_tmp, _guard) = set_temp_home();
+        let file_str = "/tmp/nonexistent_file_for_mtime_test.txt";
+        
+        // Undo file doesn't exist yet
+        let mtime = UndoHistory::get_undo_file_mtime(file_str);
+        assert!(mtime.is_none(), "Should return None for nonexistent undo file");
+    }
+
+    #[test]
+    fn get_undo_file_mtime_returns_timestamp_after_save() {
+        let (_tmp, _guard) = set_temp_home();
+        let file_str = "/tmp/test_mtime_file.txt";
+        
+        // Create and save undo history
+        let mut h = UndoHistory::new();
+        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'x' });
+        h.save(file_str).unwrap();
+        
+        // Should now return a timestamp
+        let mtime1 = UndoHistory::get_undo_file_mtime(file_str);
+        assert!(mtime1.is_some(), "Should return timestamp after save");
+        
+        // Wait a bit and save again
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'y' });
+        h.save(file_str).unwrap();
+        
+        // Timestamp should be different (or at least not None)
+        let mtime2 = UndoHistory::get_undo_file_mtime(file_str);
+        assert!(mtime2.is_some(), "Should return timestamp after second save");
+        // Note: mtime2 >= mtime1, but might be equal on fast systems
     }
 }
 

@@ -1,6 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crossterm::execute;
 use std::io::Write;
+use std::time::Instant;
 
 use crate::coordinates::{line_number_width, visual_col_to_char_index};
 use crate::editor_state::FileViewerState;
@@ -66,6 +67,7 @@ pub(crate) fn handle_key_event(
         let abs = state.absolute_line();
         state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
         let _ = state.undo_history.save(filename);
+        state.last_save_time = Some(Instant::now());
         // Save session as editor
         let _ = crate::session::save_editor_session(filename);
         return Ok((true, false));
@@ -80,6 +82,7 @@ pub(crate) fn handle_key_event(
         state.undo_history.clear_unsaved_state();
         // Save undo history when saving the file
         let _ = state.undo_history.save(filename);
+        state.last_save_time = Some(Instant::now());
         return Ok((false, false));
     }
     
