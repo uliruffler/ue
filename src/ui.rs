@@ -1,6 +1,5 @@
 use std::fs;
 use std::io;
-use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{SetCursorStyle, Hide, Show},
@@ -18,6 +17,11 @@ use crate::undo::{UndoHistory, ValidationResult};
 use crate::double_esc::{DoubleEscDetector, EscResult};
 use crate::syntax::SyntectHighlighter;
 
+// Constants to eliminate magic numbers
+const DEFAULT_VISIBLE_LINES: usize = 20;
+const STATUS_LINE_HEIGHT: usize = 2;
+const CURSOR_CONTEXT_LINES: usize = 5;
+
 /// Result of file selector overlay: Selected(path), Cancelled, or Quit
 enum SelectorResult {
     Selected(String),
@@ -30,51 +34,90 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
     use crossterm::event::{KeyCode, Event};
     let mut stdout = io::stdout();
     let tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
-    if tracked.is_empty() { return Ok(SelectorResult::Cancelled); }
-    let current_canon = std::fs::canonicalize(current_file).unwrap_or_else(|_| std::path::PathBuf::from(current_file));
+    if tracked.is_empty() {
+        return Ok(SelectorResult::Cancelled);
+    }
+    
+    let current_canon = std::fs::canonicalize(current_file)
+        .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
     let current_str = current_canon.to_string_lossy();
-    let mut selected_index = tracked.iter().position(|e| e.path.to_string_lossy() == current_str).unwrap_or(0);
+    let mut selected_index = tracked.iter()
+        .position(|e| e.path.to_string_lossy() == current_str)
+        .unwrap_or(0);
     let scroll_offset = 0usize;
-    let (_, th) = terminal::size()?; let vis = (th as usize).saturating_sub(1);
-    execute!(stdout, Hide)?; crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
+    let (_, th) = terminal::size()?;
+    let vis = (th as usize).saturating_sub(1);
+    execute!(stdout, Hide)?;
+    crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
 
-    // Double Esc detection state
-    let mut last_esc_press: Option<Instant> = None;
-    let esc_threshold = Duration::from_millis(settings.double_tap_speed_ms);
+    // Use DoubleEscDetector for consistent double-Esc handling
+    let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
 
     loop {
-        // If first Esc was pressed and timeout elapsed without second Esc -> cancel overlay
-        if let Some(t0) = last_esc_press { if Instant::now().duration_since(t0) >= esc_threshold { execute!(stdout, Show)?; return Ok(SelectorResult::Cancelled); } }
+        // Check if first Esc timed out -> cancel overlay
+        if last_esc.timed_out() {
+            last_esc.clear();
+            execute!(stdout, Show)?;
+            return Ok(SelectorResult::Cancelled);
+        }
 
-        // Determine poll timeout (remaining time until cancellation or long wait)
-        let timeout = if let Some(t0) = last_esc_press {
-            let elapsed = Instant::now().duration_since(t0);
-            esc_threshold.checked_sub(elapsed).unwrap_or(Duration::from_millis(0))
-        } else { Duration::from_secs(86400) };
-
+        // Poll with timeout to detect when to cancel
+        let timeout = last_esc.remaining_timeout();
+        
         if !event::poll(timeout)? {
-            // Timeout fired -> treat as cancellation (handled above); just continue loop to trigger branch
+            // Timeout elapsed, check again at top of loop
             continue;
         }
 
         match event::read()? {
             Event::Key(k) => {
-                if k.code == KeyCode::Esc && k.modifiers.is_empty() {
-                    let now = Instant::now();
-                    if let Some(prev) = last_esc_press { if now.duration_since(prev) <= esc_threshold { execute!(stdout, Show)?; return Ok(SelectorResult::Quit); } }
-                    // First Esc: record and wait for second or timeout
-                    last_esc_press = Some(now); continue; // do not cancel yet
+                // Process Esc key with DoubleEscDetector
+                match last_esc.process_key(&k) {
+                    EscResult::Double => {
+                        execute!(stdout, Show)?;
+                        return Ok(SelectorResult::Quit);
+                    }
+                    EscResult::First => {
+                        continue; // Wait for second Esc or timeout
+                    }
+                    EscResult::None => {
+                        // Normal key handling
+                    }
                 }
-                // Any non-Esc key clears pending first Esc
-                last_esc_press = None;
+                
                 match k.code {
-                    KeyCode::Up | KeyCode::Char('k') => { if selected_index > 0 { let prev = selected_index; selected_index -= 1; crate::file_selector::render_selection_change(&tracked, prev, selected_index, scroll_offset, vis)?; } }
-                    KeyCode::Down | KeyCode::Char('j') => { if selected_index + 1 < tracked.len() { let prev = selected_index; selected_index += 1; crate::file_selector::render_selection_change(&tracked, prev, selected_index, scroll_offset, vis)?; } }
-                    KeyCode::Enter => { execute!(stdout, Show)?; return Ok(SelectorResult::Selected(tracked[selected_index].path.to_string_lossy().to_string())); }
+                    KeyCode::Up | KeyCode::Char('k') => {
+                        if selected_index > 0 {
+                            let prev = selected_index;
+                            selected_index -= 1;
+                            crate::file_selector::render_selection_change(
+                                &tracked, prev, selected_index, scroll_offset, vis
+                            )?;
+                        }
+                    }
+                    KeyCode::Down | KeyCode::Char('j') => {
+                        if selected_index + 1 < tracked.len() {
+                            let prev = selected_index;
+                            selected_index += 1;
+                            crate::file_selector::render_selection_change(
+                                &tracked, prev, selected_index, scroll_offset, vis
+                            )?;
+                        }
+                    }
+                    KeyCode::Enter => {
+                        execute!(stdout, Show)?;
+                        return Ok(SelectorResult::Selected(
+                            tracked[selected_index].path.to_string_lossy().to_string()
+                        ));
+                    }
                     _ => {}
                 }
             }
-            Event::Resize(_, h) => { *visible_lines = (h as usize).saturating_sub(2); let vis_new = (h as usize).saturating_sub(1); crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis_new)?; }
+            Event::Resize(_, h) => {
+                *visible_lines = (h as usize).saturating_sub(2);
+                let vis_new = (h as usize).saturating_sub(1);
+                crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis_new)?;
+            }
             Event::Mouse(_) => { /* ignore mouse */ }
             _ => {}
         }
@@ -113,7 +156,7 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
                     
                     // If there are still files, show file selector to choose next
                     if !current_files.is_empty() {
-                        let mut visible_lines_temp = 20; // temporary, will be updated
+                        let mut visible_lines_temp = DEFAULT_VISIBLE_LINES;
                         // Use first remaining file as context (doesn't matter which)
                         let context_file = &current_files[idx.min(current_files.len() - 1)];
                         match run_file_selector_overlay(context_file, &mut visible_lines_temp, &settings)? {
@@ -172,6 +215,85 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
     Ok(())
 }
 
+/// Helper function to show file selector and return the result
+/// Eliminates code duplication across multiple validation branches
+fn show_file_selector_and_return(
+    file: &str,
+    settings: &Settings,
+) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
+    let mut visible_lines = DEFAULT_VISIBLE_LINES;
+    match run_file_selector_overlay(file, &mut visible_lines, settings)? {
+        SelectorResult::Selected(selected_file) => {
+            Ok((false, Some(selected_file), false, false))
+        }
+        SelectorResult::Quit => {
+            if let Err(e) = crate::session::save_selector_session() {
+                eprintln!("Warning: failed to save selector session: {}", e);
+            }
+            Ok((false, None, true, false))
+        }
+        SelectorResult::Cancelled => {
+            Ok((false, None, true, false))
+        }
+    }
+}
+
+/// Helper function to update undo history timestamp to current file time
+fn update_undo_timestamp(undo_history: &mut UndoHistory, file: &str) {
+    use std::time::SystemTime;
+    if let Ok(metadata) = std::fs::metadata(file) {
+        if let Ok(modified) = metadata.modified() {
+            if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+                undo_history.file_timestamp = Some(duration.as_secs());
+                let _ = undo_history.save(file);
+            }
+        }
+    }
+}
+
+/// Persist editor state (undo history and session) to disk
+/// This consolidates the common pattern of saving both undo history and editor session
+fn persist_editor_state(state: &mut FileViewerState, file: &str) {
+    state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    if let Err(e) = state.undo_history.save(file) {
+        eprintln!("Warning: failed to save undo history: {}", e);
+    }
+    if let Err(e) = crate::session::save_editor_session(file) {
+        eprintln!("Warning: failed to save editor session: {}", e);
+    }
+}
+
+/// Helper to show file selector and handle result in event loop context
+/// Returns Some((modified, next_file, quit, close)) to exit loop, or None to continue
+fn handle_file_selector_in_loop(
+    file: &str,
+    state: &mut FileViewerState,
+    visible_lines: &mut usize,
+    settings: &Settings,
+) -> crossterm::Result<Option<(bool, Option<String>, bool, bool)>> {
+    // Persist state before showing selector
+    state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    if let Err(e) = state.undo_history.save(file) {
+        eprintln!("Warning: failed to save undo history: {}", e);
+    }
+    
+    match run_file_selector_overlay(file, visible_lines, settings)? {
+        SelectorResult::Selected(selected_file) => {
+            Ok(Some((state.modified, Some(selected_file), false, false)))
+        }
+        SelectorResult::Quit => {
+            if let Err(e) = crate::session::save_selector_session() {
+                eprintln!("Warning: failed to save selector session: {}", e);
+            }
+            Ok(Some((state.modified, None, true, false)))
+        }
+        SelectorResult::Cancelled => {
+            state.needs_redraw = true;
+            Ok(None) // Continue loop
+        }
+    }
+}
+
 fn editing_session(file: &str, content: String, settings: &Settings) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
     let mut stdout = io::stdout();
     let mut undo_history = UndoHistory::load(file).unwrap_or_else(|_| UndoHistory::new());
@@ -185,57 +307,18 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         ValidationResult::ModifiedNoUnsaved => {
             // File was modified externally and no unsaved changes - delete stale undo file and go to selector
             let _ = crate::editing::delete_file_history(file);
-            let mut visible_lines = 20;
-            match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                SelectorResult::Selected(selected_file) => {
-                    return Ok((false, Some(selected_file), false, false));
-                }
-                SelectorResult::Quit => {
-                    if let Err(e) = crate::session::save_selector_session() {
-                        eprintln!("Warning: failed to save selector session: {}", e);
-                    }
-                    return Ok((false, None, true, false));
-                }
-                SelectorResult::Cancelled => {
-                    // User cancelled - just quit
-                    return Ok((false, None, true, false));
-                }
-            }
+            return show_file_selector_and_return(file, settings);
         }
         ValidationResult::ModifiedWithUnsaved => {
             // File was modified externally but has unsaved changes - ask user
             if !show_undo_conflict_confirmation()? {
                 // User pressed Esc (No) - go to file selector WITHOUT deleting undo file
                 // This allows them to select the same file again and keep the undo history
-                let mut visible_lines = 20;
-                match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                    SelectorResult::Selected(selected_file) => {
-                        return Ok((false, Some(selected_file), false, false));
-                    }
-                    SelectorResult::Quit => {
-                        if let Err(e) = crate::session::save_selector_session() {
-                            eprintln!("Warning: failed to save selector session: {}", e);
-                        }
-                        return Ok((false, None, true, false));
-                    }
-                    SelectorResult::Cancelled => {
-                        // User cancelled - just quit
-                        return Ok((false, None, true, false));
-                    }
-                }
+                return show_file_selector_and_return(file, settings);
             } else {
                 // User pressed Enter (Yes) - open file anyway with unsaved changes
                 // Update the timestamp to current file time so future validations pass
-                use std::time::SystemTime;
-                if let Ok(metadata) = std::fs::metadata(file) {
-                    if let Ok(modified) = metadata.modified() {
-                        if let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
-                            undo_history.file_timestamp = Some(duration.as_secs());
-                            // Save the updated undo history immediately
-                            let _ = undo_history.save(file);
-                        }
-                    }
-                }
+                update_undo_timestamp(&mut undo_history, file);
             }
         }
     };
@@ -247,6 +330,14 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     };
     
     let (term_width, term_height) = size()?;
+    
+    // Create syntax highlighter with 'static lifetime using Box::leak
+    // This is intentional: the highlighter needs to live for the entire editing session,
+    // and FileViewerState requires a reference with lifetime 'a. Since we only create
+    // ONE highlighter per editing session and the program terminates after editing,
+    // the leaked memory (a few KB for syntax definitions) is acceptable.
+    // Alternative approaches (Rc/Arc or threading through all function calls) would
+    // add complexity or runtime overhead without meaningful benefit.
     let hl = Box::leak(SyntectHighlighter::factory());
     let mut state = FileViewerState::new(term_width, undo_history.clone(), settings, hl);
     state.modified = state.undo_history.modified;
@@ -254,13 +345,13 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let saved_cursor_line = undo_history.cursor_line;
     let saved_cursor_col = undo_history.cursor_col;
     if saved_cursor_line < lines.len() {
-        if saved_cursor_line < state.top_line || saved_cursor_line >= state.top_line + (term_height as usize).saturating_sub(2) {
-            state.top_line = saved_cursor_line.saturating_sub(5);
+        if saved_cursor_line < state.top_line || saved_cursor_line >= state.top_line + (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT) {
+            state.top_line = saved_cursor_line.saturating_sub(CURSOR_CONTEXT_LINES);
         }
         state.cursor_line = saved_cursor_line.saturating_sub(state.top_line);
         if saved_cursor_col <= lines[saved_cursor_line].len() { state.cursor_col = saved_cursor_col; }
     }
-    let mut visible_lines = (term_height as usize).saturating_sub(2);
+    let mut visible_lines = (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT);
     state.needs_redraw = true;
 
     // Track last Esc press time for double-press detection
@@ -272,14 +363,10 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         // Check if we should open file selector after timeout
         if last_esc.timed_out() {
             last_esc.clear();
-            // Persist before selector
-            state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-            if let Err(e) = state.undo_history.save(file) { eprintln!("Warning: failed to save undo history: {}", e); }
-            match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                SelectorResult::Selected(selected_file) => { return Ok((state.modified, Some(selected_file), false, false)); }
-                SelectorResult::Quit => { if let Err(e) = crate::session::save_selector_session() { eprintln!("Warning: failed to save selector session: {}", e); } return Ok((state.modified, None, true, false)); }
-                SelectorResult::Cancelled => { state.needs_redraw = true; continue; }
+            if let Some(result) = handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)? {
+                return Ok(result);
             }
+            continue;
         }
         
         // Use poll with timeout to detect when to open file selector
@@ -288,13 +375,8 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         if !event::poll(timeout)? {
             if last_esc.timed_out() {
                 last_esc.clear();
-                // Persist before selector
-                state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-                if let Err(e) = state.undo_history.save(file) { eprintln!("Warning: failed to save undo history: {}", e); }
-                match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-                    SelectorResult::Selected(selected_file) => { return Ok((state.modified, Some(selected_file), false, false)); }
-                    SelectorResult::Quit => { if let Err(e) = crate::session::save_selector_session() { eprintln!("Warning: failed to save selector session: {}", e); } return Ok((state.modified, None, true, false)); }
-                    SelectorResult::Cancelled => { state.needs_redraw = true; continue; }
+                if let Some(result) = handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)? {
+                    return Ok(result);
                 }
             }
             continue;
@@ -305,9 +387,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                 // Double-Esc processing
                 match last_esc.process_key(&key_event) {
                     EscResult::Double => {
-                        state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-                        if let Err(e) = state.undo_history.save(file) { eprintln!("Warning: failed to save undo history: {}", e); }
-                        if let Err(e) = crate::session::save_editor_session(file) { eprintln!("Warning: failed to save editor session: {}", e); }
+                        persist_editor_state(&mut state, file);
                         return Ok((state.modified, None, true, false));
                     }
                     EscResult::First => { continue; } // wait for second or timeout
@@ -327,9 +407,16 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                 }
             }
             Event::Resize(w, h) => {
-                let absolute_cursor_line = state.absolute_line(); let cursor_col = state.cursor_col; state.term_width = w; visible_lines = (h as usize).saturating_sub(2);
+                let absolute_cursor_line = state.absolute_line();
+                let cursor_col = state.cursor_col;
+                state.term_width = w;
+                visible_lines = (h as usize).saturating_sub(STATUS_LINE_HEIGHT);
                 let (new_top, rel_cursor) = adjust_view_for_resize(state.top_line, absolute_cursor_line, visible_lines, lines.len());
-                state.top_line = new_top; state.cursor_line = rel_cursor; state.cursor_col = cursor_col; execute!(stdout, terminal::Clear(ClearType::All))?; state.needs_redraw = true;
+                state.top_line = new_top;
+                state.cursor_line = rel_cursor;
+                state.cursor_col = cursor_col;
+                execute!(stdout, terminal::Clear(ClearType::All))?;
+                state.needs_redraw = true;
             }
             Event::Mouse(mouse_event) => { handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines); }
             _ => {}
