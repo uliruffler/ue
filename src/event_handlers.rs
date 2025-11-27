@@ -400,10 +400,126 @@ fn handle_navigation(
             state.adjust_cursor_col(&lines_refs); 
             true 
         }
-        KeyCode::Left => { if state.cursor_col > 0 { state.cursor_col -= 1; true } else { false } }
-        KeyCode::Right => { if let Some(line) = lines.get(state.top_line + state.cursor_line) { if state.cursor_col < line.len() { state.cursor_col += 1; true } else { false } } else { false } }
-        KeyCode::Home => { state.cursor_col = 0; true }
-        KeyCode::End => { if let Some(line) = lines.get(state.top_line + state.cursor_line) { state.cursor_col = line.len(); } true }
+        KeyCode::Left => {
+            if state.cursor_col > 0 {
+                state.cursor_col -= 1;
+                true
+            } else {
+                // At beginning of line - wrap to end of previous line
+                let current_absolute = state.top_line + state.cursor_line;
+                if current_absolute > 0 {
+                    // Move to previous line
+                    if state.cursor_line > 0 {
+                        state.cursor_line -= 1;
+                    } else if state.top_line > 0 {
+                        state.top_line -= 1;
+                    }
+                    // Set cursor to end of that line
+                    let new_absolute = state.top_line + state.cursor_line;
+                    if let Some(line) = lines.get(new_absolute) {
+                        state.cursor_col = line.len();
+                    }
+                    true
+                } else {
+                    false
+                }
+            }
+        }
+        KeyCode::Right => {
+            if let Some(line) = lines.get(state.top_line + state.cursor_line) {
+                if state.cursor_col < line.len() {
+                    state.cursor_col += 1;
+                    true
+                } else {
+                    // At end of line - wrap to beginning of next line
+                    let current_absolute = state.top_line + state.cursor_line;
+                    if current_absolute + 1 < lines.len() {
+                        // Move to next line
+                        state.cursor_line += 1;
+                        state.cursor_col = 0;
+                        
+                        // Check if we need to scroll
+                        if state.cursor_line >= visible_lines {
+                            state.top_line += 1;
+                            state.cursor_line = visible_lines - 1;
+                        }
+                        true
+                    } else {
+                        false
+                    }
+                }
+            } else {
+                false
+            }
+        }
+        KeyCode::Home => {
+            if let Some(line) = lines.get(state.top_line + state.cursor_line) {
+                let line_num_width = line_number_width(state.settings);
+                let text_width = state.term_width.saturating_sub(line_num_width) as usize;
+                let tab_width = state.settings.tab_width;
+                
+                // Calculate various positions
+                let vis_line_start = visual_line_start(line, state.cursor_col, text_width, tab_width);
+                let vis_line_first_non_blank = visual_line_first_non_blank(line, state.cursor_col, text_width, tab_width);
+                let logical_first_non_blank = first_non_blank_char(line);
+                
+                // Cycle through positions based on current location
+                let new_pos = if state.cursor_col == vis_line_first_non_blank && vis_line_first_non_blank == vis_line_start {
+                    // At visual line start which is also first non-blank → go to logical first non-blank
+                    if vis_line_start != logical_first_non_blank {
+                        logical_first_non_blank
+                    } else {
+                        // Visual line start IS the logical first non-blank → go to position 0
+                        0
+                    }
+                } else if state.cursor_col == vis_line_first_non_blank {
+                    // At visual line first non-blank (but not at start) → go to vis_line_start
+                    vis_line_start
+                } else if state.cursor_col == vis_line_start {
+                    // At visual line start → go to logical first non-blank
+                    logical_first_non_blank
+                } else if state.cursor_col == logical_first_non_blank {
+                    // At logical first non-blank → go to logical start (0)
+                    0
+                } else if state.cursor_col == 0 {
+                    // At logical start → go to visual line first non-blank
+                    vis_line_first_non_blank
+                } else {
+                    // Anywhere else → go to visual line first non-blank
+                    vis_line_first_non_blank
+                };
+                
+                state.cursor_col = new_pos;
+                true
+            } else {
+                state.cursor_col = 0;
+                true
+            }
+        }
+        KeyCode::End => {
+            if let Some(line) = lines.get(state.top_line + state.cursor_line) {
+                let line_num_width = line_number_width(state.settings);
+                let text_width = state.term_width.saturating_sub(line_num_width) as usize;
+                let tab_width = state.settings.tab_width;
+                
+                // Calculate positions
+                let vis_line_end = visual_line_end(line, state.cursor_col, text_width, tab_width);
+                let logical_end = line.len();
+                
+                // If already at visual line end and visual end is less than logical end, go to logical end
+                // Otherwise go to visual line end
+                let new_pos = if state.cursor_col == vis_line_end && vis_line_end < logical_end {
+                    logical_end
+                } else {
+                    vis_line_end
+                };
+                
+                state.cursor_col = new_pos;
+                true
+            } else {
+                true
+            }
+        }
         KeyCode::PageDown => { let new_top = (state.top_line + visible_lines).min(lines.len().saturating_sub(visible_lines)); state.top_line = new_top; if state.top_line + state.cursor_line >= lines.len() { state.cursor_line = lines.len().saturating_sub(state.top_line + 1); } true }
         KeyCode::PageUp => { state.top_line = state.top_line.saturating_sub(visible_lines); true }
         _ => false,
@@ -545,6 +661,102 @@ fn word_right(state: &mut FileViewerState, lines: &[String]) -> bool {
     state.cursor_col = i; true
 }
 fn is_word_char(c: char) -> bool { c.is_alphanumeric() || c == '_' }
+
+/// Get the character index of the first non-blank character in the line
+fn first_non_blank_char(line: &str) -> usize {
+    line.chars().position(|c| !c.is_whitespace()).unwrap_or(0)
+}
+
+/// Calculate the end position of the current visual line within a wrapped logical line
+/// Returns the character index of the last character on the current visual line
+fn visual_line_end(line: &str, cursor_col: usize, text_width: usize, tab_width: usize) -> usize {
+    use crate::coordinates::visual_width_up_to;
+    
+    if text_width == 0 || line.is_empty() {
+        return line.len();
+    }
+    
+    let visual_col = visual_width_up_to(line, cursor_col, tab_width);
+    let current_wrap_line = visual_col / text_width;
+    let next_wrap_start = (current_wrap_line + 1) * text_width;
+    
+    // Find the last character that fits on the current visual line
+    let mut current_visual = 0;
+    let mut last_char_on_line = 0;
+    
+    for (char_idx, ch) in line.chars().enumerate() {
+        // Check if adding this character would exceed the visual line boundary
+        let char_width = if ch == '\t' {
+            tab_width - (current_visual % tab_width)
+        } else {
+            1
+        };
+        
+        if current_visual + char_width > next_wrap_start {
+            // This character would start on the next visual line
+            // Return the index just after the last character that fits
+            return last_char_on_line;
+        }
+        
+        // This character fits on the current visual line
+        current_visual += char_width;
+        last_char_on_line = char_idx + 1; // Position after this character
+    }
+    
+    // We're on the last visual line, return end of logical line
+    line.len()
+}
+
+/// Calculate the start position of the current visual line within a wrapped logical line
+/// Returns the character index of the first character on the current visual line
+fn visual_line_start(line: &str, cursor_col: usize, text_width: usize, tab_width: usize) -> usize {
+    use crate::coordinates::visual_width_up_to;
+    
+    if text_width == 0 {
+        return 0;
+    }
+    
+    let visual_col = visual_width_up_to(line, cursor_col, tab_width);
+    let current_wrap_line = visual_col / text_width;
+    let wrap_start_visual = current_wrap_line * text_width;
+    
+    if wrap_start_visual == 0 {
+        return 0;
+    }
+    
+    // Find the character index where this visual line starts
+    let mut current_visual = 0;
+    for (char_idx, ch) in line.chars().enumerate() {
+        if current_visual >= wrap_start_visual {
+            return char_idx;
+        }
+        if ch == '\t' {
+            let spaces_to_next_tab = tab_width - (current_visual % tab_width);
+            current_visual += spaces_to_next_tab;
+        } else {
+            current_visual += 1;
+        }
+    }
+    
+    0
+}
+
+/// Get the first non-blank character position in the current visual line
+fn visual_line_first_non_blank(line: &str, cursor_col: usize, text_width: usize, tab_width: usize) -> usize {
+    let vis_start = visual_line_start(line, cursor_col, text_width, tab_width);
+    let vis_end = visual_line_end(line, cursor_col, text_width, tab_width);
+    
+    // Find first non-blank in the range [vis_start, vis_end]
+    let chars: Vec<char> = line.chars().collect();
+    for i in vis_start..=vis_end.min(chars.len().saturating_sub(1)) {
+        if i < chars.len() && !chars[i].is_whitespace() {
+            return i;
+        }
+    }
+    
+    vis_start
+}
+
 fn scroll_without_cursor(state: &mut FileViewerState, lines: &[String], visible_lines: usize, delta: isize) -> bool {
     if delta == 0 { return false; }
     let old_top = state.top_line;
