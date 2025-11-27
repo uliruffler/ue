@@ -212,10 +212,29 @@ mod tests {
     use crossterm::event::{KeyCode, KeyModifiers};
     use crate::env::set_temp_home; // shared environment lock
 
+    // Helper function to create test KeyBindings with default values
+    fn create_test_keybindings() -> KeyBindings {
+        KeyBindings {
+            quit: "Esc".into(),
+            copy: "Ctrl+c".into(),
+            paste: "Ctrl+v".into(),
+            cut: "Ctrl+x".into(),
+            close: "Ctrl+w".into(),
+            save: "Ctrl+s".into(),
+            undo: "Ctrl+z".into(),
+            redo: "Ctrl+y".into(),
+            file_selector: "Esc".into(),
+            find: "Ctrl+f".into(),
+            find_next: "F3".into(),
+            find_previous: "Shift+F3".into(),
+            goto_line: "Ctrl+g".into(),
+        }
+    }
+
     #[test]
     fn ctrl_letter_matches() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into(), goto_line:"Ctrl+g".into() };
+        let kb = create_test_keybindings();
         assert!(kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
         assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::ALT));
     }
@@ -223,7 +242,7 @@ mod tests {
     #[test]
     fn esc_quit_variants() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Escape".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into(), goto_line:"Ctrl+g".into() };
+        let kb = create_test_keybindings();
         assert!(kb.quit_matches(&KeyCode::Esc, &KeyModifiers::empty()));
         assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
     }
@@ -231,7 +250,8 @@ mod tests {
     #[test]
     fn shift_modifier_detection() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+Shift+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into(), goto_line:"Ctrl+g".into() };
+        let mut kb = create_test_keybindings();
+        kb.copy = "Ctrl+Shift+c".into();
         let mods = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
         assert!(kb.copy_matches(&KeyCode::Char('c'), &mods));
         let missing_shift = KeyModifiers::CONTROL;
@@ -262,21 +282,8 @@ mod tests {
     #[test]
     fn double_esc_keybinding() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { 
-            quit: "Esc Esc".into(), 
-            copy: "Ctrl+c".into(), 
-            paste: "Ctrl+v".into(), 
-            cut: "Ctrl+x".into(), 
-            close: "Ctrl+w".into(), 
-            save: "Ctrl+s".into(), 
-            undo: "Ctrl+z".into(), 
-            redo: "Ctrl+y".into(), 
-            file_selector: "Esc".into(),
-            find: "Ctrl+f".into(),
-            find_next: "F3".into(),
-            find_previous: "Shift+F3".into(),
-            goto_line: "Ctrl+g".into(),
-        };
+        let mut kb = create_test_keybindings();
+        kb.quit = "Esc Esc".into();
         
         // Esc without modifiers should open file selector
         assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
@@ -313,21 +320,7 @@ mod tests {
     #[test]
     fn f_key_parsing() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings {
-            quit: "Esc".into(),
-            copy: "Ctrl+c".into(),
-            paste: "Ctrl+v".into(),
-            cut: "Ctrl+x".into(),
-            close: "Ctrl+w".into(),
-            save: "Ctrl+s".into(),
-            undo: "Ctrl+z".into(),
-            redo: "Ctrl+y".into(),
-            file_selector: "Esc".into(),
-            find: "Ctrl+f".into(),
-            find_next: "F3".into(),
-            find_previous: "Shift+F3".into(),
-            goto_line: "Ctrl+g".into(),
-        };
+        let kb = create_test_keybindings();
         
         // Test F3 for find next (no modifiers)
         assert!(kb.find_next_matches(&KeyCode::F(3), &KeyModifiers::empty()));
@@ -401,5 +394,148 @@ mod tests {
         assert!(!settings.keybindings.find_next.is_empty());
         assert!(!settings.keybindings.find_previous.is_empty());
         assert!(!settings.keybindings.goto_line.is_empty());
+    }
+
+    #[test]
+    fn goto_line_keybinding_matches() {
+        let (_tmp, _guard) = set_temp_home();
+        let kb = create_test_keybindings();
+        
+        // Test Ctrl+g matches goto_line
+        assert!(kb.goto_line_matches(&KeyCode::Char('g'), &KeyModifiers::CONTROL));
+        
+        // Test wrong modifiers don't match
+        assert!(!kb.goto_line_matches(&KeyCode::Char('g'), &KeyModifiers::empty()));
+        assert!(!kb.goto_line_matches(&KeyCode::Char('g'), &KeyModifiers::ALT));
+        assert!(!kb.goto_line_matches(&KeyCode::Char('g'), &KeyModifiers::SHIFT));
+    }
+
+    #[test]
+    fn alt_modifier_parsing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut kb = create_test_keybindings();
+        kb.copy = "Alt+c".into();
+        
+        // Should match Alt+c
+        assert!(kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::ALT));
+        
+        // Should not match without Alt
+        assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::empty()));
+        assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn case_insensitive_keybinding_parsing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut kb = create_test_keybindings();
+        
+        // Test uppercase modifiers work
+        kb.copy = "CTRL+C".into();
+        assert!(kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
+        
+        // Test mixed case works
+        kb.paste = "CtRl+V".into();
+        assert!(kb.paste_matches(&KeyCode::Char('v'), &KeyModifiers::CONTROL));
+        
+        // Test uppercase key names work
+        kb.quit = "ESC".into();
+        assert!(kb.quit_matches(&KeyCode::Esc, &KeyModifiers::empty()));
+    }
+
+    #[test]
+    fn invalid_keybinding_strings() {
+        // Empty string should not match
+        assert!(!parse_keybinding("", &KeyCode::Char('a'), &KeyModifiers::empty()));
+        
+        // Unknown key should not match
+        assert!(!parse_keybinding("Ctrl+unknown", &KeyCode::Char('a'), &KeyModifiers::CONTROL));
+        
+        // Wrong key should not match
+        assert!(!parse_keybinding("Ctrl+b", &KeyCode::Char('a'), &KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn named_colors_parsing() {
+        // Test named colors
+        assert!(Settings::parse_color("black").is_some());
+        assert!(Settings::parse_color("blue").is_some());
+        assert!(Settings::parse_color("darkblue").is_some());
+        assert!(Settings::parse_color("dark_grey").is_some());
+        assert!(Settings::parse_color("darkgrey").is_some());
+        assert!(Settings::parse_color("grey").is_some());
+        assert!(Settings::parse_color("gray").is_some());
+        assert!(Settings::parse_color("white").is_some());
+        
+        // Test case insensitivity
+        assert!(Settings::parse_color("BLACK").is_some());
+        assert!(Settings::parse_color("Blue").is_some());
+        assert!(Settings::parse_color("DARKBLUE").is_some());
+        
+        // Test whitespace trimming
+        assert!(Settings::parse_color("  blue  ").is_some());
+        assert!(Settings::parse_color("\tblack\t").is_some());
+    }
+
+    #[test]
+    fn control_variants_parsing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut kb = create_test_keybindings();
+        
+        // Test "ctrl" variant
+        kb.copy = "ctrl+c".into();
+        assert!(kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
+        
+        // Test "control" variant
+        kb.paste = "control+v".into();
+        assert!(kb.paste_matches(&KeyCode::Char('v'), &KeyModifiers::CONTROL));
+    }
+
+    #[test]
+    fn multiple_modifier_combinations() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut kb = create_test_keybindings();
+        
+        // Test Ctrl+Alt combination
+        kb.copy = "Ctrl+Alt+c".into();
+        let ctrl_alt = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        assert!(kb.copy_matches(&KeyCode::Char('c'), &ctrl_alt));
+        assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
+        assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::ALT));
+        
+        // Test Ctrl+Shift+Alt combination
+        kb.paste = "Ctrl+Shift+Alt+v".into();
+        let all_mods = KeyModifiers::CONTROL | KeyModifiers::SHIFT | KeyModifiers::ALT;
+        assert!(kb.paste_matches(&KeyCode::Char('v'), &all_mods));
+        assert!(!kb.paste_matches(&KeyCode::Char('v'), &ctrl_alt));
+    }
+
+    #[test]
+    fn special_keys_parsing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut kb = create_test_keybindings();
+        
+        // Test Enter key
+        kb.copy = "enter".into();
+        assert!(kb.copy_matches(&KeyCode::Enter, &KeyModifiers::empty()));
+        
+        // Test Return alias
+        kb.paste = "return".into();
+        assert!(kb.paste_matches(&KeyCode::Enter, &KeyModifiers::empty()));
+        
+        // Test Tab key
+        kb.cut = "tab".into();
+        assert!(kb.cut_matches(&KeyCode::Tab, &KeyModifiers::empty()));
+        
+        // Test Backspace key
+        kb.undo = "backspace".into();
+        assert!(kb.undo_matches(&KeyCode::Backspace, &KeyModifiers::empty()));
+        
+        // Test Delete key
+        kb.redo = "delete".into();
+        assert!(kb.redo_matches(&KeyCode::Delete, &KeyModifiers::empty()));
+        
+        // Test Del alias
+        kb.close = "del".into();
+        assert!(kb.close_matches(&KeyCode::Delete, &KeyModifiers::empty()));
     }
 }
