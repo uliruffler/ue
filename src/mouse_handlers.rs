@@ -20,15 +20,22 @@ pub(crate) fn handle_mouse_event(
     }
     match kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            let pos_opt = visual_to_logical_position(state, lines, visual_line, column);
-            if let Some((logical_line, col)) = pos_opt {
-                let clicked = (logical_line, col.min(lines[logical_line].len()));
-                if state.is_point_in_selection(clicked) {
-                    // Start drag operation
-                    state.start_drag();
-                } else {
-                    // Normal cursor move
-                    handle_mouse_click(state, lines, visual_line, column);
+            // Check if click is on line number area
+            let line_num_width = crate::coordinates::line_number_width(state.settings);
+            if column < line_num_width {
+                // Click on line number - select entire line
+                handle_line_number_click(state, lines, visual_line);
+            } else {
+                let pos_opt = visual_to_logical_position(state, lines, visual_line, column);
+                if let Some((logical_line, col)) = pos_opt {
+                    let clicked = (logical_line, col.min(lines[logical_line].len()));
+                    if state.is_point_in_selection(clicked) {
+                        // Start drag operation
+                        state.start_drag();
+                    } else {
+                        // Normal cursor move
+                        handle_mouse_click(state, lines, visual_line, column);
+                    }
                 }
             }
         }
@@ -39,7 +46,14 @@ pub(crate) fn handle_mouse_event(
                     state.needs_redraw = true; // could render a placeholder caret
                 }
             } else {
-                handle_mouse_drag(state, lines, visual_line, column);
+                // Check if dragging on line number area
+                let line_num_width = crate::coordinates::line_number_width(state.settings);
+                if column < line_num_width {
+                    // Dragging on line number - extend line selection
+                    handle_line_number_drag(state, lines, visual_line);
+                } else {
+                    handle_mouse_drag(state, lines, visual_line, column);
+                }
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
@@ -98,6 +112,119 @@ fn handle_mouse_drag(
         state.update_selection();
         state.needs_redraw = true;
     }
+}
+/// Handle click on line number area to select entire line
+fn handle_line_number_click(
+    state: &mut FileViewerState,
+    lines: &[String],
+    visual_line: usize,
+) {
+    // Find the logical line corresponding to this visual line
+    if let Some(logical_line) = visual_line_to_logical_line(state, lines, visual_line)
+        && logical_line < lines.len() {
+        restore_cursor_to_screen(state);
+        
+        // Select the entire line
+        // Start of line: (logical_line, 0)
+        // End of line: (logical_line, line_length) or start of next line
+        state.selection_start = Some((logical_line, 0));
+        
+        // Position cursor at end of line
+        state.cursor_line = logical_line.saturating_sub(state.top_line);
+        state.cursor_col = lines[logical_line].len();
+        
+        // Set selection end to include the entire line
+        // If there's a next line, go to start of it; otherwise end of current line
+        if logical_line + 1 < lines.len() {
+            state.selection_end = Some((logical_line + 1, 0));
+        } else {
+            state.selection_end = Some((logical_line, lines[logical_line].len()));
+        }
+        
+        state.mouse_dragging = true;
+        state.needs_redraw = true;
+    }
+}
+/// Handle drag on line number area to extend line selection
+fn handle_line_number_drag(
+    state: &mut FileViewerState,
+    lines: &[String],
+    visual_line: usize,
+) {
+    if !state.mouse_dragging {
+        return;
+    }
+    
+    // Find the logical line corresponding to this visual line
+    if let Some(logical_line) = visual_line_to_logical_line(state, lines, visual_line)
+        && logical_line < lines.len() {
+        restore_cursor_to_screen(state);
+        
+        // Extend selection to include entire lines
+        if let Some(start) = state.selection_start {
+            let start_line = start.0;
+            
+            if logical_line >= start_line {
+                // Dragging downward - select from start of start_line to end of current line
+                state.selection_start = Some((start_line, 0));
+                
+                // Position cursor at end of dragged line
+                state.cursor_line = logical_line.saturating_sub(state.top_line);
+                state.cursor_col = lines[logical_line].len();
+                
+                // Extend to start of next line or end of current line
+                if logical_line + 1 < lines.len() {
+                    state.selection_end = Some((logical_line + 1, 0));
+                } else {
+                    state.selection_end = Some((logical_line, lines[logical_line].len()));
+                }
+            } else {
+                // Dragging upward - select from start of current line to end of start_line
+                state.selection_start = Some((logical_line, 0));
+                
+                // Position cursor at start of dragged line
+                state.cursor_line = logical_line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                
+                // Extend to start of line after start_line or end of start_line
+                if start_line + 1 < lines.len() {
+                    state.selection_end = Some((start_line + 1, 0));
+                } else {
+                    state.selection_end = Some((start_line, lines[start_line].len()));
+                }
+            }
+            
+            state.needs_redraw = true;
+        }
+    }
+}
+/// Convert visual line to logical line index
+fn visual_line_to_logical_line(
+    state: &FileViewerState,
+    lines: &[String],
+    visual_line: usize,
+) -> Option<usize> {
+    use crate::coordinates::{calculate_wrapped_lines_for_line, line_number_width};
+    
+    let line_num_width = line_number_width(state.settings);
+    let text_width = state.term_width.saturating_sub(line_num_width);
+    let tab_width = state.settings.tab_width;
+    
+    let mut current_visual_line = 0;
+    let mut logical_line = state.top_line;
+    
+    while logical_line < lines.len() {
+        let wrapped_lines = calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width) as usize;
+        
+        if current_visual_line + wrapped_lines > visual_line {
+            return Some(logical_line);
+        }
+        
+        current_visual_line += wrapped_lines;
+        logical_line += 1;
+    }
+    
+    None
 }
 /// Handle mouse scroll down event
 fn handle_mouse_scroll_down(
@@ -355,5 +482,119 @@ mod tests {
         handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
         assert!(!state.mouse_dragging);
     }
-}
 
+    #[test]
+    fn mouse_click_on_line_number_selects_entire_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "first line".to_string(),
+            "second line".to_string(),
+            "third line".to_string(),
+        ];
+        
+        // Click on line number area (column 0, assuming line numbers are shown)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0, // In line number area
+            row: 2, // Second line (row 0 is header, row 1 is first line)
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        
+        // Should select the entire second line (index 1)
+        assert_eq!(state.selection_start, Some((1, 0)));
+        assert_eq!(state.selection_end, Some((2, 0))); // Start of next line
+        assert!(state.mouse_dragging);
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn mouse_drag_on_line_number_extends_line_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "first line".to_string(),
+            "second line".to_string(),
+            "third line".to_string(),
+            "fourth line".to_string(),
+        ];
+        
+        // First click on line 1
+        state.selection_start = Some((1, 0));
+        state.selection_end = Some((2, 0));
+        state.mouse_dragging = true;
+        
+        // Drag to line 3
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: 0, // In line number area
+            row: 4, // Fourth line (row 0 is header)
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        
+        // Should extend selection from line 1 to line 3
+        assert_eq!(state.selection_start, Some((1, 0)));
+        assert_eq!(state.selection_end, Some((3, lines[3].len()))); // Start of line after third
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn visual_line_to_logical_line_works_correctly() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let lines = vec![
+            "line 0".to_string(),
+            "line 1".to_string(),
+            "line 2".to_string(),
+        ];
+        
+        state.top_line = 0;
+        
+        // Visual line 0 should map to logical line 0
+        let logical = visual_line_to_logical_line(&state, &lines, 0);
+        assert_eq!(logical, Some(0));
+        
+        // Visual line 1 should map to logical line 1
+        let logical = visual_line_to_logical_line(&state, &lines, 1);
+        assert_eq!(logical, Some(1));
+        
+        // Visual line 2 should map to logical line 2
+        let logical = visual_line_to_logical_line(&state, &lines, 2);
+        assert_eq!(logical, Some(2));
+    }
+
+    #[test]
+    fn line_selection_with_scrolling() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![];
+        for i in 0..20 {
+            lines.push(format!("line {}", i));
+        }
+        
+        // Scroll down a bit
+        state.top_line = 5;
+        
+        // Click on line number for first visible line (logical line 5)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: 0, // In line number area
+            row: 1, // First visible line
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
+        
+        // Should select logical line 5
+        assert_eq!(state.selection_start, Some((5, 0)));
+        assert_eq!(state.selection_end, Some((6, 0)));
+    }
+}
