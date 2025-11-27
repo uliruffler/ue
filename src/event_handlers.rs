@@ -87,6 +87,17 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
     
+    // Handle go to line (configurable keybinding, default Ctrl+G)
+    if settings.keybindings.goto_line_matches(&code, &modifiers) {
+        state.goto_line_active = true;
+        // Pre-fill with current line number (1-indexed)
+        state.goto_line_input = (state.absolute_line() + 1).to_string();
+        state.goto_line_cursor_pos = state.goto_line_input.chars().count(); // Position at end
+        state.goto_line_typing_started = false; // Mark as not yet typing
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    
     // Handle find next (configurable keybinding, default F3)
     // Note: This must be before find mode input handling so it works when find is active
     if settings.keybindings.find_next_matches(&code, &modifiers) {
@@ -115,6 +126,11 @@ pub(crate) fn handle_key_event(
             // Find mode was closed, continue normal processing
         }
         return Ok((false, false));
+    }
+    
+    // If in go to line mode, handle input
+    if state.goto_line_active {
+        return handle_goto_line_input(state, lines, key_event, visible_lines);
     }
     
     // Check for exit commands
@@ -545,6 +561,150 @@ fn scroll_without_cursor(state: &mut FileViewerState, lines: &[String], visible_
     state.top_line != old_top
 }
 
+/// Handle input when in go to line mode
+/// Returns (should_quit, should_close) tuple
+fn handle_goto_line_input(
+    state: &mut FileViewerState,
+    lines: &[String],
+    key_event: KeyEvent,
+    visible_lines: usize,
+) -> Result<(bool, bool), std::io::Error> {
+    use crossterm::event::KeyCode;
+    
+    let KeyEvent { code, modifiers, .. } = key_event;
+    
+    match code {
+        KeyCode::Enter => {
+            // Parse line number and jump to it
+            if let Ok(line_num) = state.goto_line_input.parse::<usize>()
+                && line_num > 0 && line_num <= lines.len() {
+                // Convert to 0-indexed
+                let target_line = line_num - 1;
+                
+                // Jump to the target line
+                state.top_line = target_line.saturating_sub(visible_lines / 2);
+                state.top_line = state.top_line.min(lines.len().saturating_sub(1));
+                state.cursor_line = target_line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                
+                // Clear saved cursor state
+                state.saved_absolute_cursor = None;
+                state.saved_scroll_state = None;
+            }
+            
+            // Exit go to line mode
+            state.goto_line_active = false;
+            state.goto_line_input.clear();
+            state.goto_line_cursor_pos = 0;
+            state.goto_line_typing_started = false;
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        KeyCode::Char(c) if modifiers.is_empty() => {
+            // Only allow digits
+            if c.is_ascii_digit() {
+                if !state.goto_line_typing_started {
+                    // First character typed - replace the pre-filled value
+                    state.goto_line_input.clear();
+                    state.goto_line_cursor_pos = 0;
+                    state.goto_line_typing_started = true;
+                }
+                // Insert character at cursor position
+                let chars: Vec<char> = state.goto_line_input.chars().collect();
+                state.goto_line_input = chars.iter().take(state.goto_line_cursor_pos)
+                    .chain(std::iter::once(&c))
+                    .chain(chars.iter().skip(state.goto_line_cursor_pos))
+                    .collect();
+                state.goto_line_cursor_pos += 1;
+                state.needs_redraw = true;
+            }
+            return Ok((false, false));
+        }
+        KeyCode::Backspace if modifiers.is_empty() => {
+            if !state.goto_line_typing_started {
+                // If backspace is pressed before typing, clear the pre-filled value
+                state.goto_line_input.clear();
+                state.goto_line_cursor_pos = 0;
+                state.goto_line_typing_started = true;
+            } else if state.goto_line_cursor_pos > 0 {
+                // Delete character before cursor
+                let chars: Vec<char> = state.goto_line_input.chars().collect();
+                state.goto_line_input = chars.iter().take(state.goto_line_cursor_pos - 1)
+                    .chain(chars.iter().skip(state.goto_line_cursor_pos))
+                    .collect();
+                state.goto_line_cursor_pos -= 1;
+            }
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        KeyCode::Delete if modifiers.is_empty() => {
+            if !state.goto_line_typing_started {
+                // If delete is pressed before typing, clear the pre-filled value
+                state.goto_line_input.clear();
+                state.goto_line_cursor_pos = 0;
+                state.goto_line_typing_started = true;
+            } else {
+                // Delete character at cursor
+                let chars: Vec<char> = state.goto_line_input.chars().collect();
+                if state.goto_line_cursor_pos < chars.len() {
+                    state.goto_line_input = chars.iter().take(state.goto_line_cursor_pos)
+                        .chain(chars.iter().skip(state.goto_line_cursor_pos + 1))
+                        .collect();
+                }
+            }
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        KeyCode::Left => {
+            // Moving cursor unselects the line number and allows editing
+            if !state.goto_line_typing_started {
+                state.goto_line_typing_started = true;
+                // Position cursor at end (before colon conceptually)
+                state.goto_line_cursor_pos = state.goto_line_input.chars().count();
+            } else if state.goto_line_cursor_pos > 0 {
+                state.goto_line_cursor_pos -= 1;
+            }
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        KeyCode::Right => {
+            // Moving cursor unselects the line number and allows editing
+            if !state.goto_line_typing_started {
+                state.goto_line_typing_started = true;
+                // Position cursor at end
+                state.goto_line_cursor_pos = state.goto_line_input.chars().count();
+            } else {
+                let len = state.goto_line_input.chars().count();
+                if state.goto_line_cursor_pos < len {
+                    state.goto_line_cursor_pos += 1;
+                }
+            }
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        KeyCode::Home => {
+            if !state.goto_line_typing_started {
+                state.goto_line_typing_started = true;
+            }
+            state.goto_line_cursor_pos = 0;
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        KeyCode::End => {
+            if !state.goto_line_typing_started {
+                state.goto_line_typing_started = true;
+            }
+            state.goto_line_cursor_pos = state.goto_line_input.chars().count();
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+        _ => {
+            // Ignore other keys
+            return Ok((false, false));
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -572,5 +732,133 @@ mod tests {
         assert_eq!(state.absolute_line(), 15, "Absolute cursor should remain after scroll down");
         super::scroll_without_cursor(&mut state, &lines, 20, -3);
         assert_eq!(state.absolute_line(), 15, "Absolute cursor should remain after scroll up");
+    }
+    #[test]
+    fn goto_line_activates_on_ctrl_g() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(100);
+        state.top_line = 10;
+        state.cursor_line = 0;
+        let key_event = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+        let settings = state.settings;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert!(state.goto_line_active);
+        assert_eq!(state.goto_line_input, "11");
+        assert!(state.needs_redraw);
+    }
+    #[test]
+    fn goto_line_accepts_digits() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        
+        state.goto_line_active = true;
+        state.goto_line_input = "1".to_string();
+        state.goto_line_cursor_pos = 1; // Cursor at end
+        state.goto_line_typing_started = true; // Already typing, so append
+        
+        let key_event = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::empty());
+        let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
+        assert!(result.is_ok());
+        assert_eq!(state.goto_line_input, "15");
+    }
+    #[test]
+    fn goto_line_ignores_non_digits() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        state.goto_line_active = true;
+        state.goto_line_input = "10".to_string();
+        let key_event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::empty());
+        let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
+        assert!(result.is_ok());
+        assert_eq!(state.goto_line_input, "10");
+    }
+    #[test]
+    fn goto_line_backspace_deletes_char() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        
+        state.goto_line_active = true;
+        state.goto_line_input = "123".to_string();
+        state.goto_line_cursor_pos = 3; // Cursor at end
+        state.goto_line_typing_started = true; // Already typing, so delete
+        
+        let key_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
+        let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
+        assert!(result.is_ok());
+        assert_eq!(state.goto_line_input, "12");
+    }
+
+    #[test]
+    fn goto_line_first_digit_replaces_prefill() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        
+        state.goto_line_active = true;
+        state.goto_line_input = "42".to_string(); // Pre-filled
+        state.goto_line_typing_started = false; // Not yet typing
+        
+        let key_event = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::empty());
+        let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
+        assert!(result.is_ok());
+        assert_eq!(state.goto_line_input, "5"); // Should replace, not append
+        assert!(state.goto_line_typing_started);
+    }
+
+    #[test]
+    fn goto_line_enter_jumps_to_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        state.goto_line_active = true;
+        state.goto_line_input = "50".to_string();
+        state.top_line = 0;
+        state.cursor_line = 0;
+        let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
+        assert!(result.is_ok());
+        assert_eq!(state.absolute_line(), 49);
+        assert!(!state.goto_line_active);
+        assert_eq!(state.goto_line_input, "");
+    }
+
+    #[test]
+    fn goto_line_arrow_keys_unselect() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        
+        state.goto_line_active = true;
+        state.goto_line_input = "50".to_string();
+        state.goto_line_typing_started = false; // Selected
+        
+        // Press Left arrow
+        let key_event = KeyEvent::new(KeyCode::Left, KeyModifiers::empty());
+        let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
+        assert!(result.is_ok());
+        
+        // Should still be in goto_line mode, but typing started (unselected)
+        assert!(state.goto_line_active);
+        assert!(state.goto_line_typing_started);
+        assert_eq!(state.goto_line_input, "50"); // Input unchanged
+    }
+
+    #[test]
+    fn goto_line_centers_view() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let lines = create_test_lines(100);
+        let visible_lines = 20;
+        state.goto_line_active = true;
+        state.goto_line_input = "50".to_string();
+        let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        let _ = handle_goto_line_input(&mut state, &lines, key_event, visible_lines);
+        assert!(state.top_line >= 35 && state.top_line <= 45);
+        assert_eq!(state.absolute_line(), 49);
     }
 }

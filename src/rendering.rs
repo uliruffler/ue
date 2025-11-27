@@ -71,6 +71,40 @@ fn render_header(
     Ok(())
 }
 
+/// Render position info (LINE:COL) with the line number portion highlighted
+fn render_goto_position_highlighted(
+    stdout: &mut impl Write,
+    position_info: &str,
+    show_selection: bool,
+) -> Result<(), std::io::Error> {
+    use crossterm::style::Attribute;
+    
+    // Find the colon position
+    if let Some(colon_pos) = position_info.find(':') {
+        // Highlight the line number part (before colon) only if selection should be shown
+        let line_part = &position_info[..colon_pos];
+        let col_part = &position_info[colon_pos..]; // Includes the colon
+        
+        if show_selection {
+            // Render line number with inverted colors (selection)
+            execute!(stdout, crossterm::style::SetAttribute(Attribute::Reverse))?;
+            write!(stdout, "{}", line_part)?;
+            execute!(stdout, crossterm::style::SetAttribute(Attribute::NoReverse))?;
+        } else {
+            // Render normally without selection
+            write!(stdout, "{}", line_part)?;
+        }
+        
+        // Render colon and column normally
+        write!(stdout, "{}", col_part)?;
+    } else {
+        // No colon found, just render normally
+        write!(stdout, "{}", position_info)?;
+    }
+    
+    Ok(())
+}
+
 fn render_footer(
     stdout: &mut impl Write,
     state: &FileViewerState,
@@ -130,10 +164,18 @@ fn render_footer(
         execute!(stdout, cursor::Show)?;
         return Ok(());
     }
+    
     // Normal footer with position info (or error message)
     let line_num = state.absolute_line() + 1;
     let col_num = state.cursor_col + 1;
-    let position_info = format!("{}:{}", line_num, col_num);
+    
+    // In goto_line mode, use the input instead of actual line number
+    let position_info = if state.goto_line_active {
+        format!("{}:{}", state.goto_line_input, col_num)
+    } else {
+        format!("{}:{}", line_num, col_num)
+    };
+    
     let total_width = state.term_width as usize;
     let digits = state.settings.appearance.line_number_digits as usize;
     let mut bottom_number_str = String::new();
@@ -171,16 +213,30 @@ fn render_footer(
         }
     } else if position_info.len() >= remaining_width {
         let truncated = &position_info[position_info.len() - remaining_width..];
-        write!(stdout, "{}", truncated)?;
+        if state.goto_line_active {
+            // Render with line number portion highlighted only if not yet typing
+            let show_selection = !state.goto_line_typing_started;
+            render_goto_position_highlighted(stdout, truncated, show_selection)?;
+        } else {
+            write!(stdout, "{}", truncated)?;
+        }
     } else {
         let pad = remaining_width - position_info.len();
         for _ in 0..pad { write!(stdout, " ")?; }
-        write!(stdout, "{}", position_info)?;
+        
+        if state.goto_line_active {
+            // Render with line number portion highlighted only if not yet typing
+            let show_selection = !state.goto_line_typing_started;
+            render_goto_position_highlighted(stdout, &position_info, show_selection)?;
+        } else {
+            write!(stdout, "{}", position_info)?;
+        }
     }
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
     execute!(stdout, ResetColor)?;
     Ok(())
 }
+
 
 fn render_visible_lines(
     stdout: &mut impl Write,
@@ -395,6 +451,47 @@ fn position_cursor(
 ) -> Result<(), std::io::Error> {
     // If in find mode, cursor is already positioned in the search field by render_footer
     if state.find_active {
+        return Ok(());
+    }
+    
+    // If in goto_line mode, position cursor in the footer at the line number position
+    if state.goto_line_active {
+        let col_num = state.cursor_col + 1;
+        let position_info = format!("{}:{}", state.goto_line_input, col_num);
+        
+        // Calculate where the position info is on screen
+        let total_width = state.term_width as usize;
+        let digits = state.settings.appearance.line_number_digits as usize;
+        let left_len = if digits > 0 { digits + 1 } else { 0 };
+        let remaining_width = total_width.saturating_sub(left_len);
+        
+        // Cursor should be at goto_line_cursor_pos within the line number part
+        let cursor_x = if position_info.len() >= remaining_width {
+            // Truncated case - need to calculate differently
+            let truncated = &position_info[position_info.len() - remaining_width..];
+            if let Some(colon_pos) = truncated.find(':') {
+                // Calculate cursor position relative to start of truncated string
+                let cursor_pos_in_truncated = state.goto_line_cursor_pos.min(colon_pos);
+                (left_len + cursor_pos_in_truncated) as u16
+            } else {
+                (left_len + state.goto_line_cursor_pos.min(truncated.len())) as u16
+            }
+        } else {
+            // Normal case - position info is padded and right-aligned
+            let pad = remaining_width - position_info.len();
+            // Find the colon position in the position_info
+            if let Some(colon_pos) = position_info.find(':') {
+                let cursor_offset = state.goto_line_cursor_pos.min(colon_pos);
+                (left_len + pad + cursor_offset) as u16
+            } else {
+                (left_len + pad + state.goto_line_cursor_pos.min(position_info.len())) as u16
+            }
+        };
+        
+        let cursor_y = (visible_lines + 1) as u16;
+        execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+        apply_cursor_shape(stdout, state.settings)?;
+        execute!(stdout, cursor::Show)?;
         return Ok(());
     }
     

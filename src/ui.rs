@@ -514,7 +514,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                         return Ok((state.modified, None, true, false));
                     }
                     EscResult::First => {
-                        // First Esc: exit find/selection mode if active, but continue waiting for second Esc
+                        // First Esc: exit find/goto/selection mode if active, but continue waiting for second Esc
                         if state.find_active {
                             // Exit find mode
                             state.find_active = false;
@@ -525,6 +525,14 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                             state.saved_search_pattern = None;
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in find mode
+                        } else if state.goto_line_active {
+                            // Exit goto_line mode
+                            state.goto_line_active = false;
+                            state.goto_line_input.clear();
+                            state.goto_line_cursor_pos = 0;
+                            state.goto_line_typing_started = false;
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in goto mode
                         } else if state.has_selection() {
                             // Clear selection
                             state.clear_selection();

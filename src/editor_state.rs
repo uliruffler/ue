@@ -54,6 +54,14 @@ pub(crate) struct FileViewerState<'a> {
     /// Search scope when find mode is activated with a selection
     /// If set, find operations only search within this range (normalized start, end)
     pub(crate) find_scope: Option<(Position, Position)>,
+    /// Go to line mode active
+    pub(crate) goto_line_active: bool,
+    /// Input buffer for go to line
+    pub(crate) goto_line_input: String,
+    /// Cursor position in goto_line_input (character index)
+    pub(crate) goto_line_cursor_pos: usize,
+    /// Whether user has started typing in goto_line mode (to replace pre-filled value)
+    pub(crate) goto_line_typing_started: bool,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -89,6 +97,10 @@ impl<'a> FileViewerState<'a> {
             search_wrapped: false,
             wrap_warning_pending: None,
             find_scope: None,
+            goto_line_active: false,
+            goto_line_input: String::new(),
+            goto_line_cursor_pos: 0,
+            goto_line_typing_started: false,
         }
     }
 

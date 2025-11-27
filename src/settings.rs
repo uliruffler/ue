@@ -16,6 +16,7 @@ pub(crate) struct KeyBindings {
     pub(crate) find: String,
     pub(crate) find_next: String,
     pub(crate) find_previous: String,
+    pub(crate) goto_line: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -121,6 +122,7 @@ impl KeyBindings {
     pub fn find_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find, code, modifiers) }
     pub fn find_next_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find_next, code, modifiers) }
     pub fn find_previous_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find_previous, code, modifiers) }
+    pub fn goto_line_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.goto_line, code, modifiers) }
     
     #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
     pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.file_selector, code, modifiers) }
@@ -213,7 +215,7 @@ mod tests {
     #[test]
     fn ctrl_letter_matches() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into() };
+        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into(), goto_line:"Ctrl+g".into() };
         assert!(kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::CONTROL));
         assert!(!kb.copy_matches(&KeyCode::Char('c'), &KeyModifiers::ALT));
     }
@@ -221,7 +223,7 @@ mod tests {
     #[test]
     fn esc_quit_variants() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Escape".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into() };
+        let kb = KeyBindings { quit:"Escape".into(), copy:"Ctrl+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into(), goto_line:"Ctrl+g".into() };
         assert!(kb.quit_matches(&KeyCode::Esc, &KeyModifiers::empty()));
         assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
     }
@@ -229,7 +231,7 @@ mod tests {
     #[test]
     fn shift_modifier_detection() {
         let (_tmp, _guard) = set_temp_home();
-        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+Shift+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into() };
+        let kb = KeyBindings { quit:"Esc".into(), copy:"Ctrl+Shift+c".into(), paste:"Ctrl+v".into(), cut:"Ctrl+x".into(), close:"Ctrl+w".into(), save:"Ctrl+s".into(), undo:"Ctrl+z".into(), redo:"Ctrl+y".into(), file_selector:"Esc".into(), find:"Ctrl+f".into(), find_next:"F3".into(), find_previous:"Shift+F3".into(), goto_line:"Ctrl+g".into() };
         let mods = KeyModifiers::CONTROL | KeyModifiers::SHIFT;
         assert!(kb.copy_matches(&KeyCode::Char('c'), &mods));
         let missing_shift = KeyModifiers::CONTROL;
@@ -273,6 +275,7 @@ mod tests {
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
+            goto_line: "Ctrl+g".into(),
         };
         
         // Esc without modifiers should open file selector
@@ -323,6 +326,7 @@ mod tests {
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
+            goto_line: "Ctrl+g".into(),
         };
         
         // Test F3 for find next (no modifiers)
@@ -396,5 +400,6 @@ mod tests {
         assert!(!settings.keybindings.find.is_empty());
         assert!(!settings.keybindings.find_next.is_empty());
         assert!(!settings.keybindings.find_previous.is_empty());
+        assert!(!settings.keybindings.goto_line.is_empty());
     }
 }
