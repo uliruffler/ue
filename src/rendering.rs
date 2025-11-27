@@ -51,7 +51,6 @@ fn render_header(
     state: &FileViewerState,
     _total_lines: usize,
 ) -> Result<(), std::io::Error> {
-    let mode_info = if state.has_selection() { " [SELECTING]" } else { "" };
     let modified_char = if state.modified { '*' } else { ' ' };
     let path = std::path::Path::new(file);
     let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
@@ -65,7 +64,7 @@ fn render_header(
         // Add trailing space explicitly after the block number
         write!(stdout, "{:width$} ", top_number, width = state.settings.appearance.line_number_digits as usize)?;
     }
-    write!(stdout, "{} {} ({}){}", modified_char, filename, parent, mode_info)?;
+    write!(stdout, "{} {} ({})", modified_char, filename, parent)?;
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
     execute!(stdout, ResetColor)?;
     write!(stdout, "\r\n")?;

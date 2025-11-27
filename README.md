@@ -36,9 +36,7 @@ Hold **Shift** while moving the cursor with arrow keys to select text:
 - **Shift + Home/End**: Select to start/end of line
 - **Shift + PageUp/PageDown**: Select multiple pages
 
-Selected text is highlighted with reverse video (inverted colors). Release Shift and move without it to clear the selection.
-
-The header shows `[SELECTING]` when text is selected.
+Selected text is highlighted with reverse video (inverted colors). Press **Esc** to exit selection mode, or release Shift and move without it to clear the selection.
 
 ### Copy to Clipboard
 

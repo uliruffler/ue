@@ -499,11 +499,19 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         
         match event::read()? {
             Event::Key(key_event) => {
-                // If in find mode, skip double-Esc processing for single Esc
-                // so that Esc immediately exits find mode
-                let skip_double_esc = state.find_active && matches!(key_event.code, crossterm::event::KeyCode::Esc);
+                // If in find mode or selection mode, skip double-Esc processing for single Esc
+                // so that Esc immediately exits those modes
+                let has_selection = state.has_selection();
+                let skip_double_esc = (state.find_active || has_selection) && matches!(key_event.code, crossterm::event::KeyCode::Esc);
                 
-                // Double-Esc processing (only if not in find mode)
+                // If in selection mode, clear selection and continue
+                if has_selection && matches!(key_event.code, crossterm::event::KeyCode::Esc) {
+                    state.clear_selection();
+                    last_esc.clear();
+                    continue;
+                }
+                
+                // Double-Esc processing (only if not in find mode or selection mode)
                 if !skip_double_esc {
                     match last_esc.process_key(&key_event) {
                         EscResult::Double => {

@@ -336,4 +336,28 @@ mod tests {
         
         assert!(state.saved_absolute_cursor.is_none());
     }
+    
+    #[test]
+    fn clear_selection_removes_selection_and_sets_redraw() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+        
+        // Set up a selection
+        state.selection_start = Some((0, 0));
+        state.selection_end = Some((0, 5));
+        state.needs_redraw = false;
+        
+        assert!(state.has_selection());
+        
+        // Clear the selection
+        state.clear_selection();
+        
+        // Verify selection is cleared and redraw flag is set
+        assert!(!state.has_selection());
+        assert!(state.needs_redraw);
+        assert!(state.selection_start.is_none());
+        assert!(state.selection_end.is_none());
+    }
 }
