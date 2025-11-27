@@ -450,6 +450,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
 
     // Track last Esc press time for double-press detection
     let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
+    let mut esc_was_in_normal_mode = false; // Track if first Esc was in normal mode
     
     // File watching state for multi-instance synchronization
     let mut last_undo_check = Instant::now();
@@ -490,41 +491,56 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         if !event::poll(timeout)? {
             if last_esc.timed_out() {
                 last_esc.clear();
-                if let Some(result) = handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)? {
-                    return Ok(result);
+                // Only open file selector if the first Esc was in normal mode
+                // (not in find or selection mode, which we already exited)
+                if esc_was_in_normal_mode {
+                    esc_was_in_normal_mode = false;
+                    if let Some(result) = handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)? {
+                        return Ok(result);
+                    }
                 }
+                // If not in normal mode, value is already false, no need to reassign
             }
             continue;
         }
         
         match event::read()? {
             Event::Key(key_event) => {
-                // If in find mode or selection mode, skip double-Esc processing for single Esc
-                // so that Esc immediately exits those modes
-                let has_selection = state.has_selection();
-                let skip_double_esc = (state.find_active || has_selection) && matches!(key_event.code, crossterm::event::KeyCode::Esc);
-                
-                // If in selection mode, clear selection and continue
-                if has_selection && matches!(key_event.code, crossterm::event::KeyCode::Esc) {
-                    state.clear_selection();
-                    last_esc.clear();
-                    continue;
-                }
-                
-                // Double-Esc processing (only if not in find mode or selection mode)
-                if !skip_double_esc {
-                    match last_esc.process_key(&key_event) {
-                        EscResult::Double => {
-                            persist_editor_state(&mut state, file);
-                            return Ok((state.modified, None, true, false));
+                // Always process Esc through double-Esc detector
+                match last_esc.process_key(&key_event) {
+                    EscResult::Double => {
+                        // Double-Esc always exits the editor, regardless of mode
+                        persist_editor_state(&mut state, file);
+                        return Ok((state.modified, None, true, false));
+                    }
+                    EscResult::First => {
+                        // First Esc: exit find/selection mode if active, but continue waiting for second Esc
+                        if state.find_active {
+                            // Exit find mode
+                            state.find_active = false;
+                            state.find_pattern.clear();
+                            state.find_error = None;
+                            state.find_history_index = None;
+                            state.last_search_pattern = state.saved_search_pattern.clone();
+                            state.saved_search_pattern = None;
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in find mode
+                        } else if state.has_selection() {
+                            // Clear selection
+                            state.clear_selection();
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in selection mode
+                        } else {
+                            // In normal mode - mark for file selector on timeout
+                            esc_was_in_normal_mode = true;
                         }
-                        EscResult::First => { continue; } // wait for second or timeout
-                        EscResult::None => { /* normal key handling */ }
+                        continue; // Wait for second Esc or timeout
+                    }
+                    EscResult::None => {
+                        // Not an Esc key - normal handling
+                        esc_was_in_normal_mode = false; // Clear the flag
                     }
                 }
-                
-                // Any other key clears the pending Esc
-                last_esc.clear();
                 
                 // Handle key event and check for quit or close signals
                 let (should_quit, should_close) = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, file)?;
