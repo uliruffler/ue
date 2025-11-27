@@ -51,6 +51,9 @@ pub(crate) struct FileViewerState<'a> {
     /// Whether we're showing a wrap warning (waiting for second press to actually wrap)
     /// None = no warning, Some("next") = warning for next, Some("prev") = warning for prev
     pub(crate) wrap_warning_pending: Option<String>,
+    /// Search scope when find mode is activated with a selection
+    /// If set, find operations only search within this range (normalized start, end)
+    pub(crate) find_scope: Option<(Position, Position)>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -85,6 +88,7 @@ impl<'a> FileViewerState<'a> {
             saved_search_pattern: None,
             search_wrapped: false,
             wrap_warning_pending: None,
+            find_scope: None,
         }
     }
 

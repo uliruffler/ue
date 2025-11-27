@@ -49,6 +49,21 @@ To copy text:
 2. Press Ctrl+C to copy the selected text to the clipboard
 3. The selection remains active so you can continue selecting or paste elsewhere
 
+### Find/Search
+
+- **Ctrl+F** (configurable): Open find mode to search for text using regular expressions
+- **F3** (configurable): Find next occurrence
+- **Shift+F3** (configurable): Find previous occurrence
+
+**Search within selection**: If you have text selected when you press Ctrl+F, the search will be limited to only the selected range. This is useful for searching within a specific section of the file.
+
+To search within a selection:
+1. Hold Shift and use arrow keys to select the text range you want to search in
+2. Press Ctrl+F to enter find mode (the search will be scoped to your selection)
+3. Type your search pattern (supports regular expressions)
+4. Press Enter to find the first match within the selection
+5. Use F3/Shift+F3 to navigate through matches (these will search the entire file, not just the selection)
+
 ## Configuration
 
 The application reads key bindings from `~/.ue/settings.toml`. If this file doesn't exist, it will be created automatically with default settings on first run.

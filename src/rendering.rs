@@ -2,7 +2,7 @@ use std::io::Write;
 use crossterm::{
     cursor,
     execute,
-    style::{Stylize, ResetColor, SetBackgroundColor},
+    style::{ResetColor, SetBackgroundColor},
     terminal::{self, ClearType},
 };
 
@@ -346,6 +346,36 @@ fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
     }
 }
 
+/// Check if a match at (char_start, char_end) on line_idx overlaps with the find_scope
+fn match_overlaps_scope(
+    line_idx: usize,
+    char_start: usize,
+    char_end: usize,
+    scope: Option<((usize, usize), (usize, usize))>,
+) -> bool {
+    if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+        // Check if line is within scope range
+        if line_idx < scope_start_line || line_idx > scope_end_line {
+            false
+        } else if line_idx == scope_start_line && line_idx == scope_end_line {
+            // Single line scope - match must overlap with [scope_start_col, scope_end_col)
+            char_end > scope_start_col && char_start < scope_end_col
+        } else if line_idx == scope_start_line {
+            // First line of multi-line scope
+            char_end > scope_start_col
+        } else if line_idx == scope_end_line {
+            // Last line of multi-line scope
+            char_start < scope_end_col
+        } else {
+            // Middle line of multi-line scope
+            true
+        }
+    } else {
+        // No scope restriction
+        true
+    }
+}
+
 fn apply_cursor_shape(stdout: &mut impl Write, settings: &crate::settings::Settings) -> std::io::Result<()> {
     // Use VT escape sequence to set cursor style.
     // block: 2 (steady) or 0 (blinking), bar: 6 (steady) or 5 (blinking), underline: 4 (steady) or 3 (blinking)
@@ -443,6 +473,11 @@ fn render_line_segment_expanded(
         let cursor_col = if is_cursor_line { cursor_pos.1 } else { usize::MAX };
         
         for (char_start, char_end) in matches {
+            // Check if this match overlaps with the find_scope
+            if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
+                continue;
+            }
+            
             let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
             let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
             
@@ -483,6 +518,11 @@ fn render_line_segment_expanded(
             
             for (char_start, char_end) in matches {
                 if cursor_col >= char_start && cursor_col < char_end {
+                    // Check if this match overlaps with the find_scope
+                    if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
+                        continue;
+                    }
+                    
                     // This is the current match - check if visual_i is in it
                     let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
                     let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
@@ -595,6 +635,11 @@ fn render_line_segment_with_selection_expanded(
         let cursor_col = if is_cursor_line { cursor_pos.1 } else { usize::MAX };
         
         for (char_start, char_end) in matches {
+            // Check if this match overlaps with the find_scope
+            if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
+                continue;
+            }
+            
             let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
             let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
             
@@ -634,6 +679,11 @@ fn render_line_segment_with_selection_expanded(
             
             for (char_start, char_end) in matches {
                 if cursor_col >= char_start && cursor_col < char_end {
+                    // Check if this match overlaps with the find_scope
+                    if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
+                        continue;
+                    }
+                    
                     let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
                     let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
                     if visual_i >= visual_start && visual_i < visual_end {
@@ -644,13 +694,13 @@ fn render_line_segment_with_selection_expanded(
             }
         }
         
-        // Determine background (selection takes priority over search match)
-        let desired_bg = if is_selected {
-            Some("selection")
-        } else if is_current_match {
+        // Determine background (search matches take priority over selection)
+        let desired_bg = if is_current_match {
             Some("current")
         } else if is_search_match {
             Some("search")
+        } else if is_selected {
+            Some("selection")
         } else {
             None
         };
@@ -659,11 +709,8 @@ fn render_line_segment_with_selection_expanded(
         if desired_bg != current_bg {
             match desired_bg {
                 Some("selection") => {
-                    // Reset color before applying reverse video
-                    if current_color.is_some() || current_bg.is_some() {
-                        execute!(stdout, ResetColor)?;
-                        current_color = None;
-                    }
+                    // Use a subtle background for selection
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::DarkGrey))?;
                 }
                 Some("current") => {
                     // Darker blue background for current match
@@ -681,29 +728,27 @@ fn render_line_segment_with_selection_expanded(
             current_bg = desired_bg;
         }
 
-        if is_selected {
-            write!(stdout, "{}", ch.to_string().reverse())?;
-            execute!(stdout, ResetColor)?;
-            current_color = None;
-            current_bg = None;
-        } else {
-            let desired_color = visual_to_color.get(visual_i).copied().flatten();
-            
-            // Change foreground color if needed
-            if desired_color != current_color {
-                if let Some(color) = desired_color {
-                    execute!(stdout, SetForegroundColor(color))?;
-                } else if !is_search_match {
-                    execute!(stdout, ResetColor)?;
-                    if is_search_match {
-                        execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
-                    }
+        let desired_color = visual_to_color.get(visual_i).copied().flatten();
+        
+        // Change foreground color if needed
+        if desired_color != current_color {
+            if let Some(color) = desired_color {
+                execute!(stdout, SetForegroundColor(color))?;
+            } else if !(is_search_match || is_current_match || is_selected) {
+                execute!(stdout, ResetColor)?;
+                // Reapply background if needed
+                if is_search_match {
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
+                } else if is_current_match {
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?;
+                } else if is_selected {
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::DarkGrey))?;
                 }
-                current_color = desired_color;
             }
-            
-            write!(stdout, "{}", ch)?;
+            current_color = desired_color;
         }
+        
+        write!(stdout, "{}", ch)?;
     }
     
     // Reset color at end
@@ -838,5 +883,102 @@ mod tests {
         let matches = get_search_matches("hello 世界 world", "世界");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], (6, 8)); // Character positions, not bytes
+    }
+
+    #[test]
+    fn match_overlaps_scope_no_scope_always_true() {
+        assert!(match_overlaps_scope(5, 10, 15, None));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_within() {
+        let scope = Some(((0, 5), (0, 20)));
+        // Match completely within scope
+        assert!(match_overlaps_scope(0, 10, 15, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_at_start() {
+        let scope = Some(((0, 5), (0, 20)));
+        // Match starts at scope start
+        assert!(match_overlaps_scope(0, 5, 10, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_at_end() {
+        let scope = Some(((0, 5), (0, 20)));
+        // Match ending at scope end (char_end = 20, scope_end = 20)
+        // Since scope_end is exclusive, scope covers [5, 20)
+        // Match covers [15, 20), so they overlap in range [15, 20)
+        assert!(match_overlaps_scope(0, 15, 20, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_just_before_end() {
+        let scope = Some(((0, 5), (0, 20)));
+        // Match ends just before scope end
+        assert!(match_overlaps_scope(0, 15, 19, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_overlaps_start() {
+        let scope = Some(((0, 5), (0, 20)));
+        // Match starts before scope but overlaps into it
+        assert!(match_overlaps_scope(0, 3, 8, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_overlaps_end() {
+        let scope = Some(((0, 5), (0, 20)));
+        // Match starts in scope but extends beyond
+        assert!(match_overlaps_scope(0, 15, 25, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_before_scope() {
+        let scope = Some(((0, 10), (0, 20)));
+        // Match completely before scope
+        assert!(!match_overlaps_scope(0, 2, 5, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_single_line_after_scope() {
+        let scope = Some(((0, 10), (0, 20)));
+        // Match completely after scope
+        assert!(!match_overlaps_scope(0, 25, 30, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_wrong_line() {
+        let scope = Some(((5, 0), (10, 20)));
+        // Match on line outside scope range
+        assert!(!match_overlaps_scope(3, 0, 10, scope));
+        assert!(!match_overlaps_scope(15, 0, 10, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_multiline_first_line() {
+        let scope = Some(((1, 10), (3, 20)));
+        // Match on first line after scope start
+        assert!(match_overlaps_scope(1, 15, 20, scope));
+        // Match on first line before scope start
+        assert!(!match_overlaps_scope(1, 5, 9, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_multiline_middle_line() {
+        let scope = Some(((1, 10), (3, 20)));
+        // Any match on middle line should match
+        assert!(match_overlaps_scope(2, 0, 10, scope));
+    }
+
+    #[test]
+    fn match_overlaps_scope_multiline_last_line() {
+        let scope = Some(((1, 10), (3, 20)));
+        // Match on last line before scope end
+        assert!(match_overlaps_scope(3, 5, 15, scope));
+        // Match on last line at/after scope end
+        assert!(!match_overlaps_scope(3, 20, 25, scope));
+        assert!(!match_overlaps_scope(3, 25, 30, scope));
     }
 }

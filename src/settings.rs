@@ -99,6 +99,13 @@ impl Settings {
             .or_else(|_| std::env::var("USERPROFILE"))?;
         Ok(PathBuf::from(home).join(".ue").join("settings.toml"))
     }
+    
+    /// Create default settings for testing without file I/O
+    #[cfg(test)]
+    pub(crate) fn default() -> Self {
+        const DEFAULT_CONFIG: &str = include_str!("../defaults/settings.toml");
+        toml::from_str(DEFAULT_CONFIG).expect("default settings should be valid")
+    }
 }
 
 
@@ -353,28 +360,28 @@ mod tests {
     
     #[test]
     fn settings_tab_width_validation() {
-        let settings = Settings::load().expect("load settings");
+        let settings = Settings::default();
         assert!(settings.tab_width > 0);
         assert!(settings.tab_width <= 16); // Reasonable max
     }
     
     #[test]
     fn settings_line_number_digits_validation() {
-        let settings = Settings::load().expect("load settings");
+        let settings = Settings::default();
         // Should be 0 (disabled) or between 1 and 10
         assert!(settings.appearance.line_number_digits <= 10);
     }
     
     #[test]
     fn settings_cursor_shape_values() {
-        let settings = Settings::load().expect("load settings");
+        let settings = Settings::default();
         let valid_shapes = ["bar", "block", "underline"];
         assert!(valid_shapes.contains(&settings.appearance.cursor_shape.to_lowercase().as_str()));
     }
     
     #[test]
     fn settings_all_keybindings_valid() {
-        let settings = Settings::load().expect("load settings");
+        let settings = Settings::default();
         
         // Check that all keybindings are non-empty
         assert!(!settings.keybindings.quit.is_empty());

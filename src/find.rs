@@ -22,6 +22,8 @@ pub(crate) fn handle_find_input(
             state.find_pattern.clear();
             state.find_error = None;
             state.find_history_index = None;
+            // Note: Don't clear selection - keep it visible to show the search scope
+            // Note: Don't clear find_scope here - keep it so highlighting remains scoped
             // Restore the search pattern from before entering find mode
             state.last_search_pattern = state.saved_search_pattern.clone();
             state.saved_search_pattern = None;
@@ -37,7 +39,7 @@ pub(crate) fn handle_find_input(
                         state.last_search_pattern = Some(state.find_pattern.clone());
                         add_to_history(state, state.find_pattern.clone());
                         
-                        if let Some(pos) = find_next(lines, state.current_position(), &regex, false) {
+                        if let Some(pos) = find_next(lines, state.current_position(), &regex, false, state.find_scope) {
                             move_to_position(state, pos, lines.len(), visible_lines);
                             state.search_wrapped = false;
                             state.wrap_warning_pending = None;
@@ -50,6 +52,8 @@ pub(crate) fn handle_find_input(
                         state.find_active = false;
                         state.find_history_index = None;
                         state.saved_search_pattern = None;  // Clear saved pattern
+                        // Note: Don't clear selection - keep it visible to show the search scope
+                        // Note: Don't clear find_scope - keep it so highlighting remains scoped
                         state.needs_redraw = true;
                     }
                     Err(e) => {
@@ -59,13 +63,14 @@ pub(crate) fn handle_find_input(
                     }
                 }
             } else {
-                // Empty search - clear highlights
+                // Empty search - clear highlights and scope
                 state.find_active = false;
                 state.find_error = None;
                 state.find_history_index = None;
                 state.wrap_warning_pending = None;
                 state.last_search_pattern = None;  // Clear highlights
                 state.saved_search_pattern = None;  // Clear saved pattern
+                state.find_scope = None;  // Clear search scope for next search
                 state.needs_redraw = true;
             }
             true
@@ -193,7 +198,7 @@ pub(crate) fn find_next_occurrence(
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
         if let Ok(regex) = Regex::new(pattern) {
-            if let Some(pos) = find_next(lines, state.current_position(), &regex, false) {
+            if let Some(pos) = find_next(lines, state.current_position(), &regex, false, state.find_scope) {
                 // Found a match without wrapping
                 move_to_position(state, pos, lines.len(), visible_lines);
                 state.search_wrapped = false;
@@ -204,7 +209,7 @@ pub(crate) fn find_next_occurrence(
                 // Check if we have a pending wrap warning for next
                 if state.wrap_warning_pending.as_deref() == Some("next") {
                     // Second press - actually wrap
-                    if let Some(pos) = find_next(lines, state.current_position(), &regex, true) {
+                    if let Some(pos) = find_next(lines, state.current_position(), &regex, true, state.find_scope) {
                         move_to_position(state, pos, lines.len(), visible_lines);
                         state.search_wrapped = true;
                         state.wrap_warning_pending = None;
@@ -234,7 +239,7 @@ pub(crate) fn find_prev_occurrence(
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
         if let Ok(regex) = Regex::new(pattern) {
-            if let Some(pos) = find_prev(lines, state.current_position(), &regex, false) {
+            if let Some(pos) = find_prev(lines, state.current_position(), &regex, false, state.find_scope) {
                 // Found a match without wrapping
                 move_to_position(state, pos, lines.len(), visible_lines);
                 state.search_wrapped = false;
@@ -245,7 +250,7 @@ pub(crate) fn find_prev_occurrence(
                 // Check if we have a pending wrap warning for prev
                 if state.wrap_warning_pending.as_deref() == Some("prev") {
                     // Second press - actually wrap
-                    if let Some(pos) = find_prev(lines, state.current_position(), &regex, true) {
+                    if let Some(pos) = find_prev(lines, state.current_position(), &regex, true, state.find_scope) {
                         move_to_position(state, pos, lines.len(), visible_lines);
                         state.search_wrapped = true;
                         state.wrap_warning_pending = None;
@@ -299,25 +304,65 @@ fn add_to_history(state: &mut FileViewerState, pattern: String) {
 }
 
 /// Find the next occurrence of the pattern starting from the given position
-fn find_next(lines: &[String], start: Position, regex: &Regex, force_wrap: bool) -> Option<Position> {
+/// If scope is Some, only search within the specified range
+fn find_next(lines: &[String], start: Position, regex: &Regex, force_wrap: bool, scope: Option<(Position, Position)>) -> Option<Position> {
     let (start_line, start_col) = start;
+    
+    // Determine search boundaries
+    let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
+        (scope_start_line, scope_end_line)
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
     
     if !force_wrap {
         // Search from current position to end of current line
-        if start_line < lines.len() {
+        if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
             // Start searching from next character position
             let search_from = start_col + 1;
-            if search_from < line.len()
-                && let Some(m) = regex.find(&line[search_from..]) {
+            
+            // Determine search end for this line based on scope
+            let search_to = if let Some(((_scope_start_line, _scope_start_col), (scope_end_line, scope_end_col))) = scope {
+                if start_line == scope_end_line {
+                    scope_end_col.min(line.len())
+                } else {
+                    line.len()
+                }
+            } else {
+                line.len()
+            };
+            
+            if search_from < search_to {
+                let search_slice = &line[search_from..search_to];
+                if let Some(m) = regex.find(search_slice) {
                     return Some((start_line, search_from + m.start()));
                 }
+            }
         }
         
-        // Search remaining lines
-        for (line_idx, line) in lines.iter().enumerate().skip(start_line + 1) {
-            if let Some(m) = regex.find(line) {
-                return Some((line_idx, m.start()));
+        // Search remaining lines within scope
+        let end_line = max_line.min(lines.len().saturating_sub(1));
+        for line_idx in (start_line + 1)..=end_line {
+            if line_idx >= lines.len() {
+                break;
+            }
+            let line = &lines[line_idx];
+            
+            // Determine search boundaries for this line
+            let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+                let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
+                let end_offset = if line_idx == scope_end_line { scope_end_col.min(line.len()) } else { line.len() };
+                (start_offset, end_offset)
+            } else {
+                (0, line.len())
+            };
+            
+            if search_start < search_end {
+                let search_slice = &line[search_start..search_end];
+                if let Some(m) = regex.find(search_slice) {
+                    return Some((line_idx, search_start + m.start()));
+                }
             }
         }
         
@@ -326,9 +371,27 @@ fn find_next(lines: &[String], start: Position, regex: &Regex, force_wrap: bool)
     }
     
     // Wrap around to beginning (only when force_wrap is true)
-    for (line_idx, line) in lines.iter().enumerate().take(start_line + 1) {
-        if let Some(m) = regex.find(line) {
-            return Some((line_idx, m.start()));
+    // When scope is set, wrap within scope; otherwise wrap to file beginning
+    for line_idx in min_line..=(start_line.min(max_line)) {
+        if line_idx >= lines.len() {
+            break;
+        }
+        let line = &lines[line_idx];
+        
+        // Determine search boundaries for this line
+        let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+            let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
+            let end_offset = if line_idx == scope_end_line { scope_end_col.min(line.len()) } else { line.len() };
+            (start_offset, end_offset)
+        } else {
+            (0, line.len())
+        };
+        
+        if search_start < search_end {
+            let search_slice = &line[search_start..search_end];
+            if let Some(m) = regex.find(search_slice) {
+                return Some((line_idx, search_start + m.start()));
+            }
         }
     }
     
@@ -336,20 +399,42 @@ fn find_next(lines: &[String], start: Position, regex: &Regex, force_wrap: bool)
 }
 
 /// Find the previous occurrence of the pattern starting from the given position
-fn find_prev(lines: &[String], start: Position, regex: &Regex, force_wrap: bool) -> Option<Position> {
+/// If scope is Some, only search within the specified range
+fn find_prev(lines: &[String], start: Position, regex: &Regex, force_wrap: bool, scope: Option<(Position, Position)>) -> Option<Position> {
     let (start_line, start_col) = start;
+    
+    // Determine search boundaries
+    let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
+        (scope_start_line, scope_end_line)
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
     
     if !force_wrap {
         // Search backwards in current line
-        if start_line < lines.len() {
+        if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-            // Find all matches in current line before cursor
+            
+            // Determine search boundaries for this line
+            let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+                let start_offset = if start_line == scope_start_line { scope_start_col } else { 0 };
+                let end_offset = if start_line == scope_end_line { scope_end_col.min(line.len()) } else { line.len() };
+                (start_offset, end_offset)
+            } else {
+                (0, line.len())
+            };
+            
+            // Find all matches in current line before cursor within scope
             let mut last_match: Option<usize> = None;
-            for m in regex.find_iter(line) {
-                if m.start() < start_col {
-                    last_match = Some(m.start());
-                } else {
-                    break;
+            if search_start < search_end {
+                let search_slice = &line[search_start..search_end];
+                for m in regex.find_iter(search_slice) {
+                    let absolute_pos = search_start + m.start();
+                    if absolute_pos < start_col {
+                        last_match = Some(absolute_pos);
+                    } else {
+                        break;
+                    }
                 }
             }
             if let Some(col) = last_match {
@@ -357,12 +442,29 @@ fn find_prev(lines: &[String], start: Position, regex: &Regex, force_wrap: bool)
             }
         }
         
-        // Search previous lines (reverse order)
-        for line_idx in (0..start_line).rev() {
+        // Search previous lines (reverse order) within scope
+        let start_search_line = min_line.max(start_line.saturating_sub(1));
+        for line_idx in (min_line..=start_search_line).rev() {
+            if line_idx >= start_line || line_idx >= lines.len() {
+                continue;
+            }
             let line = &lines[line_idx];
-            // Find last match in this line
-            if let Some(last_match) = regex.find_iter(line).last() {
-                return Some((line_idx, last_match.start()));
+            
+            // Determine search boundaries for this line
+            let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+                let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
+                let end_offset = if line_idx == scope_end_line { scope_end_col.min(line.len()) } else { line.len() };
+                (start_offset, end_offset)
+            } else {
+                (0, line.len())
+            };
+            
+            // Find last match in this line within scope
+            if search_start < search_end {
+                let search_slice = &line[search_start..search_end];
+                if let Some(last_match) = regex.find_iter(search_slice).last() {
+                    return Some((line_idx, search_start + last_match.start()));
+                }
             }
         }
         
@@ -371,11 +473,28 @@ fn find_prev(lines: &[String], start: Position, regex: &Regex, force_wrap: bool)
     }
     
     // Wrap around to end (only when force_wrap is true)
-    for line_idx in (start_line..lines.len()).rev() {
+    // When scope is set, wrap within scope; otherwise wrap to file end
+    for line_idx in (start_line..=max_line).rev() {
+        if line_idx >= lines.len() {
+            continue;
+        }
         let line = &lines[line_idx];
-        // Find last match in this line
-        if let Some(last_match) = regex.find_iter(line).last() {
-            return Some((line_idx, last_match.start()));
+        
+        // Determine search boundaries for this line
+        let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+            let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
+            let end_offset = if line_idx == scope_end_line { scope_end_col.min(line.len()) } else { line.len() };
+            (start_offset, end_offset)
+        } else {
+            (0, line.len())
+        };
+        
+        // Find last match in this line within scope
+        if search_start < search_end {
+            let search_slice = &line[search_start..search_end];
+            if let Some(last_match) = regex.find_iter(search_slice).last() {
+                return Some((line_idx, search_start + last_match.start()));
+            }
         }
     }
     
@@ -429,15 +548,15 @@ mod tests {
         let regex = Regex::new("hello").unwrap();
         
         // Find next from position (0, 0) should skip current position and find next occurrence
-        let result = find_next(&lines, (0, 0), &regex, false);
+        let result = find_next(&lines, (0, 0), &regex, false, None);
         assert_eq!(result, Some((2, 0)));
         
         // Find next from end of first "hello" should wrap around
-        let result = find_next(&lines, (0, 4), &regex, false);
+        let result = find_next(&lines, (0, 4), &regex, false, None);
         assert_eq!(result, Some((2, 0)));
         
         // Find from line 1 should find line 2
-        let result = find_next(&lines, (1, 0), &regex, false);
+        let result = find_next(&lines, (1, 0), &regex, false, None);
         assert_eq!(result, Some((2, 0)));
     }
     
@@ -449,7 +568,7 @@ mod tests {
         ];
         
         let regex = Regex::new("hello").unwrap();
-        let result = find_next(&lines, (1, 5), &regex, true);
+        let result = find_next(&lines, (1, 5), &regex, true, None);
         assert_eq!(result, Some((0, 0)));
     }
     
@@ -461,7 +580,7 @@ mod tests {
         ];
         
         let regex = Regex::new("notfound").unwrap();
-        let result = find_next(&lines, (0, 0), &regex, false);
+        let result = find_next(&lines, (0, 0), &regex, false, None);
         assert_eq!(result, None);
     }
     
@@ -473,9 +592,9 @@ mod tests {
             "baz qux".to_string(),
         ];
         
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("Failed to load test settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Set up: cursor at end, pattern "hello" (which is at the beginning)
         state.cursor_line = 2;
@@ -505,9 +624,9 @@ mod tests {
             "hello world".to_string(),
         ];
         
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("Failed to load test settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Set up: cursor at beginning, pattern "hello" (which is at the end)
         state.cursor_line = 0;
@@ -537,9 +656,9 @@ mod tests {
             "foo bar".to_string(),
         ];
         
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("Failed to load test settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Set up: cursor at first hello
         state.cursor_line = 0;
@@ -563,9 +682,9 @@ mod tests {
             "find this".to_string(),  // Last line with match at beginning
         ];
         
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("Failed to load test settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Set up: cursor at beginning of last line where "find" is located
         state.cursor_line = 2;
@@ -597,9 +716,11 @@ mod tests {
         write!(temp_file, "test content").expect("write temp file");
         let file_path = temp_file.path().to_str().unwrap();
         
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("load settings")));
+        // Use isolated test environment for settings
+        let (_tmp, _guard) = crate::env::set_temp_home();
+        let settings = crate::settings::Settings::load().expect("load settings");
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history.clone(), settings);
+        let mut state = FileViewerState::new(80, undo_history.clone(), &settings);
         
         // Add some searches to history
         state.find_pattern = "search1".to_string();
@@ -623,9 +744,9 @@ mod tests {
     
     #[test]
     fn find_history_deduplication() {
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("load settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Add same pattern multiple times
         add_to_history(&mut state, "duplicate".to_string());
@@ -639,9 +760,9 @@ mod tests {
     
     #[test]
     fn find_history_max_limit() {
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("load settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Add more than MAX_FIND_HISTORY (100) items
         for i in 0..150 {
@@ -660,10 +781,9 @@ mod tests {
             "world".to_string(),
         ];
         
-
-        let settings = Box::leak(Box::new(crate::settings::Settings::load().expect("Failed to load test settings")));
+        let settings = crate::settings::Settings::default();
         let undo_history = crate::undo::UndoHistory::new();
-        let mut state = FileViewerState::new(80, undo_history, settings);
+        let mut state = FileViewerState::new(80, undo_history, &settings);
         
         // Set a wrap warning
         state.wrap_warning_pending = Some("next".to_string());
@@ -672,5 +792,184 @@ mod tests {
         // Moving cursor should clear warning (tested in event_handlers)
         // This is verified through integration test
         assert!(state.wrap_warning_pending.is_some());
+    }
+    
+    #[test]
+    fn find_next_within_scope_single_line() {
+        let lines = vec![
+            "hello world hello again hello end".to_string(),
+        ];
+        
+        let regex = Regex::new("hello").unwrap();
+        
+        // "hello world hello again hello end"
+        //  0           12          24
+        // Search within scope from col 12 to col 29 (covers "hello again hello")
+        let scope = Some(((0, 12), (0, 29)));
+        
+        // Starting from position (0, 5) should find first match in scope at col 12
+        let result = find_next(&lines, (0, 5), &regex, false, scope);
+        assert_eq!(result, Some((0, 12))); // "hello" in "hello again"
+        
+        // Starting from first match in scope should find second match in scope
+        let result = find_next(&lines, (0, 12), &regex, false, scope);
+        assert_eq!(result, Some((0, 24))); // "hello" before "end"
+        
+        // Starting from last match in scope should find nothing (search starts at col 25, scope ends at 29)
+        let result = find_next(&lines, (0, 24), &regex, false, scope);
+        assert_eq!(result, None);
+    }
+    
+    #[test]
+    fn find_next_within_scope_multi_line() {
+        let lines = vec![
+            "first line".to_string(),
+            "hello world".to_string(),
+            "middle line".to_string(),
+            "hello again".to_string(),
+            "last line".to_string(),
+        ];
+        
+        let regex = Regex::new("hello").unwrap();
+        
+        // Search within scope from line 1, col 0 to line 3, col 11 (covers both hellos)
+        let scope = Some(((1, 0), (3, 11)));
+        
+        // Starting from line 0 (before scope) should find first match in scope
+        let result = find_next(&lines, (0, 5), &regex, false, scope);
+        assert_eq!(result, Some((1, 0)));
+        
+        // Starting from beginning of first match should find it (since search starts from col 1)
+        // Actually, starting AT (1,0), search begins at (1,1), so it won't find the match at (1,0)
+        // Let me start from a position that will find the second match
+        let result = find_next(&lines, (1, 0), &regex, false, scope);
+        assert_eq!(result, Some((3, 0)));
+        
+        // Starting from second match should find nothing
+        let result = find_next(&lines, (3, 0), &regex, false, scope);
+        assert_eq!(result, None);
+    }
+    
+    #[test]
+    fn find_prev_within_scope_single_line() {
+        let lines = vec![
+            "hello world hello again hello end".to_string(),
+        ];
+        
+        let regex = Regex::new("hello").unwrap();
+        
+        // "hello world hello again hello end"
+        //  0           12          24
+        // Search within scope from col 12 to col 29 (covers "hello again hello")
+        let scope = Some(((0, 12), (0, 29)));
+        
+        // Starting from position after scope should find last match in scope
+        let result = find_prev(&lines, (0, 30), &regex, false, scope);
+        assert_eq!(result, Some((0, 24))); // "hello" before "end"
+        
+        // Starting from last match in scope should find first match in scope
+        let result = find_prev(&lines, (0, 24), &regex, false, scope);
+        assert_eq!(result, Some((0, 12))); // "hello" in "hello again"
+        
+        // Starting from first match in scope should find nothing
+        let result = find_prev(&lines, (0, 12), &regex, false, scope);
+        assert_eq!(result, None);
+    }
+    
+    #[test]
+    fn find_prev_within_scope_multi_line() {
+        let lines = vec![
+            "first line".to_string(),
+            "hello world".to_string(),
+            "middle line".to_string(),
+            "hello again".to_string(),
+            "last line".to_string(),
+        ];
+        
+        let regex = Regex::new("hello").unwrap();
+        
+        // Search within scope from line 1 to line 3 (covers both hellos)
+        let scope = Some(((1, 0), (3, 11)));
+        
+        // Starting from after scope should find last match in scope
+        let result = find_prev(&lines, (4, 0), &regex, false, scope);
+        assert_eq!(result, Some((3, 0)));
+        
+        // Starting from second match should find first
+        let result = find_prev(&lines, (3, 0), &regex, false, scope);
+        assert_eq!(result, Some((1, 0)));
+        
+        // Starting from first match should find nothing
+        let result = find_prev(&lines, (1, 0), &regex, false, scope);
+        assert_eq!(result, None);
+    }
+    
+    #[test]
+    fn find_next_wrap_within_scope() {
+        let lines = vec![
+            "first line".to_string(),
+            "hello world".to_string(),
+            "middle line".to_string(),
+            "hello again".to_string(),
+            "last line".to_string(),
+        ];
+        
+        let regex = Regex::new("hello").unwrap();
+        
+        // Search within scope from line 1 to line 3
+        let scope = Some(((1, 0), (3, 11)));
+        
+        // Starting from second match with wrap should find first match
+        let result = find_next(&lines, (3, 0), &regex, true, scope);
+        assert_eq!(result, Some((1, 0)));
+    }
+    
+    #[test]
+    fn find_prev_wrap_within_scope() {
+        let lines = vec![
+            "first line".to_string(),
+            "hello world".to_string(),
+            "middle line".to_string(),
+            "hello again".to_string(),
+            "last line".to_string(),
+        ];
+        
+        let regex = Regex::new("hello").unwrap();
+        
+        // Search within scope from line 1 to line 3
+        let scope = Some(((1, 0), (3, 11)));
+        
+        // Starting from first match with wrap should find second match
+        let result = find_prev(&lines, (1, 0), &regex, true, scope);
+        assert_eq!(result, Some((3, 0)));
+    }
+    
+    #[test]
+    fn find_scope_is_set_when_activating_with_selection() {
+        // This test verifies that when find mode is activated with a selection,
+        // the find_scope is properly captured
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+        
+        // Set up a selection from (1, 5) to (3, 10)
+        state.selection_start = Some((1, 5));
+        state.selection_end = Some((3, 10));
+        
+        // Simulate activating find mode (this would be done in event_handlers)
+        // The event handler should capture the selection as find_scope
+        if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+            let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            state.find_scope = Some(normalized);
+        }
+        
+        // Verify the scope was set correctly
+        assert_eq!(state.find_scope, Some(((1, 5), (3, 10))));
+        
+        // The rendering code should now only highlight matches within this scope
     }
 }

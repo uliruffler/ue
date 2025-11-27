@@ -65,6 +65,20 @@ pub(crate) fn handle_key_event(
     if settings.keybindings.find_matches(&code, &modifiers) {
         // Save current search pattern to restore on Esc
         state.saved_search_pattern = state.last_search_pattern.clone();
+        
+        // If there's a selection, use it as the search scope
+        if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+            // Normalize selection to ensure start < end
+            let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                (start, end)
+            } else {
+                (end, start)
+            };
+            state.find_scope = Some(normalized);
+        } else {
+            state.find_scope = None;
+        }
+        
         state.find_active = true;
         state.find_pattern.clear();
         state.find_cursor_pos = 0;
