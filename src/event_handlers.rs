@@ -239,7 +239,7 @@ fn update_redraw_flags(state: &mut FileViewerState, did_edit: bool, moved: bool)
 }
 
 /// Handle moving up through wrapped lines
-fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], _visible_lines: usize) {
+fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_lines: usize) {
     use crate::coordinates::{visual_width_up_to, calculate_wrapped_lines_for_line};
     
     let absolute_line = state.absolute_line();
@@ -247,8 +247,8 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], _visible_
         return;
     }
     
-    let line_num_width = line_number_width(state.settings);
-    let text_width = state.term_width.saturating_sub(line_num_width) as usize;
+    let _line_num_width = line_number_width(state.settings);
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
     let tab_width = state.settings.tab_width;
     
     if text_width == 0 {
@@ -307,8 +307,8 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         return;
     }
     
-    let line_num_width = line_number_width(state.settings);
-    let text_width = state.term_width.saturating_sub(line_num_width) as usize;
+    let _line_num_width = line_number_width(state.settings);
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
     let tab_width = state.settings.tab_width;
     
     if text_width == 0 {
@@ -454,8 +454,8 @@ fn handle_navigation(
         }
         KeyCode::Home => {
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
-                let line_num_width = line_number_width(state.settings);
-                let text_width = state.term_width.saturating_sub(line_num_width) as usize;
+                let _line_num_width = line_number_width(state.settings);
+                let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
                 let tab_width = state.settings.tab_width;
                 
                 // Calculate various positions
@@ -498,8 +498,8 @@ fn handle_navigation(
         }
         KeyCode::End => {
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
-                let line_num_width = line_number_width(state.settings);
-                let text_width = state.term_width.saturating_sub(line_num_width) as usize;
+                let _line_num_width = line_number_width(state.settings);
+                let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
                 let tab_width = state.settings.tab_width;
                 
                 // Calculate positions

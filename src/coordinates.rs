@@ -107,17 +107,22 @@ pub(crate) fn visual_to_logical_position(
     lines: &[String],
     visual_line: usize,
     column: u16,
+    visible_lines: usize,
 ) -> Option<(usize, usize)> {
     let line_num_width = line_number_width(state.settings);
-    let text_width = state.term_width.saturating_sub(line_num_width);
+    let text_width = calculate_text_width(state, lines, visible_lines);
     let tab_width = state.settings.tab_width;
     
-    // Convert column to text column (excluding line numbers)
-    let text_col = if column >= line_num_width {
-        (column - line_num_width) as usize
-    } else {
-        return None; // Click was on line number area
-    };
+    // Convert column to text column (excluding line numbers and scrollbar)
+    let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let text_start = line_num_width;
+    let text_end = state.term_width.saturating_sub(scrollbar_width);
+    
+    if column < text_start || column >= text_end {
+        return None; // Click was on line number area or scrollbar
+    }
+    
+    let text_col = (column - line_num_width) as usize;
     
     // Find which logical line this visual line corresponds to
     let mut current_visual_line = 0;
@@ -176,6 +181,18 @@ pub(crate) fn adjust_view_for_resize(prev_top_line: usize, absolute_cursor_line:
     if new_top > max_top { new_top = max_top; }
     let rel_cursor = absolute_cursor_line.saturating_sub(new_top);
     (new_top, rel_cursor)
+}
+
+/// Calculate the text width available for content, accounting for line numbers and scrollbar
+/// Scrollbar takes 1 column when there are more lines than fit on screen
+pub(crate) fn calculate_text_width(
+    state: &FileViewerState,
+    lines: &[String],
+    visible_lines: usize,
+) -> u16 {
+    let line_num_width = line_number_width(state.settings);
+    let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    state.term_width.saturating_sub(line_num_width).saturating_sub(scrollbar_width)
 }
 
 #[cfg(test)]

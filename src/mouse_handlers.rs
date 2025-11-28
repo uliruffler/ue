@@ -24,9 +24,9 @@ pub(crate) fn handle_mouse_event(
             let line_num_width = crate::coordinates::line_number_width(state.settings);
             if column < line_num_width {
                 // Click on line number - select entire line
-                handle_line_number_click(state, lines, visual_line);
+                handle_line_number_click(state, lines, visual_line, visible_lines);
             } else {
-                let pos_opt = visual_to_logical_position(state, lines, visual_line, column);
+                let pos_opt = visual_to_logical_position(state, lines, visual_line, column, visible_lines);
                 if let Some((logical_line, col)) = pos_opt {
                     let clicked = (logical_line, col.min(lines[logical_line].len()));
                     if state.is_point_in_selection(clicked) {
@@ -34,14 +34,14 @@ pub(crate) fn handle_mouse_event(
                         state.start_drag();
                     } else {
                         // Normal cursor move
-                        handle_mouse_click(state, lines, visual_line, column);
+                        handle_mouse_click(state, lines, visual_line, column, visible_lines);
                     }
                 }
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if state.dragging_selection_active {
-                if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column) {
+                if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column, visible_lines) {
                     state.drag_target = Some((logical_line, col.min(lines[logical_line].len())));
                     state.needs_redraw = true; // could render a placeholder caret
                 }
@@ -50,9 +50,9 @@ pub(crate) fn handle_mouse_event(
                 let line_num_width = crate::coordinates::line_number_width(state.settings);
                 if column < line_num_width {
                     // Dragging on line number - extend line selection
-                    handle_line_number_drag(state, lines, visual_line);
+                    handle_line_number_drag(state, lines, visual_line, visible_lines);
                 } else {
-                    handle_mouse_drag(state, lines, visual_line, column);
+                    handle_mouse_drag(state, lines, visual_line, column, visible_lines);
                 }
             }
         }
@@ -79,8 +79,9 @@ fn handle_mouse_click(
     lines: &[String],
     visual_line: usize,
     column: u16,
+    visible_lines: usize,
 ) {
-    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column)
+    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column, visible_lines)
         && logical_line < lines.len() {
         restore_cursor_to_screen(state);
         state.cursor_line = logical_line.saturating_sub(state.top_line);
@@ -96,6 +97,7 @@ fn handle_mouse_drag(
     lines: &[String],
     visual_line: usize,
     column: u16,
+    visible_lines: usize,
 ) {
     if !state.mouse_dragging {
         return;
@@ -104,7 +106,7 @@ fn handle_mouse_drag(
     if state.selection_start.is_none() {
         state.selection_start = Some(state.current_position());
     }
-    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column)
+    if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column, visible_lines)
         && logical_line < lines.len() {
         restore_cursor_to_screen(state);
         state.cursor_line = logical_line.saturating_sub(state.top_line);
@@ -118,9 +120,10 @@ fn handle_line_number_click(
     state: &mut FileViewerState,
     lines: &[String],
     visual_line: usize,
+    visible_lines: usize,
 ) {
     // Find the logical line corresponding to this visual line
-    if let Some(logical_line) = visual_line_to_logical_line(state, lines, visual_line)
+    if let Some(logical_line) = visual_line_to_logical_line(state, lines, visual_line, visible_lines)
         && logical_line < lines.len() {
         restore_cursor_to_screen(state);
         
@@ -150,13 +153,14 @@ fn handle_line_number_drag(
     state: &mut FileViewerState,
     lines: &[String],
     visual_line: usize,
+    visible_lines: usize,
 ) {
     if !state.mouse_dragging {
         return;
     }
     
     // Find the logical line corresponding to this visual line
-    if let Some(logical_line) = visual_line_to_logical_line(state, lines, visual_line)
+    if let Some(logical_line) = visual_line_to_logical_line(state, lines, visual_line, visible_lines)
         && logical_line < lines.len() {
         restore_cursor_to_screen(state);
         
@@ -203,11 +207,10 @@ fn visual_line_to_logical_line(
     state: &FileViewerState,
     lines: &[String],
     visual_line: usize,
+    visible_lines: usize,
 ) -> Option<usize> {
-    use crate::coordinates::{calculate_wrapped_lines_for_line, line_number_width};
-    
-    let line_num_width = line_number_width(state.settings);
-    let text_width = state.term_width.saturating_sub(line_num_width);
+    use crate::coordinates::{calculate_wrapped_lines_for_line};
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
     let tab_width = state.settings.tab_width;
     
     let mut current_visual_line = 0;
@@ -558,15 +561,15 @@ mod tests {
         state.top_line = 0;
         
         // Visual line 0 should map to logical line 0
-        let logical = visual_line_to_logical_line(&state, &lines, 0);
+        let logical = visual_line_to_logical_line(&state, &lines, 0, 10);
         assert_eq!(logical, Some(0));
         
         // Visual line 1 should map to logical line 1
-        let logical = visual_line_to_logical_line(&state, &lines, 1);
+        let logical = visual_line_to_logical_line(&state, &lines, 1, 10);
         assert_eq!(logical, Some(1));
         
         // Visual line 2 should map to logical line 2
-        let logical = visual_line_to_logical_line(&state, &lines, 2);
+        let logical = visual_line_to_logical_line(&state, &lines, 2, 10);
         assert_eq!(logical, Some(2));
     }
 

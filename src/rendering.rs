@@ -38,6 +38,7 @@ pub(crate) fn render_screen(
     
     render_header(stdout, file, state, lines.len())?;
     render_visible_lines(stdout, file, lines, state, visible_lines)?;
+    render_scrollbar(stdout, lines, state, visible_lines)?;
     render_footer(stdout, state, lines, visible_lines)?;
     position_cursor(stdout, lines, state, visible_lines)?;
     
@@ -183,7 +184,7 @@ fn render_footer(
         let modulus = 10usize.pow(digits as u32);
         let mut last_visible_line = state.top_line;
         let mut remaining = visible_lines;
-        let text_width = state.term_width.saturating_sub(line_number_width(state.settings));
+        let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
         let tab_width = state.settings.tab_width;
         while remaining > 0 && last_visible_line < lines.len() {
             let wrapped = calculate_wrapped_lines_for_line(lines, last_visible_line, text_width, tab_width) as usize;
@@ -247,8 +248,7 @@ fn render_visible_lines(
 ) -> Result<(), std::io::Error> {
     let mut visual_lines_rendered = 0;
     let mut logical_line_index = state.top_line;
-    let line_num_width = line_number_width(state.settings);
-    let text_width_u16 = state.term_width.saturating_sub(line_num_width);
+    let text_width_u16 = crate::coordinates::calculate_text_width(state, lines, visible_lines);
     let _text_width_usize = text_width_u16 as usize;
     
     // Calculate which visual line the cursor is on
@@ -312,15 +312,14 @@ fn render_line(
     }
     
     let line = &ctx.lines[logical_line_index];
-    let line_num_width = line_number_width(ctx.state.settings);
-    let available_width = ctx.state.term_width.saturating_sub(line_num_width) as usize;
+    let available_width = crate::coordinates::calculate_text_width(ctx.state, ctx.lines, usize::MAX) as usize;
     let tab_width = ctx.state.settings.tab_width;
     
     // Expand tabs to spaces for display
     let expanded_line = expand_tabs(line, tab_width);
     let chars: Vec<char> = expanded_line.chars().collect();
     
-    let num_wrapped_lines = calculate_wrapped_lines_for_line(ctx.lines, logical_line_index, ctx.state.term_width.saturating_sub(line_num_width), tab_width);
+    let num_wrapped_lines = calculate_wrapped_lines_for_line(ctx.lines, logical_line_index, crate::coordinates::calculate_text_width(ctx.state, ctx.lines, usize::MAX), tab_width);
     
     let lines_to_render = (num_wrapped_lines as usize).min(remaining_visible_lines);
     
@@ -496,7 +495,7 @@ fn position_cursor(
     }
     
     let line_num_width = line_number_width(state.settings);
-    let text_width = state.term_width.saturating_sub(line_num_width);
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
     if state.dragging_selection_active
         && let Some((target_line, target_col)) = state.drag_target {
             let tab_width = state.settings.tab_width;
@@ -705,7 +704,7 @@ fn render_line_segment_with_selection_expanded(
     
     // Convert byte positions to visual positions for the expanded line
     let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; expanded_chars.len()];
-    let mut visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
+    let visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
     
     // Apply syntax highlighting
     for (byte_start, byte_end, color) in highlights {
@@ -720,34 +719,6 @@ fn render_line_segment_with_selection_expanded(
         // Mark visual positions with color
         for i in visual_start..visual_end.min(visual_to_color.len()) {
             visual_to_color[i] = Some(color);
-        }
-    }
-    
-    // Apply search match highlighting
-    if let Some(ref pattern) = ctx.state.last_search_pattern {
-        let matches = get_search_matches(original_line, pattern);
-        let cursor_pos = ctx.state.current_position();
-        let is_cursor_line = segment.line_index == cursor_pos.0;
-        let cursor_col = if is_cursor_line { cursor_pos.1 } else { usize::MAX };
-        
-        for (char_start, char_end) in matches {
-            // Check if this match overlaps with the find_scope
-            if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
-                continue;
-            }
-            
-            let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
-            let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
-            
-            // Check if cursor is within this match
-            let is_current_match = is_cursor_line && cursor_col >= char_start && cursor_col < char_end;
-            
-            // Only mark as search match if NOT the current match
-            if !is_current_match {
-                for i in visual_start..visual_end.min(visual_to_search_match.len()) {
-                    visual_to_search_match[i] = true;
-                }
-            }
         }
     }
 
@@ -852,6 +823,59 @@ fn render_line_segment_with_selection_expanded(
         execute!(stdout, ResetColor)?;
     }
 
+    Ok(())
+}
+
+fn render_scrollbar(
+    stdout: &mut impl Write,
+    lines: &[String],
+    state: &FileViewerState,
+    visible_lines: usize,
+) -> Result<(), std::io::Error> {
+    use crossterm::style::{SetBackgroundColor, ResetColor};
+    
+    // Only show scrollbar if there are more lines than visible
+    if lines.len() <= visible_lines {
+        return Ok(());
+    }
+    
+    // Calculate scrollbar dimensions
+    let total_lines = lines.len();
+    let scrollbar_height = visible_lines;
+    let bar_height = (visible_lines * visible_lines / total_lines).max(1);
+    
+    // Calculate scroll progress (handle case when total_lines <= visible_lines)
+    let max_scroll = total_lines.saturating_sub(visible_lines);
+    let scroll_progress = if max_scroll == 0 {
+        0.0
+    } else {
+        state.top_line as f64 / max_scroll as f64
+    };
+    
+    let bar_position = ((scrollbar_height - bar_height) as f64 * scroll_progress) as usize;
+    
+    // Get colors - use same blue as header/footer for background, light blue for bar
+    let bg_color = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
+        .unwrap_or(crossterm::style::Color::DarkBlue);
+    let bar_color = crossterm::style::Color::Rgb { r: 100, g: 149, b: 237 }; // Light blue
+    
+    // Render scrollbar column by column for each visible line
+    for i in 0..visible_lines {
+        // Move to rightmost column of this line (after header)
+        execute!(stdout, cursor::MoveTo(state.term_width - 1, (i + 1) as u16))?;
+        
+        if i >= bar_position && i < bar_position + bar_height {
+            // Render scrollbar bar
+            execute!(stdout, SetBackgroundColor(bar_color))?;
+            write!(stdout, " ")?;
+        } else {
+            // Render scrollbar background
+            execute!(stdout, SetBackgroundColor(bg_color))?;
+            write!(stdout, " ")?;
+        }
+        execute!(stdout, ResetColor)?;
+    }
+    
     Ok(())
 }
 
