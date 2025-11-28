@@ -66,6 +66,7 @@ fn render_header(
         write!(stdout, "{:width$} ", top_number, width = state.settings.appearance.line_number_digits as usize)?;
     }
     write!(stdout, "{} {} ({})", modified_char, filename, parent)?;
+    // Header row doesn't interfere with scrollbar, but clear consistently  
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
     execute!(stdout, ResetColor)?;
     write!(stdout, "\r\n")?;
@@ -144,6 +145,7 @@ fn render_footer(
             }
         }
         write!(stdout, "{}", prompt)?;
+        // Footer row doesn't interfere with scrollbar, but clear consistently
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
         execute!(stdout, ResetColor)?;
         
@@ -233,6 +235,7 @@ fn render_footer(
             write!(stdout, "{}", position_info)?;
         }
     }
+    // Footer row doesn't interfere with scrollbar, but clear consistently
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
     execute!(stdout, ResetColor)?;
     Ok(())
@@ -254,7 +257,7 @@ fn render_visible_lines(
     // Calculate which visual line the cursor is on
     let cursor_visual_line = calculate_cursor_visual_line(lines, state, text_width_u16);
     
-    let ctx = RenderContext { lines, state };
+    let ctx = RenderContext { lines, state, visible_lines };
     
     while visual_lines_rendered < visible_lines && logical_line_index < lines.len() {
         let lines_for_this_logical = render_line(
@@ -279,7 +282,12 @@ fn render_visible_lines(
             write!(stdout, "{:width$} ", "", width = state.settings.appearance.line_number_digits as usize)?;
             execute!(stdout, ResetColor)?;
         }
-        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        let current_col = if state.settings.appearance.line_number_digits > 0 {
+            state.settings.appearance.line_number_digits as u16 + 1
+        } else {
+            0
+        };
+        clear_to_scrollbar(stdout, state, lines, visible_lines, current_col)?;
         write!(stdout, "\r\n")?;
         visual_lines_rendered += 1;
     }
@@ -290,6 +298,7 @@ fn render_visible_lines(
 struct RenderContext<'a> {
     lines: &'a [String],
     state: &'a FileViewerState<'a>,
+    visible_lines: usize,
 }
 
 struct SegmentInfo {
@@ -312,14 +321,14 @@ fn render_line(
     }
     
     let line = &ctx.lines[logical_line_index];
-    let available_width = crate::coordinates::calculate_text_width(ctx.state, ctx.lines, usize::MAX) as usize;
+    let available_width = crate::coordinates::calculate_text_width(ctx.state, ctx.lines, ctx.visible_lines) as usize;
     let tab_width = ctx.state.settings.tab_width;
     
     // Expand tabs to spaces for display
     let expanded_line = expand_tabs(line, tab_width);
     let chars: Vec<char> = expanded_line.chars().collect();
     
-    let num_wrapped_lines = calculate_wrapped_lines_for_line(ctx.lines, logical_line_index, crate::coordinates::calculate_text_width(ctx.state, ctx.lines, usize::MAX), tab_width);
+    let num_wrapped_lines = calculate_wrapped_lines_for_line(ctx.lines, logical_line_index, crate::coordinates::calculate_text_width(ctx.state, ctx.lines, ctx.visible_lines), tab_width);
     
     let lines_to_render = (num_wrapped_lines as usize).min(remaining_visible_lines);
     
@@ -361,7 +370,15 @@ fn render_line(
             }
         }
         
-        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        // Calculate current column position after rendering content
+        let current_col = if ctx.state.settings.appearance.line_number_digits > 0 {
+            let line_num_width = ctx.state.settings.appearance.line_number_digits as u16 + 1;
+            let content_width = (end_visual - start_visual) as u16;
+            line_num_width + content_width
+        } else {
+            (end_visual - start_visual) as u16
+        };
+        clear_to_scrollbar(stdout, ctx.state, ctx.lines, ctx.visible_lines, current_col)?;
     }
     
     // Add newline after the last wrapped segment to separate this logical line from the next
@@ -826,6 +843,29 @@ fn render_line_segment_with_selection_expanded(
     Ok(())
 }
 
+/// Clear from current position to before scrollbar, preserving scrollbar content
+fn clear_to_scrollbar(
+    stdout: &mut impl Write,
+    state: &FileViewerState,
+    lines: &[String],
+    visible_lines: usize,
+    current_column: u16,
+) -> Result<(), std::io::Error> {
+    let scrollbar_visible = lines.len() > visible_lines;
+    let end_column = if scrollbar_visible {
+        state.term_width.saturating_sub(1) // Stop before scrollbar
+    } else {
+        state.term_width // Clear entire line if no scrollbar
+    };
+    
+    // Fill with spaces from current position to end_column
+    let spaces_needed = end_column.saturating_sub(current_column);
+    if spaces_needed > 0 {
+        write!(stdout, "{}", " ".repeat(spaces_needed as usize))?;
+    }
+    Ok(())
+}
+
 fn render_scrollbar(
     stdout: &mut impl Write,
     lines: &[String],
@@ -833,11 +873,15 @@ fn render_scrollbar(
     visible_lines: usize,
 ) -> Result<(), std::io::Error> {
     use crossterm::style::{SetBackgroundColor, ResetColor};
+    use crossterm::cursor::{SavePosition, RestorePosition};
     
     // Only show scrollbar if there are more lines than visible
     if lines.len() <= visible_lines {
         return Ok(());
     }
+    
+    // Save current cursor position to restore later
+    execute!(stdout, SavePosition)?;
     
     // Calculate scrollbar dimensions
     let total_lines = lines.len();
@@ -859,22 +903,42 @@ fn render_scrollbar(
         .unwrap_or(crossterm::style::Color::DarkBlue);
     let bar_color = crossterm::style::Color::Rgb { r: 100, g: 149, b: 237 }; // Light blue
     
-    // Render scrollbar column by column for each visible line
-    for i in 0..visible_lines {
-        // Move to rightmost column of this line (after header)
-        execute!(stdout, cursor::MoveTo(state.term_width - 1, (i + 1) as u16))?;
-        
-        if i >= bar_position && i < bar_position + bar_height {
-            // Render scrollbar bar
-            execute!(stdout, SetBackgroundColor(bar_color))?;
-            write!(stdout, " ")?;
-        } else {
-            // Render scrollbar background
-            execute!(stdout, SetBackgroundColor(bg_color))?;
+    let scrollbar_column = state.term_width - 1;
+    
+    // Render scrollbar efficiently in segments with minimal color changes
+    
+    // Top background segment
+    if bar_position > 0 {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+        for i in 0..bar_position {
+            execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
             write!(stdout, " ")?;
         }
-        execute!(stdout, ResetColor)?;
     }
+    
+    // Scrollbar bar segment  
+    if bar_height > 0 {
+        execute!(stdout, SetBackgroundColor(bar_color))?;
+        for i in bar_position..(bar_position + bar_height) {
+            execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
+            write!(stdout, " ")?;
+        }
+    }
+    
+    // Bottom background segment
+    let bottom_start = bar_position + bar_height;
+    if bottom_start < visible_lines {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+        for i in bottom_start..visible_lines {
+            execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
+            write!(stdout, " ")?;
+        }
+    }
+    
+    execute!(stdout, ResetColor)?;
+    
+    // Restore cursor position to minimize visual disruption
+    execute!(stdout, RestorePosition)?;
     
     Ok(())
 }

@@ -62,6 +62,14 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) goto_line_cursor_pos: usize,
     /// Whether user has started typing in goto_line mode (to replace pre-filled value)
     pub(crate) goto_line_typing_started: bool,
+    /// Scrollbar dragging state
+    pub(crate) scrollbar_dragging: bool,
+    /// Original top_line when scrollbar drag started (to calculate relative movement)
+    pub(crate) scrollbar_drag_start_top_line: usize,
+    /// Mouse Y position when scrollbar drag started
+    pub(crate) scrollbar_drag_start_y: u16,
+    /// Offset within the scrollbar bar when dragging started (0 = top of bar, bar_height-1 = bottom)
+    pub(crate) scrollbar_drag_bar_offset: usize,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -101,6 +109,10 @@ impl<'a> FileViewerState<'a> {
             goto_line_input: String::new(),
             goto_line_cursor_pos: 0,
             goto_line_typing_started: false,
+            scrollbar_dragging: false,
+            scrollbar_drag_start_top_line: 0,
+            scrollbar_drag_start_y: 0,
+            scrollbar_drag_bar_offset: 0,
         }
     }
 
