@@ -893,7 +893,8 @@ fn render_scrollbar(
     let scroll_progress = if max_scroll == 0 {
         0.0
     } else {
-        state.top_line as f64 / max_scroll as f64
+        // Clamp to 1.0 in case top_line exceeds max_scroll (e.g., last line at top)
+        (state.top_line as f64 / max_scroll as f64).min(1.0)
     };
     
     let bar_position = ((scrollbar_height - bar_height) as f64 * scroll_progress) as usize;

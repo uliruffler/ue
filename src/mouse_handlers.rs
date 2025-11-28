@@ -100,11 +100,10 @@ fn handle_scrollbar_drag(
         };
         
         if new_top_line != state.top_line {
+            let absolute_cursor = state.absolute_line();
             state.top_line = new_top_line;
-            // Adjust cursor if it goes off screen
-            if state.cursor_line >= visible_lines {
-                state.cursor_line = visible_lines.saturating_sub(1);
-            }
+            // Update cursor to maintain its absolute position in the text
+            update_cursor_visibility_after_scroll(state, absolute_cursor, visible_lines);
             state.needs_redraw = true;
         }
     } else {
@@ -127,11 +126,10 @@ fn handle_scrollbar_drag(
         let new_top_line = new_top_line.min(max_scroll);
         
         if new_top_line != state.top_line {
+            let absolute_cursor = state.absolute_line();
             state.top_line = new_top_line;
-            // Adjust cursor if it goes off screen
-            if state.cursor_line >= visible_lines {
-                state.cursor_line = visible_lines.saturating_sub(1);
-            }
+            // Update cursor to maintain its absolute position in the text
+            update_cursor_visibility_after_scroll(state, absolute_cursor, visible_lines);
             state.needs_redraw = true;
         }
     }
@@ -390,6 +388,7 @@ fn handle_mouse_scroll_down(
     visible_lines: usize,
     scroll_amount: usize,
 ) {
+    // Allow scrolling until the last line is at the top (not just at the bottom)
     let max_scroll = lines.len().saturating_sub(1);
     let absolute_cursor = state.absolute_line();
     let old_top = state.top_line;
@@ -590,7 +589,8 @@ mod tests {
         };
         
         handle_mouse_event(&mut state, &mut lines, mouse_event, 20);
-        assert_eq!(state.top_line, 2); // Can't scroll past last line
+        // Can scroll to show last line at top (max_scroll = lines.len() - 1 = 2)
+        assert_eq!(state.top_line, 2);
     }
 
     #[test]
@@ -889,6 +889,50 @@ mod tests {
         // Should stop dragging
         assert!(!state.scrollbar_dragging);
         assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn scrollbar_drag_maintains_cursor_absolute_position() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![];
+        // Create enough lines to need scrolling
+        for i in 0..100 {
+            lines.push(format!("line {}", i));
+        }
+        
+        // Set up initial state: cursor at line 30 (absolute), viewing from line 20
+        state.top_line = 20;
+        state.cursor_line = 10; // Visual line 10, absolute line 30
+        let visible_lines = 20;
+        let absolute_cursor_before = state.absolute_line(); // Should be 30
+        
+        assert_eq!(absolute_cursor_before, 30);
+        
+        // Set up dragging state
+        state.scrollbar_dragging = true;
+        state.scrollbar_drag_start_top_line = 20;
+        state.scrollbar_drag_start_y = 10;
+        
+        // Drag down to scroll to line 40
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: state.term_width - 1,
+            row: 15, // Drag down
+            modifiers: KeyModifiers::empty(),
+        };
+        
+        handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines);
+        
+        // The scroll position should have changed
+        assert!(state.top_line > 20);
+        
+        // The cursor should maintain its absolute position in the text
+        let absolute_cursor_after = state.absolute_line();
+        assert_eq!(absolute_cursor_after, absolute_cursor_before,
+            "Cursor absolute position should remain at line {} but is now at line {}",
+            absolute_cursor_before, absolute_cursor_after);
     }
 
     #[test]
