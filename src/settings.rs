@@ -17,7 +17,11 @@ pub(crate) struct KeyBindings {
     pub(crate) find_next: String,
     pub(crate) find_previous: String,
     pub(crate) goto_line: String,
+    #[serde(default = "default_help")]
+    pub(crate) help: String,
 }
+
+fn default_help() -> String { "F1".into() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub(crate) struct AppearanceSettings {
@@ -100,10 +104,10 @@ impl Settings {
             .or_else(|_| std::env::var("USERPROFILE"))?;
         Ok(PathBuf::from(home).join(".ue").join("settings.toml"))
     }
-    
-    /// Create default settings for testing without file I/O
-    #[cfg(test)]
-    pub(crate) fn default() -> Self {
+}
+
+impl Default for Settings {
+    fn default() -> Self {
         const DEFAULT_CONFIG: &str = include_str!("../defaults/settings.toml");
         toml::from_str(DEFAULT_CONFIG).expect("default settings should be valid")
     }
@@ -228,6 +232,7 @@ mod tests {
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
             goto_line: "Ctrl+g".into(),
+            help: "F1".into(),
         }
     }
 
@@ -537,5 +542,25 @@ mod tests {
         // Test Del alias
         kb.close = "del".into();
         assert!(kb.close_matches(&KeyCode::Delete, &KeyModifiers::empty()));
+    }
+    #[test]
+    fn test_missing_help_field_uses_default() {
+        let toml_without_help = r#"
+quit = "Esc Esc"
+copy = "Ctrl+c"
+paste = "Ctrl+v"
+cut = "Ctrl+x"
+close = "Ctrl+w"
+save = "Ctrl+s"
+undo = "Ctrl+z"
+redo = "Ctrl+y"
+file_selector = "Esc"
+find = "Ctrl+f"
+find_next = "Ctrl+n"
+find_previous = "Ctrl+p"
+goto_line = "Ctrl+b"
+"#;
+        let kb: KeyBindings = toml::from_str(toml_without_help).expect("should parse with default");
+        assert_eq!(kb.help, "F1", "help field should default to F1");
     }
 }

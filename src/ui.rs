@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use crossterm::{
     cursor::{SetCursorStyle, Hide, Show},
-    event::{self, Event, EnableMouseCapture, DisableMouseCapture},
+    event::{self, Event, KeyCode, EnableMouseCapture, DisableMouseCapture},
     execute,
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen, size},
 };
@@ -457,7 +457,17 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let mut last_known_undo_mtime = UndoHistory::get_undo_file_mtime(file);
 
     loop {
-        if state.needs_redraw { render_screen(&mut stdout, file, &lines, &state, visible_lines)?; state.needs_redraw = false; }
+        if state.needs_redraw {
+            if state.help_active {
+                // Render help screen
+                let help_content = crate::help::get_help_content(state.help_context, settings);
+                let (tw, th) = terminal::size()?;
+                crate::help::render_help(&mut stdout, &help_content, state.help_scroll_offset, tw, th)?;
+            } else {
+                render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
+            }
+            state.needs_redraw = false;
+        }
         
         // Check for external undo file changes (multi-instance editing)
         let now = Instant::now();
@@ -506,7 +516,19 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         
         match event::read()? {
             Event::Key(key_event) => {
-                // Always process Esc through double-Esc detector
+                // Special handling for help mode - process before double-Esc detector
+                if state.help_active {
+                    // In help mode, ESC should just exit help, not trigger file selector
+                    if matches!(key_event.code, KeyCode::Esc) || matches!(key_event.code, KeyCode::F(1)) {
+                        state.help_active = false;
+                        state.needs_redraw = true;
+                        continue;
+                    }
+                    // Handle other help navigation through regular key handler
+                    // which will return early for help mode
+                }
+                
+                // Always process Esc through double-Esc detector (except when in help mode, handled above)
                 match last_esc.process_key(&key_event) {
                     EscResult::Double => {
                         // Double-Esc always exits the editor, regardless of mode

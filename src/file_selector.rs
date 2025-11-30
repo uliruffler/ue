@@ -130,10 +130,15 @@ pub(crate) fn select_file() -> io::Result<Option<String>> {
         eprintln!("Please provide a filename as argument.");
         return Ok(None);
     }
+    
+    // Load settings for help keybindings
+    let settings = crate::settings::Settings::load()
+        .unwrap_or_else(|_| Default::default());
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, Hide)?;
-    let result = run_file_selector(&files);
+    let result = run_file_selector(&files, &settings);
     
     // Clean up based on result
     match &result {
@@ -152,18 +157,24 @@ pub(crate) fn select_file() -> io::Result<Option<String>> {
     result
 }
 
-fn run_file_selector(files: &[FileEntry]) -> io::Result<Option<String>> {
+fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) -> io::Result<Option<String>> {
     let mut selected_index = 0;
     let mut scroll_offset = 0;
     let mut prev_selected_index = 0;
     let mut prev_scroll_offset = 0;
     let mut needs_full_redraw = true;
+    let mut help_active = false;
+    let mut help_scroll_offset = 0;
     
     loop {
-        let (_, term_height) = crossterm::terminal::size()?;
+        let (term_width, term_height) = crossterm::terminal::size()?;
         let visible_lines = (term_height as usize).saturating_sub(1); // only footer reserved
         
-        if needs_full_redraw || scroll_offset != prev_scroll_offset {
+        if help_active {
+            // Render help screen
+            let help_content = crate::help::get_file_selector_help(settings);
+            crate::help::render_help(&mut io::stdout(), &help_content, help_scroll_offset, term_width, term_height)?;
+        } else if needs_full_redraw || scroll_offset != prev_scroll_offset {
             // Full redraw needed (first time or scrolling occurred)
             render_file_list(files, selected_index, scroll_offset, visible_lines)?;
             needs_full_redraw = false;
@@ -176,6 +187,42 @@ fn run_file_selector(files: &[FileEntry]) -> io::Result<Option<String>> {
         prev_scroll_offset = scroll_offset;
         
         if let Event::Key(key_event) = event::read()? {
+            // F1 toggles help
+            if matches!(key_event.code, KeyCode::F(1)) {
+                help_active = !help_active;
+                help_scroll_offset = 0;
+                needs_full_redraw = true;
+                continue;
+            }
+            
+            // If in help mode, handle help navigation
+            if help_active {
+                if crate::help::handle_help_input(key_event) {
+                    help_active = false;
+                    needs_full_redraw = true;
+                } else {
+                    match key_event.code {
+                        KeyCode::Up => {
+                            help_scroll_offset = help_scroll_offset.saturating_sub(1);
+                        }
+                        KeyCode::Down => {
+                            help_scroll_offset = help_scroll_offset.saturating_add(1);
+                        }
+                        KeyCode::PageUp => {
+                            help_scroll_offset = help_scroll_offset.saturating_sub(visible_lines);
+                        }
+                        KeyCode::PageDown => {
+                            help_scroll_offset = help_scroll_offset.saturating_add(visible_lines);
+                        }
+                        KeyCode::Home => {
+                            help_scroll_offset = 0;
+                        }
+                        _ => {}
+                    }
+                }
+                continue;
+            }
+            
             match key_event.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
                     let _ = crate::session::save_selector_session();

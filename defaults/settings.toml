@@ -29,4 +29,5 @@ find = "Ctrl+f"
 find_next = "Ctrl+n"
 find_previous = "Ctrl+p"
 goto_line = "Ctrl+g"
+help = "F1"
 

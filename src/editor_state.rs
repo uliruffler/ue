@@ -70,6 +70,12 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) scrollbar_drag_start_y: u16,
     /// Offset within the scrollbar bar when dragging started (0 = top of bar, bar_height-1 = bottom)
     pub(crate) scrollbar_drag_bar_offset: usize,
+    /// Help mode active
+    pub(crate) help_active: bool,
+    /// Help context (what help to show)
+    pub(crate) help_context: crate::help::HelpContext,
+    /// Help scroll offset
+    pub(crate) help_scroll_offset: usize,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -113,6 +119,9 @@ impl<'a> FileViewerState<'a> {
             scrollbar_drag_start_top_line: 0,
             scrollbar_drag_start_y: 0,
             scrollbar_drag_bar_offset: 0,
+            help_active: false,
+            help_context: crate::help::HelpContext::Editor,
+            help_scroll_offset: 0,
         }
     }
 
