@@ -403,7 +403,9 @@ fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
         return vec![];
     }
     
-    if let Ok(regex) = regex::Regex::new(pattern) {
+    // Make search case-insensitive by default
+    let pattern_with_flags = format!("(?i){}", pattern);
+    if let Ok(regex) = regex::Regex::new(&pattern_with_flags) {
         regex.find_iter(line)
             .map(|m| {
                 // Convert byte positions to character positions
@@ -1068,6 +1070,24 @@ mod tests {
         let matches = get_search_matches("hello 世界 world", "世界");
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], (6, 8)); // Character positions, not bytes
+    }
+
+    #[test]
+    fn get_search_matches_case_insensitive() {
+        // Lowercase pattern should match all case variations
+        let matches = get_search_matches("Hello WORLD hello", "hello");
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0], (0, 5));   // "Hello"
+        assert_eq!(matches[1], (12, 17)); // "hello"
+        
+        // Search for "world" should match "WORLD" case-insensitively
+        let matches = get_search_matches("Hello WORLD hello", "world");
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0], (6, 11));  // "WORLD"
+        
+        // Verify all case variations are found
+        let matches = get_search_matches("Hello hello HELLO HeLLo", "hello");
+        assert_eq!(matches.len(), 4);
     }
 
     #[test]

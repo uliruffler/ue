@@ -33,7 +33,9 @@ pub(crate) fn handle_find_input(
         KeyCode::Enter => {
             // Perform search and exit find mode
             if !state.find_pattern.is_empty() {
-                match Regex::new(&state.find_pattern) {
+                // Make search case-insensitive by default
+                let pattern = format!("(?i){}", state.find_pattern);
+                match Regex::new(&pattern) {
                     Ok(regex) => {
                         // Always set last_search_pattern for highlighting
                         state.last_search_pattern = Some(state.find_pattern.clone());
@@ -197,7 +199,9 @@ pub(crate) fn find_next_occurrence(
     visible_lines: usize,
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
-        if let Ok(regex) = Regex::new(pattern) {
+        // Make search case-insensitive by default
+        let pattern_with_flags = format!("(?i){}", pattern);
+        if let Ok(regex) = Regex::new(&pattern_with_flags) {
             if let Some(pos) = find_next(lines, state.current_position(), &regex, false, state.find_scope) {
                 // Found a match without wrapping
                 move_to_position(state, pos, lines.len(), visible_lines);
@@ -238,7 +242,9 @@ pub(crate) fn find_prev_occurrence(
     visible_lines: usize,
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
-        if let Ok(regex) = Regex::new(pattern) {
+        // Make search case-insensitive by default
+        let pattern_with_flags = format!("(?i){}", pattern);
+        if let Ok(regex) = Regex::new(&pattern_with_flags) {
             if let Some(pos) = find_prev(lines, state.current_position(), &regex, false, state.find_scope) {
                 // Found a match without wrapping
                 move_to_position(state, pos, lines.len(), visible_lines);
@@ -279,7 +285,9 @@ fn update_live_highlights(state: &mut FileViewerState) {
         state.last_search_pattern = None;
     } else {
         // Try to compile as regex - if valid, update highlights
-        if Regex::new(&state.find_pattern).is_ok() {
+        // Make search case-insensitive by default
+        let pattern_with_flags = format!("(?i){}", state.find_pattern);
+        if Regex::new(&pattern_with_flags).is_ok() {
             state.last_search_pattern = Some(state.find_pattern.clone());
             state.find_error = None;
         } else {
@@ -545,7 +553,8 @@ mod tests {
             "hello again".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        // Case-insensitive by default
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // Find next from position (0, 0) should skip current position and find next occurrence
         let result = find_next(&lines, (0, 0), &regex, false, None);
@@ -567,7 +576,7 @@ mod tests {
             "foo bar".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         let result = find_next(&lines, (1, 5), &regex, true, None);
         assert_eq!(result, Some((0, 0)));
     }
@@ -579,9 +588,34 @@ mod tests {
             "foo bar".to_string(),
         ];
         
-        let regex = Regex::new("notfound").unwrap();
+        let regex = Regex::new("(?i)notfound").unwrap();
         let result = find_next(&lines, (0, 0), &regex, false, None);
         assert_eq!(result, None);
+    }
+    
+    #[test]
+    fn find_case_insensitive_by_default() {
+        let lines = vec![
+            "Hello World".to_string(),
+            "HELLO WORLD".to_string(),
+            "hello world".to_string(),
+        ];
+        
+        // Search for lowercase "hello" should find all case variations
+        let regex = Regex::new("(?i)hello").unwrap();
+        
+        // Find first occurrence (line 0)
+        let result = find_next(&lines, (0, 0), &regex, false, None);
+        assert_eq!(result, Some((1, 0))); // Skip current, find next
+        
+        // Find second occurrence (line 1)
+        let result = find_next(&lines, (1, 0), &regex, false, None);
+        assert_eq!(result, Some((2, 0)));
+        
+        // Search for uppercase "HELLO" should also find all case variations
+        let regex = Regex::new("(?i)HELLO").unwrap();
+        let result = find_next(&lines, (0, 0), &regex, false, None);
+        assert_eq!(result, Some((1, 0)));
     }
     
     #[test]
@@ -800,7 +834,7 @@ mod tests {
             "hello world hello again hello end".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // "hello world hello again hello end"
         //  0           12          24
@@ -830,7 +864,7 @@ mod tests {
             "last line".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // Search within scope from line 1, col 0 to line 3, col 11 (covers both hellos)
         let scope = Some(((1, 0), (3, 11)));
@@ -856,7 +890,7 @@ mod tests {
             "hello world hello again hello end".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // "hello world hello again hello end"
         //  0           12          24
@@ -886,7 +920,7 @@ mod tests {
             "last line".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // Search within scope from line 1 to line 3 (covers both hellos)
         let scope = Some(((1, 0), (3, 11)));
@@ -914,7 +948,7 @@ mod tests {
             "last line".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // Search within scope from line 1 to line 3
         let scope = Some(((1, 0), (3, 11)));
@@ -934,7 +968,7 @@ mod tests {
             "last line".to_string(),
         ];
         
-        let regex = Regex::new("hello").unwrap();
+        let regex = Regex::new("(?i)hello").unwrap();
         
         // Search within scope from line 1 to line 3
         let scope = Some(((1, 0), (3, 11)));
