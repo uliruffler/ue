@@ -74,17 +74,16 @@ pub(crate) fn handle_key_event(
         }
     }
 
-    // Ctrl+Arrow custom handling: word-wise (Left/Right) and scroll (Up/Down)
+    // Ctrl+Arrow custom handling: word-wise (Left/Right) and paragraph-wise (Up/Down)
     if modifiers.contains(KeyModifiers::CONTROL) {
         let extend = modifiers.contains(KeyModifiers::SHIFT);
         if extend { state.start_selection(); }
         let mut moved = false;
-        let scroll_delta = settings.keyboard_scroll_lines as isize;
         match code {
             KeyCode::Left => { moved = word_left(state, lines); }
             KeyCode::Right => { moved = word_right(state, lines); }
-            KeyCode::Up => { moved = scroll_without_cursor(state, lines, visible_lines, -scroll_delta); }
-            KeyCode::Down => { moved = scroll_without_cursor(state, lines, visible_lines, scroll_delta); }
+            KeyCode::Up => { moved = paragraph_up(state, lines); }
+            KeyCode::Down => { moved = paragraph_down(state, lines, visible_lines); }
             _ => {}
         }
         if moved {
@@ -248,6 +247,24 @@ pub(crate) fn handle_key_event(
         return Ok((true, false));
     }
 
+    // Handle save and quit (Ctrl+q)
+    if settings.keybindings.save_and_quit_matches(&code, &modifiers) {
+        // Save the file first
+        save_file(filename, lines)?;
+        state.modified = false;
+        // Clear the unsaved file content since we just saved
+        state.undo_history.clear_unsaved_state();
+        // Before exiting, persist final scroll and cursor position
+        let abs = state.absolute_line();
+        state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+        state.undo_history.find_history = state.find_history.clone(); // Save find history
+        let _ = state.undo_history.save(filename);
+        state.last_save_time = Some(Instant::now());
+        // Save session as editor
+        let _ = crate::session::save_editor_session(filename);
+        return Ok((true, false)); // Quit after saving
+    }
+
     // Handle save
     if settings.keybindings.save_matches(&code, &modifiers) {
         save_file(filename, lines)?;
@@ -295,6 +312,28 @@ pub(crate) fn handle_key_event(
     // Handle cut
     if settings.keybindings.cut_matches(&code, &modifiers) {
         if handle_cut(state, lines, filename) { /* already set redraw */ }
+        return Ok((false, false));
+    }
+
+    // Handle Ctrl+Backspace/Delete and Alt+Backspace/Delete for word-wise deletion
+    // Alt+Backspace/Delete provided for better terminal compatibility (some terminals don't send Ctrl+Backspace)
+    if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
+        && matches!(code, KeyCode::Backspace) {
+        use crate::editing::delete_word_backward;
+        if delete_word_backward(state, lines, filename) {
+            state.modified = true;
+            state.needs_redraw = true;
+        }
+        return Ok((false, false));
+    }
+
+    if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
+        && matches!(code, KeyCode::Delete) {
+        use crate::editing::delete_word_forward;
+        if delete_word_forward(state, lines, filename) {
+            state.modified = true;
+            state.needs_redraw = true;
+        }
         return Ok((false, false));
     }
 
@@ -764,6 +803,58 @@ fn word_right(state: &mut FileViewerState, lines: &[String]) -> bool {
 }
 fn is_word_char(c: char) -> bool { c.is_alphanumeric() || c == '_' }
 
+fn paragraph_up(state: &mut FileViewerState, lines: &[String]) -> bool {
+    let mut current_line = state.absolute_line();
+    if current_line == 0 { return false; }
+
+    // Skip current paragraph (non-empty lines)
+    while current_line > 0 && !lines.get(current_line - 1).map_or(true, |l| l.trim().is_empty()) {
+        current_line -= 1;
+    }
+
+    // Skip empty lines
+    while current_line > 0 && lines.get(current_line - 1).map_or(false, |l| l.trim().is_empty()) {
+        current_line -= 1;
+    }
+
+    // Position at the start of the previous paragraph or stay at line 0
+    if current_line < state.top_line {
+        state.top_line = current_line;
+        state.cursor_line = 0;
+    } else {
+        state.cursor_line = current_line.saturating_sub(state.top_line);
+    }
+    state.cursor_col = 0;
+    true
+}
+
+fn paragraph_down(state: &mut FileViewerState, lines: &[String], visible_lines: usize) -> bool {
+    let mut current_line = state.absolute_line();
+    if current_line >= lines.len() { return false; }
+
+    // Skip current paragraph (non-empty lines)
+    while current_line < lines.len() && !lines.get(current_line).map_or(true, |l| l.trim().is_empty()) {
+        current_line += 1;
+    }
+
+    // Skip empty lines
+    while current_line < lines.len() && lines.get(current_line).map_or(false, |l| l.trim().is_empty()) {
+        current_line += 1;
+    }
+
+    // Position at the start of the next paragraph or end of file
+    let target_line = current_line.min(lines.len().saturating_sub(1));
+    if target_line >= state.top_line + visible_lines {
+        // Need to scroll down
+        state.top_line = target_line.saturating_sub(visible_lines / 2);
+        state.cursor_line = target_line.saturating_sub(state.top_line);
+    } else {
+        state.cursor_line = target_line.saturating_sub(state.top_line);
+    }
+    state.cursor_col = 0;
+    true
+}
+
 /// Get the character index of the first non-blank character in the line
 fn first_non_blank_char(line: &str) -> usize {
     line.chars().position(|c| !c.is_whitespace()).unwrap_or(0)
@@ -859,6 +950,7 @@ fn visual_line_first_non_blank(line: &str, cursor_col: usize, text_width: usize,
     vis_start
 }
 
+#[allow(dead_code)] // Only used in tests
 fn scroll_without_cursor(state: &mut FileViewerState, lines: &[String], visible_lines: usize, delta: isize) -> bool {
     if delta == 0 { return false; }
     let old_top = state.top_line;

@@ -19,7 +19,11 @@ pub(crate) struct KeyBindings {
     pub(crate) goto_line: String,
     #[serde(default = "default_help")]
     pub(crate) help: String,
+    #[serde(default = "default_save_and_quit")]
+    pub(crate) save_and_quit: String,
 }
+
+fn default_save_and_quit() -> String { "Ctrl+q".into() }
 
 fn default_help() -> String { "F1".into() }
 
@@ -127,6 +131,7 @@ impl KeyBindings {
     pub fn find_next_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find_next, code, modifiers) }
     pub fn find_previous_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.find_previous, code, modifiers) }
     pub fn goto_line_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.goto_line, code, modifiers) }
+    pub fn save_and_quit_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.save_and_quit, code, modifiers) }
     
     #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
     pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool { parse_keybinding(&self.file_selector, code, modifiers) }
@@ -233,6 +238,7 @@ mod tests {
             find_previous: "Shift+F3".into(),
             goto_line: "Ctrl+g".into(),
             help: "F1".into(),
+            save_and_quit: "Ctrl+q".into(),
         }
     }
 

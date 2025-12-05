@@ -236,6 +236,90 @@ pub(crate) fn delete_forward(state: &mut FileViewerState, lines: &mut Vec<String
     } else { false }
 }
 
+pub(crate) fn delete_word_backward(state: &mut FileViewerState, lines: &mut Vec<String>, filename: &str) -> bool {
+    let idx = state.absolute_line();
+    if idx >= lines.len() { return false; }
+
+    if state.cursor_col == 0 {
+        // At beginning of line, behave like regular backspace (merge with previous line)
+        return delete_backward(state, lines, filename);
+    }
+
+    let line = &lines[idx];
+    let start_col = state.cursor_col;
+    let mut end_col = start_col;
+
+    // Find the start of the word to delete
+    // First skip any non-word characters (whitespace/punctuation)
+    while end_col > 0 {
+        let c = line.chars().nth(end_col - 1).unwrap_or(' ');
+        if is_word_char(c) { break; }
+        end_col -= 1;
+    }
+    // Then skip word characters
+    while end_col > 0 {
+        let c = line.chars().nth(end_col - 1).unwrap_or(' ');
+        if !is_word_char(c) { break; }
+        end_col -= 1;
+    }
+
+    // Delete characters from end_col to start_col
+    let chars_to_delete: Vec<char> = line[end_col..start_col].chars().collect();
+    for (i, ch) in chars_to_delete.into_iter().enumerate().rev() {
+        state.undo_history.push(Edit::DeleteChar { line: idx, col: end_col + i, ch });
+    }
+    lines[idx].replace_range(end_col..start_col, "");
+    state.cursor_col = end_col;
+
+    state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
+    save_undo_with_timestamp(state, filename);
+    true
+}
+
+pub(crate) fn delete_word_forward(state: &mut FileViewerState, lines: &mut Vec<String>, filename: &str) -> bool {
+    let idx = state.absolute_line();
+    if idx >= lines.len() { return false; }
+
+    let line = &lines[idx];
+    let start_col = state.cursor_col;
+
+    if start_col >= line.len() {
+        // At end of line, behave like regular delete (merge with next line)
+        return delete_forward(state, lines, filename);
+    }
+
+    let mut end_col = start_col;
+
+    // Find the end of the word to delete
+    // First skip any non-word characters (whitespace/punctuation)
+    while end_col < line.len() {
+        let c = line.chars().nth(end_col).unwrap_or(' ');
+        if is_word_char(c) { break; }
+        end_col += 1;
+    }
+    // Then skip word characters
+    while end_col < line.len() {
+        let c = line.chars().nth(end_col).unwrap_or(' ');
+        if !is_word_char(c) { break; }
+        end_col += 1;
+    }
+
+    // Delete characters from start_col to end_col
+    let chars_to_delete: Vec<char> = line[start_col..end_col].chars().collect();
+    for (i, ch) in chars_to_delete.into_iter().enumerate().rev() {
+        state.undo_history.push(Edit::DeleteChar { line: idx, col: start_col + i, ch });
+    }
+    lines[idx].replace_range(start_col..end_col, "");
+
+    state.undo_history.update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
+    save_undo_with_timestamp(state, filename);
+    true
+}
+
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
 pub(crate) fn insert_tab(state: &mut FileViewerState, lines: &mut [String], filename: &str) -> bool {
     let idx = state.absolute_line();
     let tab_width = state.settings.tab_width;

@@ -30,4 +30,5 @@ find_next = "Ctrl+n"
 find_previous = "Ctrl+p"
 goto_line = "Ctrl+g"
 help = "F1"
+save_and_quit = "Ctrl+q"
 
