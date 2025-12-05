@@ -171,40 +171,46 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
                     current_files.remove(idx);
                     unsaved.retain(|f| f != &file);
                     
-                    // If there are still files, show file selector to choose next
-                    if !current_files.is_empty() {
-                        let mut visible_lines_temp = DEFAULT_VISIBLE_LINES;
-                        // Use first remaining file as context (doesn't matter which)
-                        let context_file = &current_files[idx.min(current_files.len() - 1)];
-                        match run_file_selector_overlay(context_file, &mut visible_lines_temp, &settings)? {
-                            SelectorResult::Selected(selected_file) => {
-                                // Find and open the selected file
-                                if let Some(pos) = current_files.iter().position(|f| f == &selected_file) {
-                                    idx = pos;
-                                } else {
-                                    // Selected file not in list, add it
-                                    current_files.insert(0, selected_file);
-                                    idx = 0;
-                                }
-                                continue;
+                    // Always show file selector after closing a file
+                    // The closed file has already been removed from the tracked files list (undo history deleted)
+                    // Exit alternate screen to show full file selector
+                    execute!(
+                        stdout,
+                        SetCursorStyle::DefaultUserShape,
+                        DisableMouseCapture,
+                        LeaveAlternateScreen
+                    )?;
+                    terminal::disable_raw_mode()?;
+
+                    // Show full file selector
+                    match crate::file_selector::select_file()? {
+                        Some(selected_file) => {
+                            // Re-enter raw mode and alternate screen for editing
+                            terminal::enable_raw_mode()?;
+                            execute!(
+                                stdout,
+                                EnterAlternateScreen,
+                                EnableMouseCapture,
+                                SetCursorStyle::BlinkingBar,
+                                terminal::Clear(ClearType::All)
+                            )?;
+
+                            // Find or add the selected file
+                            if let Some(pos) = current_files.iter().position(|f| f == &selected_file) {
+                                idx = pos;
+                            } else {
+                                current_files.insert(0, selected_file);
+                                idx = 0;
                             }
-                            SelectorResult::Quit => {
-                                break; // User chose to quit
-                            }
-                            SelectorResult::Cancelled => {
-                                // User cancelled, just continue with next file or quit
-                                if idx >= current_files.len() && idx > 0 {
-                                    idx -= 1;
-                                }
-                                if idx >= current_files.len() {
-                                    break;
-                                }
-                                continue;
-                            }
+                            continue;
                         }
-                    } else {
-                        // No more files, exit
-                        break;
+                        None => {
+                            // User quit from file selector
+                            if let Err(e) = crate::session::save_selector_session() {
+                                eprintln!("Warning: failed to save selector session: {}", e);
+                            }
+                            return Ok(()); // Exit editor
+                        }
                     }
                 }
                 
@@ -229,6 +235,12 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
     )?;
     terminal::disable_raw_mode()?;
     if !unsaved.is_empty() { println!("Warning: Unsaved changes (not saved) for: {}", unsaved.join(", ")); }
+
+    // Save selector session when exiting completely (all files closed)
+    if let Err(e) = crate::session::save_selector_session() {
+        eprintln!("Warning: failed to save selector session: {}", e);
+    }
+
     Ok(())
 }
 

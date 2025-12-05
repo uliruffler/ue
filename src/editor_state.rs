@@ -76,6 +76,15 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) help_context: crate::help::HelpContext,
     /// Help scroll offset
     pub(crate) help_scroll_offset: usize,
+    /// Last mouse click time for detecting double/triple clicks
+    #[allow(dead_code)]
+    pub(crate) last_click_time: Option<Instant>,
+    /// Last mouse click position (logical line, column)
+    #[allow(dead_code)]
+    pub(crate) last_click_pos: Option<Position>,
+    /// Number of consecutive clicks at the same position
+    #[allow(dead_code)]
+    pub(crate) click_count: usize,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -122,6 +131,9 @@ impl<'a> FileViewerState<'a> {
             help_active: false,
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
+            last_click_time: None,
+            last_click_pos: None,
+            click_count: 0,
         }
     }
 

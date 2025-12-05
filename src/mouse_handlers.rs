@@ -1,6 +1,166 @@
 use crossterm::event::{MouseEvent, MouseEventKind, MouseButton, KeyModifiers};
 use crate::coordinates::visual_to_logical_position;
 use crate::editor_state::FileViewerState;
+use std::time::Instant;
+
+/// Check if a character is a word character (alphanumeric or underscore)
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+/// Find the start of the word containing the given position in a line
+fn find_word_start(line: &str, col: usize) -> usize {
+    if col == 0 || line.is_empty() {
+        return 0;
+    }
+
+    let chars: Vec<char> = line.chars().collect();
+    let mut start = col.min(chars.len() - 1);
+
+    // If cursor is at end of line, check the last character
+    if start >= chars.len() {
+        start = chars.len() - 1;
+    }
+
+    // If not on a word character, find the previous word character
+    if !is_word_char(chars[start]) {
+        while start > 0 && !is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+        if start > 0 && is_word_char(chars[start - 1]) {
+            start -= 1;
+        }
+    }
+
+    // Find the beginning of the word
+    while start > 0 && is_word_char(chars[start - 1]) {
+        start -= 1;
+    }
+
+    start
+}
+
+/// Find the end of the word containing the given position in a line
+fn find_word_end(line: &str, col: usize) -> usize {
+    let chars: Vec<char> = line.chars().collect();
+    let mut end = col.min(chars.len());
+
+    // If not on a word character, find the next word character
+    if end < chars.len() && !is_word_char(chars[end]) {
+        while end < chars.len() && !is_word_char(chars[end]) {
+            end += 1;
+        }
+    }
+
+    // Find the end of the word
+    while end < chars.len() && is_word_char(chars[end]) {
+        end += 1;
+    }
+
+    end
+}
+
+/// Handle double-click to select word
+fn handle_double_click(
+    state: &mut FileViewerState,
+    lines: &[String],
+    logical_line: usize,
+    col: usize,
+) {
+    if logical_line < lines.len() {
+        restore_cursor_to_screen(state);
+        let line = &lines[logical_line];
+
+        let word_start = find_word_start(line, col);
+        let word_end = find_word_end(line, col);
+
+        state.selection_start = Some((logical_line, word_start));
+        state.selection_end = Some((logical_line, word_end));
+        state.cursor_line = logical_line.saturating_sub(state.top_line);
+        state.cursor_col = word_end;
+        state.mouse_dragging = true;
+        state.needs_redraw = true;
+    }
+}
+
+/// Handle triple-click to select entire line
+fn handle_triple_click(
+    state: &mut FileViewerState,
+    lines: &[String],
+    logical_line: usize,
+) {
+    if logical_line < lines.len() {
+        restore_cursor_to_screen(state);
+
+        // Select from start of line to start of next line (or end of current line if last)
+        state.selection_start = Some((logical_line, 0));
+        state.cursor_line = logical_line.saturating_sub(state.top_line);
+        state.cursor_col = lines[logical_line].len();
+
+        if logical_line + 1 < lines.len() {
+            state.selection_end = Some((logical_line + 1, 0));
+        } else {
+            state.selection_end = Some((logical_line, lines[logical_line].len()));
+        }
+
+        state.mouse_dragging = true;
+        state.needs_redraw = true;
+    }
+}
+
+/// Check if a position is within the click timeout and location threshold
+fn is_same_click_location(last_pos: Option<(usize, usize)>, current_pos: (usize, usize)) -> bool {
+    last_pos.map_or(false, |pos| {
+        // Same position or adjacent columns (within 1 character)
+        pos.0 == current_pos.0 && (pos.1 as isize - current_pos.1 as isize).abs() <= 1
+    })
+}
+
+/// Handle mouse click with multi-click detection
+fn handle_mouse_click_multiclick(
+    state: &mut FileViewerState,
+    lines: &[String],
+    visual_line: usize,
+    column: u16,
+    visible_lines: usize,
+) {
+    let current_click_pos = (visual_line, column as usize);
+
+    // Check if this is a multiple click (within 500ms and same location)
+    let is_multiple_click = if let Some(last_time) = state.last_click_time {
+        let elapsed = last_time.elapsed().as_millis();
+        let location_ok = is_same_click_location(state.last_click_pos, current_click_pos);
+        let time_ok = elapsed <= 500;
+        time_ok && location_ok
+    } else {
+        false
+    };
+
+    if !is_multiple_click {
+        // Single click - normal behavior
+        handle_mouse_click(state, lines, visual_line, column, visible_lines);
+        state.click_count = 1;
+    } else {
+        // Multiple click
+        state.click_count += 1;
+
+        // Get the logical line and column
+        if let Some((logical_line, col)) = visual_to_logical_position(state, lines, visual_line, column, visible_lines) {
+            if state.click_count == 2 {
+                // Double click - select word
+                handle_double_click(state, lines, logical_line, col);
+            } else if state.click_count >= 3 {
+                // Triple click or more - select entire line
+                handle_triple_click(state, lines, logical_line);
+                state.click_count = 3; // Cap at 3 to prevent overflow
+            }
+        }
+    }
+
+    // Update click state for next click
+    state.last_click_time = Some(Instant::now());
+    state.last_click_pos = Some(current_click_pos);
+}
 
 /// Handle mouse click on scrollbar
 fn handle_scrollbar_click(
@@ -174,12 +334,20 @@ pub(crate) fn handle_mouse_event(
                     let pos_opt = visual_to_logical_position(state, lines, visual_line, column, visible_lines);
                     if let Some((logical_line, col)) = pos_opt {
                         let clicked = (logical_line, col.min(lines[logical_line].len()));
-                        if state.is_point_in_selection(clicked) {
-                            // Start drag operation
+                        // Check if this might be a multi-click first (within 500ms of last click)
+                        let is_potential_multiclick = if let Some(last_time) = state.last_click_time {
+                            last_time.elapsed().as_millis() <= 500 &&
+                            is_same_click_location(state.last_click_pos, (visual_line, column as usize))
+                        } else {
+                            false
+                        };
+
+                        if !is_potential_multiclick && state.is_point_in_selection(clicked) {
+                            // Start drag operation (only if not a potential multi-click)
                             state.start_drag();
                         } else {
-                            // Normal cursor move
-                            handle_mouse_click(state, lines, visual_line, column, visible_lines);
+                            // Normal cursor move (including multi-click handling)
+                            handle_mouse_click_multiclick(state, lines, visual_line, column, visible_lines);
                         }
                     }
                 }
@@ -1146,6 +1314,178 @@ mod tests {
         }
         
         println!("✓ All scrollbar positions reached successfully!");
+    }
+
+    #[test]
+    fn double_click_selects_word() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "hello world test".to_string(),
+            "second line".to_string(),
+        ];
+
+        // Calculate where to click: past line numbers, at a word
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let click_col = (line_num_width as usize) + 3; // A few characters into the text
+
+        // First click on the word "hello"
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1, // First line (row 0 is header)
+            modifiers: KeyModifiers::empty(),
+        };
+
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Immediately click again at the same position (double-click)
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(100));
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should have selected the word "hello"
+        assert_eq!(state.selection_start, Some((0, 0))); // Start of "hello"
+        assert_eq!(state.selection_end, Some((0, 5))); // End of "hello"
+        assert!(state.mouse_dragging);
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn triple_click_selects_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "first line".to_string(),
+            "second line".to_string(),
+            "third line".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let click_col = (line_num_width as usize) + 3;
+
+        // First click - normal single click
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1, // First line
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+        assert_eq!(state.click_count, 1, "After first click, click_count should be 1");
+
+        // Make last click time appear to be in the past (within 500ms window)
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(100));
+
+        // Second click - should be detected as double-click (multiple click)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+        assert_eq!(state.click_count, 2, "After second click, click_count should be 2");
+        assert_eq!(state.selection_start, Some((0, 0)), "Double-click should select word start");
+        assert_eq!(state.selection_end, Some((0, 5)), "Double-click should select word end (first word is 'first'=5 chars)");
+
+        // Again, make last click time appear to be in the past
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(100));
+
+        // Third click - should be detected as triple-click
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+        assert_eq!(state.click_count, 3, "After third click, click_count should be 3");
+
+        // Should have selected the entire line
+        assert_eq!(state.selection_start, Some((0, 0)), "Triple-click should select from line start");
+        assert_eq!(state.selection_end, Some((1, 0)), "Triple-click should select to next line start");
+        assert!(state.mouse_dragging, "Should be in dragging mode");
+        assert!(state.needs_redraw, "Should need redraw");
+    }
+
+    #[test]
+    fn double_click_on_middle_of_word_selects_word() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["hello world".to_string()];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let click_col = (line_num_width as usize) + 9; // In middle of "world"
+
+        // First click in middle of "world"
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(600));
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Second click (double-click) at same position
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(100));
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should select the entire word "world"
+        assert_eq!(state.selection_start, Some((0, 6))); // Start of "world"
+        assert_eq!(state.selection_end, Some((0, 11))); // End of "world"
+    }
+
+    #[test]
+    fn double_click_on_non_word_character() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(Settings::load().expect("Failed to load test settings")));
+        let mut state = create_test_state(settings);
+        let mut lines = vec!["hello,world".to_string()];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let click_col = (line_num_width as usize) + 5; // On the comma
+
+        // First click on comma
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(600));
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Second click (double-click) on same comma
+        state.last_click_time = Some(Instant::now() - std::time::Duration::from_millis(100));
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should select just around the non-word character
+        // The selection should be minimal for non-word chars
+        assert!(state.selection_start.is_some());
+        assert!(state.selection_end.is_some());
     }
 
     // ...existing tests...
