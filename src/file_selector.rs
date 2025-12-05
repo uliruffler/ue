@@ -172,7 +172,7 @@ fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) 
         
         if help_active {
             // Render help screen
-            let help_content = crate::help::get_file_selector_help(settings);
+            let help_content = crate::help::get_file_selector_help(settings, term_width as usize);
             crate::help::render_help(&mut io::stdout(), &help_content, help_scroll_offset, term_width, term_height)?;
         } else if needs_full_redraw || scroll_offset != prev_scroll_offset {
             // Full redraw needed (first time or scrolling occurred)

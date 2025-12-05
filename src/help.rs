@@ -27,22 +27,76 @@ fn replace_keybindings(content: &str, settings: &crate::settings::Settings) -> S
 }
 
 /// Load and format help content from markdown file
-fn load_help_from_md(content: &str, settings: &crate::settings::Settings) -> Vec<String> {
+/// Renders markdown (including tables) to terminal-formatted text
+fn load_help_from_md(content: &str, settings: &crate::settings::Settings, term_width: usize) -> Vec<String> {
+    use termimad::{MadSkin, Area};
+
+    // First replace keybinding placeholders
     let replaced = replace_keybindings(content, settings);
-    replaced.lines().map(|line| line.to_string()).collect()
+
+    // Create a skin for rendering
+    let skin = MadSkin::default();
+
+    // Create an area for the text to fit within
+    let area = Area::new(0, 0, term_width as u16, u16::MAX);
+
+    // Render markdown to formatted text
+    let fmt_text = skin.area_text(&replaced, &area);
+
+    // Split into lines for scrolling
+    fmt_text.to_string().lines().map(|line| line.to_string()).collect()
 }
 
 /// Get help content for the given context
-pub(crate) fn get_help_content(context: HelpContext, settings: &crate::settings::Settings) -> Vec<String> {
+pub(crate) fn get_help_content(context: HelpContext, settings: &crate::settings::Settings, term_width: usize) -> Vec<String> {
     match context {
-        HelpContext::Editor => load_help_from_md(include_str!("../defaults/help-editor.md"), settings),
-        HelpContext::Find => load_help_from_md(include_str!("../defaults/help-find.md"), settings),
+        HelpContext::Editor => load_help_from_md(include_str!("../defaults/help-editor.md"), settings, term_width),
+        HelpContext::Find => load_help_from_md(include_str!("../defaults/help-find.md"), settings, term_width),
     }
 }
 
 /// Get help content for file selector
-pub(crate) fn get_file_selector_help(settings: &crate::settings::Settings) -> Vec<String> {
-    load_help_from_md(include_str!("../defaults/help-file-selector.md"), settings)
+pub(crate) fn get_file_selector_help(settings: &crate::settings::Settings, term_width: usize) -> Vec<String> {
+    load_help_from_md(include_str!("../defaults/help-file-selector.md"), settings, term_width)
+}
+
+/// Truncate a string to a maximum display width, handling UTF-8 and ANSI escape codes
+/// Returns a string that fits within the width without breaking multi-byte characters
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    let mut visual_width = 0;
+    let mut result = String::new();
+    let mut chars = text.chars().peekable();
+    let mut in_escape = false;
+
+    while let Some(ch) = chars.next() {
+        // Handle ANSI escape sequences (they don't contribute to visual width)
+        if ch == '\x1b' {
+            in_escape = true;
+            result.push(ch);
+            continue;
+        }
+
+        if in_escape {
+            result.push(ch);
+            // ANSI escape sequences end with a letter (simplified check)
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+            continue;
+        }
+
+        // Count visual width (simplified - treats all chars as width 1)
+        // In reality, we'd need unicode-width crate for accurate width
+        visual_width += 1;
+
+        if visual_width > max_width {
+            break;
+        }
+
+        result.push(ch);
+    }
+
+    result
 }
 
 /// Handle help mode key events
@@ -75,12 +129,8 @@ pub(crate) fn render_help(
     // Render help content
     for (i, line) in help_lines.iter().skip(scroll_offset).take(visible_lines).enumerate() {
         execute!(stdout, cursor::MoveTo(0, i as u16))?;
-        // Truncate line if too wide
-        let display_line = if line.len() > term_width as usize {
-            &line[..term_width as usize]
-        } else {
-            line
-        };
+        // Truncate line if too wide - use char-aware truncation to avoid UTF-8 boundary errors
+        let display_line = truncate_to_width(line, term_width as usize);
         write!(stdout, "{}", display_line)?;
         execute!(stdout, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
@@ -115,11 +165,12 @@ mod tests {
     #[test]
     fn test_help_contexts_have_content() {
         let settings = Default::default();
-        let editor_help = get_help_content(HelpContext::Editor, &settings);
+        let term_width = 80;
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
         assert!(!editor_help.is_empty());
         assert!(editor_help.iter().any(|line| line.contains("Navigation") || line.contains("NAVIGATION")));
         
-        let find_help = get_help_content(HelpContext::Find, &settings);
+        let find_help = get_help_content(HelpContext::Find, &settings, term_width);
         assert!(!find_help.is_empty());
         assert!(find_help.iter().any(|line| line.contains("Find Mode") || line.contains("FIND MODE")));
     }
@@ -127,7 +178,8 @@ mod tests {
     #[test]
     fn test_file_selector_help_has_content() {
         let settings = Default::default();
-        let selector_help = get_file_selector_help(&settings);
+        let term_width = 80;
+        let selector_help = get_file_selector_help(&settings, term_width);
         assert!(!selector_help.is_empty());
         assert!(selector_help.iter().any(|line| line.contains("File Selector") || line.contains("FILE SELECTOR")));
     }
@@ -150,18 +202,20 @@ mod tests {
     #[test]
     fn test_help_loads_from_markdown_files() {
         let settings = Default::default();
-        // Editor help should be loaded from markdown
-        let editor_help = get_help_content(HelpContext::Editor, &settings);
-        // Check for markdown-style headers or table separators
-        assert!(editor_help.iter().any(|line| line.starts_with('#') || line.contains('|')));
-        
-        // Find help should be loaded from markdown
-        let find_help = get_help_content(HelpContext::Find, &settings);
-        assert!(find_help.iter().any(|line| line.starts_with('#') || line.contains('|')));
-        
-        // File selector help should be loaded from markdown
-        let selector_help = get_file_selector_help(&settings);
-        assert!(selector_help.iter().any(|line| line.starts_with('#') || line.contains('|')));
+        let term_width = 80;
+
+        // Editor help should be loaded and rendered from markdown
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
+        // After rendering, raw markdown markers should not be present but content should be formatted
+        assert!(editor_help.iter().any(|line| line.contains("Navigation")));
+
+        // Find help should be loaded and rendered from markdown
+        let find_help = get_help_content(HelpContext::Find, &settings, term_width);
+        assert!(find_help.iter().any(|line| line.contains("Find Mode")));
+
+        // File selector help should be loaded and rendered from markdown
+        let selector_help = get_file_selector_help(&settings, term_width);
+        assert!(selector_help.iter().any(|line| line.contains("File Selector")));
     }
     
     #[test]
@@ -182,8 +236,9 @@ mod tests {
     #[test]
     fn test_keybinding_replacement() {
         let settings = Default::default();
-        let editor_help = get_help_content(HelpContext::Editor, &settings);
-        
+        let term_width = 80;
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
+
         // Verify that placeholders were replaced with actual keybindings
         assert!(editor_help.iter().any(|line| line.contains(&settings.keybindings.help)));
         assert!(editor_help.iter().any(|line| line.contains(&settings.keybindings.find)));
@@ -194,6 +249,172 @@ mod tests {
         assert!(!editor_help.iter().any(|line| line.contains("{find}")));
         assert!(!editor_help.iter().any(|line| line.contains("{save}")));
     }
+
+    #[test]
+    fn test_tables_are_rendered() {
+        let settings = Default::default();
+        let term_width = 80;
+
+        // Test editor help tables
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
+        let help_text = editor_help.join("\n");
+
+        // Tables should be rendered with content (not raw markdown pipes)
+        // Look for table content that appears in help files
+        assert!(help_text.contains("Arrow Keys") || help_text.contains("Move cursor"));
+        assert!(help_text.contains("Navigation"));
+        assert!(help_text.contains("Editing"));
+
+        // Verify table content is present and formatted
+        // The table should have multiple lines with content from the markdown tables
+        let navigation_section = editor_help.iter()
+            .skip_while(|line| !line.contains("Navigation"))
+            .take(15)
+            .collect::<Vec<_>>();
+        assert!(!navigation_section.is_empty(), "Navigation section should exist");
+
+        // Test find help tables
+        let find_help = get_help_content(HelpContext::Find, &settings, term_width);
+        let find_text = find_help.join("\n");
+        assert!(find_text.contains("Regex Examples") || find_text.contains("Pattern") || find_text.contains("Matches"));
+
+        // Test file selector help tables
+        let selector_help = get_file_selector_help(&settings, term_width);
+        let selector_text = selector_help.join("\n");
+        assert!(selector_text.contains("File Operations") || selector_text.contains("Navigation"));
+    }
+
+    #[test]
+    fn test_table_content_is_formatted() {
+        let settings = Default::default();
+        let term_width = 100;
+
+        // Get editor help which contains multiple tables
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
+
+        // Verify specific table entries are present
+        // These are from the Navigation table in help-editor.md
+        assert!(editor_help.iter().any(|line| line.contains("Arrow Keys")));
+        assert!(editor_help.iter().any(|line| line.contains("Home") && line.contains("End")));
+        assert!(editor_help.iter().any(|line| line.contains("Page")));
+
+        // Verify no raw markdown table syntax remains (| --- | --- |)
+        assert!(!editor_help.iter().any(|line| line.contains("|--")));
+        assert!(!editor_help.iter().any(|line| line.contains("--|")));
+    }
+
+    #[test]
+    fn test_tables_respect_terminal_width() {
+        let settings = Default::default();
+
+        // Test with narrow terminal - the content should be rendered
+        let narrow_help = get_help_content(HelpContext::Editor, &settings, 40);
+        assert!(!narrow_help.is_empty(), "Help should have content even with narrow terminal");
+
+        // Test with wide terminal
+        let wide_help = get_help_content(HelpContext::Editor, &settings, 120);
+        assert!(!wide_help.is_empty(), "Help should have content with wide terminal");
+
+        // Both should contain the same basic content
+        let narrow_text = narrow_help.join("\n");
+        let wide_text = wide_help.join("\n");
+        assert!(narrow_text.contains("Navigation") || narrow_text.contains("Help"));
+        assert!(wide_text.contains("Navigation") || wide_text.contains("Help"));
+    }
+
+    #[test]
+    fn test_table_rendering_in_all_help_contexts() {
+        let settings = Default::default();
+        let term_width = 80;
+
+        // Editor help should have multiple tables
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
+        assert!(editor_help.iter().any(|line| line.contains("Navigation")));
+        assert!(editor_help.iter().any(|line| line.contains("Editing")));
+        assert!(editor_help.iter().any(|line| line.contains("Selection")));
+        assert!(editor_help.iter().any(|line| line.contains("Search")));
+
+        // Find help should have tables
+        let find_help = get_help_content(HelpContext::Find, &settings, term_width);
+        assert!(find_help.iter().any(|line| line.contains("Basic Usage") || line.contains("Find Mode")));
+
+        // File selector help should have tables
+        let selector_help = get_file_selector_help(&settings, term_width);
+        assert!(selector_help.iter().any(|line| line.contains("Navigation") || line.contains("File Operations")));
+    }
+
+    #[test]
+    fn test_markdown_table_formatting_sample() {
+        // This test demonstrates that tables are properly formatted
+        let settings = Default::default();
+        let term_width = 80;
+
+        let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
+        let output = editor_help.join("\n");
+
+        // Verify that markdown table delimiters are not present
+        assert!(!output.contains("| Key | Action |"), "Raw table header should be rendered");
+        assert!(!output.contains("|-----|--------|"), "Table separator should be rendered");
+
+        // Verify actual table content is present (these are from the markdown)
+        assert!(output.contains("Arrow Keys"), "Table content should be present");
+        assert!(output.contains("Move cursor") || output.contains("cursor"), "Table actions should be present");
+
+        // Print a sample for manual verification (visible with --nocapture)
+        eprintln!("\n=== Sample of rendered help (first 30 lines) ===");
+        for (i, line) in editor_help.iter().take(30).enumerate() {
+            eprintln!("{:3}: {}", i + 1, line);
+        }
+        eprintln!("=== End of sample ===\n");
+    }
+
+    #[test]
+    fn test_truncate_to_width_handles_utf8() {
+        // Test with box-drawing characters (3 bytes each in UTF-8)
+        let text = "├────────────┼──────────────────┤";
+        let truncated = truncate_to_width(text, 10);
+        // Should not panic and should produce valid UTF-8
+        assert!(truncated.len() <= 30); // 10 chars * 3 bytes max
+        assert!(truncated.is_empty() || truncated.chars().count() <= 10);
+    }
+
+    #[test]
+    fn test_truncate_to_width_handles_ascii() {
+        let text = "Hello, World!";
+        let truncated = truncate_to_width(text, 5);
+        assert_eq!(truncated, "Hello");
+    }
+
+    #[test]
+    fn test_truncate_to_width_preserves_ansi_codes() {
+        // Text with ANSI color codes
+        let text = "\x1b[1mBold Text\x1b[0m";
+        let truncated = truncate_to_width(text, 5);
+        // Should preserve ANSI codes and truncate visible text
+        assert!(truncated.contains("\x1b[1m"), "Should preserve ANSI codes");
+        assert!(truncated.contains("Bold"), "Should have some content");
+    }
+
+    #[test]
+    fn test_truncate_to_width_no_truncation_needed() {
+        let text = "Short";
+        let truncated = truncate_to_width(text, 100);
+        assert_eq!(truncated, text);
+    }
+
+    #[test]
+    fn test_truncate_to_width_empty_string() {
+        let text = "";
+        let truncated = truncate_to_width(text, 10);
+        assert_eq!(truncated, "");
+    }
+
+    #[test]
+    fn test_truncate_to_width_unicode_emoji() {
+        let text = "Hello 👋 World 🌍";
+        let truncated = truncate_to_width(text, 8);
+        // Should handle multi-byte unicode without panicking
+        assert!(truncated.len() > 0);
+        assert!(truncated.chars().count() <= 8);
+    }
 }
-
-

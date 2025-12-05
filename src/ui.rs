@@ -477,8 +477,8 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         if state.needs_redraw {
             if state.help_active {
                 // Render help screen
-                let help_content = crate::help::get_help_content(state.help_context, settings);
                 let (tw, th) = terminal::size()?;
+                let help_content = crate::help::get_help_content(state.help_context, settings, tw as usize);
                 crate::help::render_help(&mut stdout, &help_content, state.help_scroll_offset, tw, th)?;
             } else {
                 render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
