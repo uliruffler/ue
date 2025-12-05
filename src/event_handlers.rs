@@ -21,6 +21,59 @@ pub(crate) fn handle_key_event(
 ) -> Result<(bool, bool), std::io::Error> {
     let KeyEvent { code, modifiers, .. } = key_event;
 
+    // Handle Ctrl+A for select all
+    if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('a')) {
+        if !lines.is_empty() {
+            state.selection_start = Some((0, 0));
+            let last_line = lines.len() - 1;
+            let last_col = lines[last_line].len();
+            state.selection_end = Some((last_line, last_col));
+            state.needs_redraw = true;
+        }
+        return Ok((false, false));
+    }
+
+    // Ctrl+Home and Ctrl+End: jump to beginning/end of document
+    if modifiers.contains(KeyModifiers::CONTROL) {
+        let extend = modifiers.contains(KeyModifiers::SHIFT);
+        let mut moved = false;
+
+        match code {
+            KeyCode::Home => {
+                // Jump to beginning of document
+                if extend { state.start_selection(); }
+                state.top_line = 0;
+                state.cursor_line = 0;
+                state.cursor_col = 0;
+                moved = true;
+            }
+            KeyCode::End => {
+                // Jump to end of document
+                if extend { state.start_selection(); }
+                if !lines.is_empty() {
+                    let last_line = lines.len() - 1;
+                    // Position cursor at end of last line
+                    if last_line < visible_lines {
+                        state.top_line = 0;
+                        state.cursor_line = last_line;
+                    } else {
+                        state.top_line = last_line.saturating_sub(visible_lines - 1);
+                        state.cursor_line = last_line - state.top_line;
+                    }
+                    state.cursor_col = lines[last_line].len();
+                }
+                moved = true;
+            }
+            _ => {}
+        }
+
+        if moved {
+            if extend { state.update_selection(); } else { state.clear_selection(); }
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+    }
+
     // Ctrl+Arrow custom handling: word-wise (Left/Right) and scroll (Up/Down)
     if modifiers.contains(KeyModifiers::CONTROL) {
         let extend = modifiers.contains(KeyModifiers::SHIFT);
@@ -439,7 +492,7 @@ fn handle_navigation(
     
     let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     let moved = match code {
-        KeyCode::Up => { 
+        KeyCode::Up => {
             handle_up_navigation(state, lines, visible_lines);
             state.adjust_cursor_col(&lines_refs); 
             true 
@@ -1205,5 +1258,133 @@ mod tests {
         let key_event = KeyEvent::new(KeyCode::Home, KeyModifiers::empty());
         let _ = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
         assert_eq!(state.help_scroll_offset, 0, "Should scroll to top");
+    }
+
+    #[test]
+    fn ctrl_a_selects_all_text() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "Line 1".to_string(),
+            "Line 2".to_string(),
+            "Line 3".to_string(),
+        ];
+
+        state.cursor_line = 1;
+        state.cursor_col = 3;
+
+        let key_event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let settings = state.settings;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(state.selection_start, Some((0, 0)));
+        assert_eq!(state.selection_end, Some((2, 6)));
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn ctrl_a_on_empty_file_does_nothing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines: Vec<String> = vec![];
+
+        let key_event = KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL);
+        let settings = state.settings;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(state.selection_start, None);
+        assert_eq!(state.selection_end, None);
+    }
+
+    #[test]
+    fn ctrl_home_jumps_to_beginning() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+
+        state.top_line = 25;
+        state.cursor_line = 5;
+        state.cursor_col = 5;
+
+        let key_event = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+        let settings = state.settings;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, 0);
+        assert_eq!(state.cursor_line, 0);
+        assert_eq!(state.cursor_col, 0);
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn ctrl_end_jumps_to_end() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 0;
+
+        let key_event = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL);
+        let settings = state.settings;
+        let visible_lines = 20;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(state.absolute_line(), 49);
+        assert_eq!(state.cursor_col, lines[49].len());
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn shift_ctrl_home_selects_to_beginning() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+
+        state.top_line = 25;
+        state.cursor_line = 5;
+        state.cursor_col = 5;
+        let start_pos = (state.absolute_line(), state.cursor_col);
+
+        let key_event = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        let settings = state.settings;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, 0);
+        assert_eq!(state.cursor_line, 0);
+        assert_eq!(state.cursor_col, 0);
+        assert_eq!(state.selection_start, Some(start_pos));
+        assert_eq!(state.selection_end, Some((0, 0)));
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn shift_ctrl_end_selects_to_end() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+
+        state.top_line = 5;
+        state.cursor_line = 5;
+        state.cursor_col = 2;
+        let start_pos = (state.absolute_line(), state.cursor_col);
+
+        let key_event = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        let settings = state.settings;
+        let visible_lines = 20;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(state.absolute_line(), 49);
+        assert_eq!(state.cursor_col, lines[49].len());
+        assert_eq!(state.selection_start, Some(start_pos));
+        assert_eq!(state.selection_end, Some((49, lines[49].len())));
+        assert!(state.needs_redraw);
     }
 }

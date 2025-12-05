@@ -397,15 +397,49 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
     }
 }
 
-/// Get character ranges for search matches in a line
+/// Cached regex for search performance
+use std::cell::RefCell;
+thread_local! {
+    static SEARCH_REGEX_CACHE: RefCell<Option<(String, regex::Regex)>> = RefCell::new(None);
+}
+
+/// Get character ranges for search matches in a line (with caching)
 fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
     if pattern.is_empty() {
         return vec![];
     }
     
-    // Make search case-insensitive by default
-    let pattern_with_flags = format!("(?i){}", pattern);
-    if let Ok(regex) = regex::Regex::new(&pattern_with_flags) {
+    // Try to use cached regex
+    SEARCH_REGEX_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+
+        // Check if we need to compile a new regex
+        let regex = if let Some((cached_pattern, cached_regex)) = cache.as_ref() {
+            if cached_pattern == pattern {
+                cached_regex
+            } else {
+                // Pattern changed, compile new regex
+                let pattern_with_flags = format!("(?i){}", pattern);
+                match regex::Regex::new(&pattern_with_flags) {
+                    Ok(regex) => {
+                        *cache = Some((pattern.to_string(), regex));
+                        &cache.as_ref().unwrap().1
+                    }
+                    Err(_) => return vec![],
+                }
+            }
+        } else {
+            // No cached regex, compile new one
+            let pattern_with_flags = format!("(?i){}", pattern);
+            match regex::Regex::new(&pattern_with_flags) {
+                Ok(regex) => {
+                    *cache = Some((pattern.to_string(), regex));
+                    &cache.as_ref().unwrap().1
+                }
+                Err(_) => return vec![],
+            }
+        };
+
         regex.find_iter(line)
             .map(|m| {
                 // Convert byte positions to character positions
@@ -414,9 +448,7 @@ fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
                 (char_start, char_end)
             })
             .collect()
-    } else {
-        vec![]
-    }
+    })
 }
 
 /// Check if a match at (char_start, char_end) on line_idx overlaps with the find_scope
@@ -579,7 +611,8 @@ fn render_line_segment_expanded(
         }
     }
     
-    // Apply search match highlighting
+    // Apply search match highlighting - compute once and cache current match range
+    let mut current_match_range: Option<(usize, usize)> = None; // Visual column range
     if let Some(ref pattern) = ctx.state.last_search_pattern {
         let matches = get_search_matches(original_line, pattern);
         let cursor_pos = ctx.state.current_position();
@@ -598,8 +631,11 @@ fn render_line_segment_expanded(
             // Check if cursor is within this match
             let is_current_match = is_cursor_line && cursor_col >= char_start && cursor_col < char_end;
             
-            // Only mark as search match if NOT the current match
-            if !is_current_match {
+            if is_current_match {
+                // Cache the current match range
+                current_match_range = Some((visual_start, visual_end));
+            } else {
+                // Mark as regular search match
                 for i in visual_start..visual_end.min(visual_to_search_match.len()) {
                     visual_to_search_match[i] = true;
                 }
@@ -620,34 +656,13 @@ fn render_line_segment_expanded(
         let desired_color = visual_to_color.get(visual_i).copied().flatten();
         let is_search_match = visual_to_search_match.get(visual_i).copied().unwrap_or(false);
         
-        // Determine if this is the current match (cursor within match)
-        // We need to check all matches again to determine this
-        let cursor_pos = ctx.state.current_position();
-        let is_cursor_line = segment.line_index == cursor_pos.0;
-        let mut is_current_match = false;
-        
-        if is_cursor_line && let Some(ref pattern) = ctx.state.last_search_pattern {
-            let matches = get_search_matches(original_line, pattern);
-            let cursor_col = cursor_pos.1;
-            
-            for (char_start, char_end) in matches {
-                if cursor_col >= char_start && cursor_col < char_end {
-                    // Check if this match overlaps with the find_scope
-                    if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
-                        continue;
-                    }
-                    
-                    // This is the current match - check if visual_i is in it
-                    let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
-                    let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
-                    if visual_i >= visual_start && visual_i < visual_end {
-                        is_current_match = true;
-                        break;
-                    }
-                }
-            }
-        }
-        
+        // Check if this position is in the current match (using cached range)
+        let is_current_match = if let Some((start, end)) = current_match_range {
+            visual_i >= start && visual_i < end
+        } else {
+            false
+        };
+
         // Apply background color for search matches
         let new_bg_state = is_search_match || is_current_match;
         if new_bg_state != current_bg {
@@ -745,21 +760,13 @@ fn render_line_segment_with_selection_expanded(
     let start_visual_col = if segment.line_index == start_line { visual_width_up_to(original_line, start_col, segment.tab_width) } else { 0 };
     let end_visual_col = if segment.line_index == end_line { visual_width_up_to(original_line, end_col, segment.tab_width) } else { usize::MAX };
 
-    let mut current_color: Option<crossterm::style::Color> = None;
-    let mut current_bg: Option<&str> = None; // Track background: None, "search", "current", or "selection"
-
-    for visual_i in segment.start_visual..segment.end_visual {
-        if visual_i >= expanded_chars.len() { break; }
-        let ch = expanded_chars[visual_i];
-        let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
-        let is_search_match = visual_to_search_match.get(visual_i).copied().unwrap_or(false);
-        
-        // Check if this is the current match (cursor within match)
+    // Cache current match range to avoid recalculating in the loop
+    let mut current_match_range: Option<(usize, usize)> = None;
+    if let Some(ref pattern) = ctx.state.last_search_pattern {
         let cursor_pos = ctx.state.current_position();
         let is_cursor_line = segment.line_index == cursor_pos.0;
-        let mut is_current_match = false;
-        
-        if is_cursor_line && let Some(ref pattern) = ctx.state.last_search_pattern {
+
+        if is_cursor_line {
             let matches = get_search_matches(original_line, pattern);
             let cursor_col = cursor_pos.1;
             
@@ -772,14 +779,29 @@ fn render_line_segment_with_selection_expanded(
                     
                     let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
                     let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
-                    if visual_i >= visual_start && visual_i < visual_end {
-                        is_current_match = true;
-                        break;
-                    }
+                    current_match_range = Some((visual_start, visual_end));
+                    break;
                 }
             }
         }
-        
+    }
+
+    let mut current_color: Option<crossterm::style::Color> = None;
+    let mut current_bg: Option<&str> = None; // Track background: None, "search", "current", or "selection"
+
+    for visual_i in segment.start_visual..segment.end_visual {
+        if visual_i >= expanded_chars.len() { break; }
+        let ch = expanded_chars[visual_i];
+        let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
+        let is_search_match = visual_to_search_match.get(visual_i).copied().unwrap_or(false);
+
+        // Check if this position is in the current match (using cached range)
+        let is_current_match = if let Some((start, end)) = current_match_range {
+            visual_i >= start && visual_i < end
+        } else {
+            false
+        };
+
         // Determine background (search matches take priority over selection)
         let desired_bg = if is_current_match {
             Some("current")
@@ -1185,5 +1207,50 @@ mod tests {
         // Match on last line at/after scope end
         assert!(!match_overlaps_scope(3, 20, 25, scope));
         assert!(!match_overlaps_scope(3, 25, 30, scope));
+    }
+
+    // Performance optimization tests
+    #[test]
+    fn regex_cache_reuses_same_pattern() {
+        // First call should compile and cache
+        let matches1 = get_search_matches("hello world", "world");
+        assert_eq!(matches1.len(), 1);
+        assert_eq!(matches1[0], (6, 11));
+
+        // Second call with same pattern should use cache (no recompilation)
+        let matches2 = get_search_matches("goodbye world", "world");
+        assert_eq!(matches2.len(), 1);
+        assert_eq!(matches2[0], (8, 13));
+
+        // Third call with different pattern should recompile and re-cache
+        let matches3 = get_search_matches("hello world", "hello");
+        assert_eq!(matches3.len(), 1);
+        assert_eq!(matches3[0], (0, 5));
+
+        // Fourth call with original pattern should recompile again (cache was replaced)
+        let matches4 = get_search_matches("world hello world", "world");
+        assert_eq!(matches4.len(), 2);
+        assert_eq!(matches4[0], (0, 5));
+        assert_eq!(matches4[1], (12, 17));
+    }
+
+    #[test]
+    fn regex_cache_handles_empty_pattern() {
+        let matches = get_search_matches("hello world", "");
+        assert!(matches.is_empty());
+
+        // Should still work after empty pattern
+        let matches2 = get_search_matches("hello world", "hello");
+        assert_eq!(matches2.len(), 1);
+    }
+
+    #[test]
+    fn regex_cache_handles_invalid_regex() {
+        let matches = get_search_matches("hello world", "[invalid");
+        assert!(matches.is_empty());
+
+        // Should recover and work with valid pattern
+        let matches2 = get_search_matches("hello world", "hello");
+        assert_eq!(matches2.len(), 1);
     }
 }

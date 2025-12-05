@@ -427,7 +427,12 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let mut lines: Vec<String> = if let Some(saved) = &undo_history.file_content { 
         saved.clone() 
     } else { 
-        content.lines().map(String::from).collect() 
+        let mut l: Vec<String> = content.lines().map(String::from).collect();
+        // Ensure at least one empty line for empty files
+        if l.is_empty() {
+            l.push(String::new());
+        }
+        l
     };
     
     let (term_width, term_height) = size()?;
