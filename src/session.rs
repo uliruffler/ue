@@ -99,5 +99,93 @@ mod tests {
         let loaded = load_last_session().unwrap();
         assert!(loaded.is_none());
     }
+
+    #[test]
+    fn session_file_with_special_characters_in_path() {
+        let (tmp, _guard) = set_temp_home();
+        let special_path = tmp.path().join("file with spaces & special.txt");
+        fs::write(&special_path, "content").unwrap();
+
+        save_editor_session(special_path.to_str().unwrap()).unwrap();
+        let loaded = load_last_session().unwrap().unwrap();
+
+        assert_eq!(loaded.mode, SessionMode::Editor);
+        assert_eq!(loaded.file, Some(special_path));
+    }
+
+    #[test]
+    fn session_overwrite_previous() {
+        let (tmp, _guard) = set_temp_home();
+
+        // Save editor session
+        let file1 = tmp.path().join("first.txt");
+        fs::write(&file1, "1").unwrap();
+        save_editor_session(file1.to_str().unwrap()).unwrap();
+
+        // Save selector session (should overwrite)
+        save_selector_session().unwrap();
+
+        let loaded = load_last_session().unwrap().unwrap();
+        assert_eq!(loaded.mode, SessionMode::Selector);
+        assert!(loaded.file.is_none());
+    }
+
+    #[test]
+    fn session_with_unicode_path() {
+        let (tmp, _guard) = set_temp_home();
+        let unicode_path = tmp.path().join("文件.txt");
+        fs::write(&unicode_path, "content").unwrap();
+
+        save_editor_session(unicode_path.to_str().unwrap()).unwrap();
+        let loaded = load_last_session().unwrap().unwrap();
+
+        assert_eq!(loaded.file, Some(unicode_path));
+    }
+
+    #[test]
+    fn session_file_path_creation() {
+        let (_tmp, _guard) = set_temp_home();
+        let path = session_file_path().unwrap();
+
+        // Verify path is in expected location
+        assert!(path.to_string_lossy().contains("last_session"));
+    }
+
+    #[test]
+    fn session_empty_file_contents() {
+        let (_tmp, _guard) = set_temp_home();
+        let path = session_file_path().unwrap();
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+
+        // Write empty file
+        fs::write(path, "").unwrap();
+        let loaded = load_last_session().unwrap();
+        assert!(loaded.is_none(), "Empty session file should return None");
+    }
+
+    #[test]
+    fn session_malformed_mode() {
+        let (_tmp, _guard) = set_temp_home();
+        let path = session_file_path().unwrap();
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+
+        // Write invalid mode
+        fs::write(path, "mode=invalid\n").unwrap();
+        let loaded = load_last_session().unwrap();
+        assert!(loaded.is_none(), "Invalid mode should return None");
+    }
+
+    #[test]
+    fn session_editor_mode_without_file() {
+        let (_tmp, _guard) = set_temp_home();
+        let path = session_file_path().unwrap();
+        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+
+        // Editor mode but no file specified
+        fs::write(path, "mode=editor\n").unwrap();
+        let loaded = load_last_session().unwrap();
+        // Should handle gracefully (either None or default behavior)
+        assert!(loaded.is_none() || loaded.unwrap().file.is_none());
+    }
 }
 

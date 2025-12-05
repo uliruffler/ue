@@ -234,4 +234,123 @@ mod tests {
         assert_eq!(top, 0);
         assert_eq!(rel, 0);
     }
+
+    // Tests for visual_width function
+    use super::{visual_width, visual_width_up_to, line_number_width};
+
+    #[test]
+    fn test_visual_width_empty_string() {
+        assert_eq!(visual_width("", 4), 0);
+        assert_eq!(visual_width("", 8), 0);
+    }
+
+    #[test]
+    fn test_visual_width_no_tabs() {
+        assert_eq!(visual_width("hello", 4), 5);
+        assert_eq!(visual_width("test", 8), 4);
+    }
+
+    #[test]
+    fn test_visual_width_single_tab_at_start() {
+        // Tab at position 0 advances to next tab stop
+        assert_eq!(visual_width("\t", 4), 4);
+        assert_eq!(visual_width("\t", 8), 8);
+    }
+
+    #[test]
+    fn test_visual_width_tab_in_middle() {
+        // "a\tb" with tab_width=4: 'a' (1), then tab advances to 4, then 'b' (5)
+        assert_eq!(visual_width("a\tb", 4), 5);
+        // "ab\tc" with tab_width=4: 'ab' (2), tab advances to 4, 'c' (5)
+        assert_eq!(visual_width("ab\tc", 4), 5);
+        // "abc\td" with tab_width=4: 'abc' (3), tab advances to 4, 'd' (5)
+        assert_eq!(visual_width("abc\td", 4), 5);
+    }
+
+    #[test]
+    fn test_visual_width_multiple_tabs() {
+        // "\t\t" with tab_width=4: first tab to 4, second tab to 8
+        assert_eq!(visual_width("\t\t", 4), 8);
+        // "a\t\t" with tab_width=4: 'a' (1), first tab to 4, second tab to 8
+        assert_eq!(visual_width("a\t\t", 4), 8);
+    }
+
+    #[test]
+    fn test_visual_width_tab_width_8() {
+        assert_eq!(visual_width("\t", 8), 8);
+        assert_eq!(visual_width("a\tb", 8), 9);
+        assert_eq!(visual_width("abcdefg\tx", 8), 9);
+    }
+
+    #[test]
+    fn test_visual_width_mixed_content() {
+        // Complex case: "hello\tworld\t!" with tab_width=4
+        // "hello" (5), tab to 8, "world" (13), tab to 16, "!" (17)
+        assert_eq!(visual_width("hello\tworld\t!", 4), 17);
+    }
+
+    #[test]
+    fn test_visual_width_only_tabs() {
+        assert_eq!(visual_width("\t\t\t", 4), 12);
+        assert_eq!(visual_width("\t\t\t", 8), 24);
+    }
+
+    // Tests for visual_width_up_to function
+    #[test]
+    fn test_visual_width_up_to_empty() {
+        assert_eq!(visual_width_up_to("", 0, 4), 0);
+        assert_eq!(visual_width_up_to("hello", 0, 4), 0);
+    }
+
+    #[test]
+    fn test_visual_width_up_to_no_tabs() {
+        assert_eq!(visual_width_up_to("hello", 3, 4), 3);
+        assert_eq!(visual_width_up_to("world", 5, 4), 5);
+    }
+
+    #[test]
+    fn test_visual_width_up_to_with_tab() {
+        // "a\tbc" with tab_width=4: up to index 1 (before tab) = 1
+        assert_eq!(visual_width_up_to("a\tbc", 1, 4), 1);
+        // up to index 2 (after tab) = 4 (tab expands to position 4)
+        assert_eq!(visual_width_up_to("a\tbc", 2, 4), 4);
+        // up to index 3 (after 'b') = 5
+        assert_eq!(visual_width_up_to("a\tbc", 3, 4), 5);
+    }
+
+    #[test]
+    fn test_visual_width_up_to_multiple_tabs() {
+        // "\t\tx" with tab_width=4
+        assert_eq!(visual_width_up_to("\t\tx", 0, 4), 0);
+        assert_eq!(visual_width_up_to("\t\tx", 1, 4), 4);
+        assert_eq!(visual_width_up_to("\t\tx", 2, 4), 8);
+        assert_eq!(visual_width_up_to("\t\tx", 3, 4), 9);
+    }
+
+    #[test]
+    fn test_visual_width_up_to_beyond_length() {
+        // Should stop at string length
+        assert_eq!(visual_width_up_to("hi", 10, 4), 2);
+        assert_eq!(visual_width_up_to("\t", 10, 4), 4);
+    }
+
+    // Tests for line_number_width function
+    #[test]
+    fn test_line_number_width_disabled() {
+        use crate::settings::Settings;
+        let mut settings = Settings::default();
+        settings.appearance.line_number_digits = 0;
+        assert_eq!(line_number_width(&settings), 0);
+    }
+
+    #[test]
+    fn test_line_number_width_enabled() {
+        use crate::settings::Settings;
+        let mut settings = Settings::default();
+        settings.appearance.line_number_digits = 3;
+        assert_eq!(line_number_width(&settings), 4); // 3 digits + 1 separator
+
+        settings.appearance.line_number_digits = 5;
+        assert_eq!(line_number_width(&settings), 6); // 5 digits + 1 separator
+    }
 }
