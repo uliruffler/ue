@@ -1,13 +1,13 @@
-use std::fs;
-use std::path::{Path, PathBuf};
+use crate::recent::get_recent_files;
 use crossterm::{
+    cursor::{Hide, Show},
     event::{self, Event, KeyCode, KeyModifiers},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-    cursor::{Hide, Show},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use std::fs;
 use std::io::{self, Write};
-use crate::recent::{get_recent_files};
+use std::path::{Path, PathBuf};
 
 /// File entry with metadata
 pub(crate) struct FileEntry {
@@ -32,7 +32,9 @@ pub(crate) fn get_tracked_files() -> io::Result<Vec<FileEntry>> {
     let recent = get_recent_files().unwrap_or_default();
     use std::collections::HashMap;
     let mut rank: HashMap<String, usize> = HashMap::new();
-    for (i, p) in recent.iter().enumerate() { rank.insert(p.to_string_lossy().to_string(), i); }
+    for (i, p) in recent.iter().enumerate() {
+        rank.insert(p.to_string_lossy().to_string(), i);
+    }
 
     // Sort: first by presence in recent (lower index means more recent), then alphabetically
     files.sort_by(|a, b| {
@@ -49,15 +51,19 @@ pub(crate) fn get_tracked_files() -> io::Result<Vec<FileEntry>> {
 }
 
 /// Recursively collect all .undo.json files and derive original file paths
-fn collect_files_recursive(base_dir: &PathBuf, current_dir: &PathBuf, files: &mut Vec<FileEntry>) -> io::Result<()> {
+fn collect_files_recursive(
+    base_dir: &PathBuf,
+    current_dir: &PathBuf,
+    files: &mut Vec<FileEntry>,
+) -> io::Result<()> {
     if !current_dir.is_dir() {
         return Ok(());
     }
-    
+
     for entry in fs::read_dir(current_dir)? {
         let entry = entry?;
         let path = entry.path();
-        
+
         if path.is_dir() {
             collect_files_recursive(base_dir, &path, files)?;
         } else if let Some(file_name) = path.file_name() {
@@ -72,30 +78,42 @@ fn collect_files_recursive(base_dir: &PathBuf, current_dir: &PathBuf, files: &mu
                     let after_first = legacy_candidate;
                     !after_first.contains('.')
                 };
-                let original_filename = if is_hidden_original { without_suffix } else { legacy_candidate };
-                let relative_dir = path.parent()
+                let original_filename = if is_hidden_original {
+                    without_suffix
+                } else {
+                    legacy_candidate
+                };
+                let relative_dir = path
+                    .parent()
                     .and_then(|p| p.strip_prefix(base_dir).ok())
                     .and_then(|p| p.to_str());
                 if let Some(dir) = relative_dir {
                     let original_path = PathBuf::from("/").join(dir).join(original_filename);
                     let has_unsaved = check_unsaved_changes(&path);
-                    files.push(FileEntry { path: original_path, has_unsaved_changes: has_unsaved });
+                    files.push(FileEntry {
+                        path: original_path,
+                        has_unsaved_changes: has_unsaved,
+                    });
                 }
             } else if file_name_str.ends_with(".ue") {
                 // Normal file: strip .ue
                 let original_filename = file_name_str.trim_end_matches(".ue");
-                let relative_dir = path.parent()
+                let relative_dir = path
+                    .parent()
                     .and_then(|p| p.strip_prefix(base_dir).ok())
                     .and_then(|p| p.to_str());
                 if let Some(dir) = relative_dir {
                     let original_path = PathBuf::from("/").join(dir).join(original_filename);
                     let has_unsaved = check_unsaved_changes(&path);
-                    files.push(FileEntry { path: original_path, has_unsaved_changes: has_unsaved });
+                    files.push(FileEntry {
+                        path: original_path,
+                        has_unsaved_changes: has_unsaved,
+                    });
                 }
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -103,7 +121,8 @@ fn collect_files_recursive(base_dir: &PathBuf, current_dir: &PathBuf, files: &mu
 fn check_unsaved_changes(undo_file: &PathBuf) -> bool {
     // Try to read and deserialize the undo history file
     if let Ok(content) = fs::read_to_string(undo_file)
-        && let Ok(history) = serde_json::from_str::<crate::undo::UndoHistory>(&content) {
+        && let Ok(history) = serde_json::from_str::<crate::undo::UndoHistory>(&content)
+    {
         return history.modified;
     }
     false
@@ -111,15 +130,16 @@ fn check_unsaved_changes(undo_file: &PathBuf) -> bool {
 
 /// Format file path as "FILENAME (/PATH/TO/DIRECTORY/)"
 fn format_file_display(path: &Path) -> String {
-    let filename = path.file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or("");
-    
-    let directory = path.parent()
-        .and_then(|p| p.to_str())
-        .unwrap_or("/");
-    
-    format!("{} ({}{})", filename, directory, if directory.ends_with('/') { "" } else { "/" })
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+
+    let directory = path.parent().and_then(|p| p.to_str()).unwrap_or("/");
+
+    format!(
+        "{} ({}{})",
+        filename,
+        directory,
+        if directory.ends_with('/') { "" } else { "/" }
+    )
 }
 
 /// Show file selection screen and return selected file
@@ -130,21 +150,23 @@ pub(crate) fn select_file() -> io::Result<Option<String>> {
         eprintln!("Please provide a filename as argument.");
         return Ok(None);
     }
-    
+
     // Load settings for help keybindings
-    let settings = crate::settings::Settings::load()
-        .unwrap_or_else(|_| Default::default());
-    
+    let settings = crate::settings::Settings::load().unwrap_or_else(|_| Default::default());
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, Hide)?;
     let result = run_file_selector(&files, &settings);
-    
+
     // Clean up based on result
     match &result {
         Ok(Some(_)) => {
             // File selected - clear screen but stay in alternate screen for smooth transition
-            execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::All))?;
+            execute!(
+                stdout,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+            )?;
             // Don't show cursor or leave alternate screen - let editor handle it
         }
         _ => {
@@ -153,11 +175,14 @@ pub(crate) fn select_file() -> io::Result<Option<String>> {
             disable_raw_mode()?;
         }
     }
-    
+
     result
 }
 
-fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) -> io::Result<Option<String>> {
+fn run_file_selector(
+    files: &[FileEntry],
+    settings: &crate::settings::Settings,
+) -> io::Result<Option<String>> {
     let mut selected_index = 0;
     let mut scroll_offset = 0;
     let mut prev_selected_index = 0;
@@ -165,27 +190,39 @@ fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) 
     let mut needs_full_redraw = true;
     let mut help_active = false;
     let mut help_scroll_offset = 0;
-    
+
     loop {
         let (term_width, term_height) = crossterm::terminal::size()?;
         let visible_lines = (term_height as usize).saturating_sub(1); // only footer reserved
-        
+
         if help_active {
             // Render help screen
             let help_content = crate::help::get_file_selector_help(settings, term_width as usize);
-            crate::help::render_help(&mut io::stdout(), &help_content, help_scroll_offset, term_width, term_height)?;
+            crate::help::render_help(
+                &mut io::stdout(),
+                &help_content,
+                help_scroll_offset,
+                term_width,
+                term_height,
+            )?;
         } else if needs_full_redraw || scroll_offset != prev_scroll_offset {
             // Full redraw needed (first time or scrolling occurred)
             render_file_list(files, selected_index, scroll_offset, visible_lines)?;
             needs_full_redraw = false;
         } else if selected_index != prev_selected_index {
             // Only selection changed, redraw affected lines
-            render_selection_change(files, prev_selected_index, selected_index, scroll_offset, visible_lines)?;
+            render_selection_change(
+                files,
+                prev_selected_index,
+                selected_index,
+                scroll_offset,
+                visible_lines,
+            )?;
         }
-        
+
         prev_selected_index = selected_index;
         prev_scroll_offset = scroll_offset;
-        
+
         if let Event::Key(key_event) = event::read()? {
             // F1 toggles help
             if matches!(key_event.code, KeyCode::F(1)) {
@@ -194,7 +231,7 @@ fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) 
                 needs_full_redraw = true;
                 continue;
             }
-            
+
             // If in help mode, handle help navigation
             if help_active {
                 if crate::help::handle_help_input(key_event) {
@@ -222,7 +259,7 @@ fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) 
                 }
                 continue;
             }
-            
+
             match key_event.code {
                 KeyCode::Char('q') | KeyCode::Esc => {
                     let _ = crate::session::save_selector_session();
@@ -258,7 +295,8 @@ fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) 
                     scroll_offset = scroll_offset.saturating_sub(visible_lines);
                 }
                 KeyCode::PageDown => {
-                    selected_index = (selected_index + visible_lines).min(files.len().saturating_sub(1));
+                    selected_index =
+                        (selected_index + visible_lines).min(files.len().saturating_sub(1));
                     scroll_offset += visible_lines;
                     if scroll_offset + visible_lines > files.len() {
                         scroll_offset = files.len().saturating_sub(visible_lines);
@@ -286,7 +324,12 @@ fn run_file_selector(files: &[FileEntry], settings: &crate::settings::Settings) 
     }
 }
 
-pub(crate) fn render_file_list(files: &[FileEntry], selected_index: usize, scroll_offset: usize, visible_lines: usize) -> io::Result<()> {
+pub(crate) fn render_file_list(
+    files: &[FileEntry],
+    selected_index: usize,
+    scroll_offset: usize,
+    visible_lines: usize,
+) -> io::Result<()> {
     let mut stdout = io::stdout();
     execute!(
         stdout,
@@ -295,11 +338,23 @@ pub(crate) fn render_file_list(files: &[FileEntry], selected_index: usize, scrol
     )?;
     // Removed header and instructions: just list files
     let end_index = (scroll_offset + visible_lines).min(files.len());
-    for (idx, entry) in files.iter().enumerate().skip(scroll_offset).take(end_index - scroll_offset) {
+    for (idx, entry) in files
+        .iter()
+        .enumerate()
+        .skip(scroll_offset)
+        .take(end_index - scroll_offset)
+    {
         let display_path = format_file_display(&entry.path);
         let unsaved_indicator = if entry.has_unsaved_changes { "*" } else { " " };
         if idx == selected_index {
-            write!(stdout, "\r {} {}{}{}\r\n", unsaved_indicator, crossterm::style::Attribute::Reverse, display_path, crossterm::style::Attribute::Reset)?;
+            write!(
+                stdout,
+                "\r {} {}{}{}\r\n",
+                unsaved_indicator,
+                crossterm::style::Attribute::Reverse,
+                display_path,
+                crossterm::style::Attribute::Reset
+            )?;
         } else {
             write!(stdout, "\r {} {}\r\n", unsaved_indicator, display_path)?;
         }
@@ -312,9 +367,15 @@ pub(crate) fn render_file_list(files: &[FileEntry], selected_index: usize, scrol
     Ok(())
 }
 
-pub(crate) fn render_selection_change(files: &[FileEntry], prev_index: usize, new_index: usize, scroll_offset: usize, visible_lines: usize) -> io::Result<()> {
+pub(crate) fn render_selection_change(
+    files: &[FileEntry],
+    prev_index: usize,
+    new_index: usize,
+    scroll_offset: usize,
+    visible_lines: usize,
+) -> io::Result<()> {
     let mut stdout = io::stdout();
-    
+
     // Redraw previous selection (if visible)
     if prev_index >= scroll_offset && prev_index < scroll_offset + visible_lines {
         let screen_row = prev_index - scroll_offset;
@@ -324,10 +385,13 @@ pub(crate) fn render_selection_change(files: &[FileEntry], prev_index: usize, ne
             let unsaved_indicator = if entry.has_unsaved_changes { "*" } else { " " };
             write!(stdout, "\r {} {}", unsaved_indicator, display_path)?;
             // Clear to end of line to remove any old reverse video
-            execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine))?;
+            execute!(
+                stdout,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine)
+            )?;
         }
     }
-    
+
     // Redraw new selection (if visible)
     if new_index >= scroll_offset && new_index < scroll_offset + visible_lines {
         let screen_row = new_index - scroll_offset;
@@ -335,17 +399,30 @@ pub(crate) fn render_selection_change(files: &[FileEntry], prev_index: usize, ne
             execute!(stdout, crossterm::cursor::MoveTo(0, screen_row as u16))?;
             let display_path = format_file_display(&entry.path);
             let unsaved_indicator = if entry.has_unsaved_changes { "*" } else { " " };
-            write!(stdout, "\r {} {}{}{}", unsaved_indicator, crossterm::style::Attribute::Reverse, display_path, crossterm::style::Attribute::Reset)?;
-            execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine))?;
+            write!(
+                stdout,
+                "\r {} {}{}{}",
+                unsaved_indicator,
+                crossterm::style::Attribute::Reverse,
+                display_path,
+                crossterm::style::Attribute::Reset
+            )?;
+            execute!(
+                stdout,
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine)
+            )?;
         }
     }
-    
+
     // Update footer
     let (_, term_height) = crossterm::terminal::size()?;
     execute!(stdout, crossterm::cursor::MoveTo(0, term_height - 1))?;
     write!(stdout, "\r  [{}/{}]", new_index + 1, files.len())?;
-    execute!(stdout, crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine))?;
-    
+    execute!(
+        stdout,
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::UntilNewLine)
+    )?;
+
     stdout.flush()?;
     Ok(())
 }
@@ -354,9 +431,9 @@ pub(crate) fn render_selection_change(files: &[FileEntry], prev_index: usize, ne
 mod tests {
     use super::*;
     use crate::env::set_temp_home;
+    use crate::recent::update_recent_file;
     use crate::undo::UndoHistory;
     use std::fs;
-    use crate::recent::{update_recent_file};
 
     #[test]
     fn ed_test_home_precedence_over_home() {
@@ -392,7 +469,7 @@ mod tests {
         fs::write(d1.join("config.toml.ue"), "{}").unwrap();
         fs::write(d2.join("config.toml.ue"), "{}").unwrap();
         let mut files = get_tracked_files().unwrap();
-        files.sort_by(|a,b| a.path.cmp(&b.path));
+        files.sort_by(|a, b| a.path.cmp(&b.path));
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, PathBuf::from("/proj1/config.toml"));
         assert_eq!(files[1].path, PathBuf::from("/proj2/config.toml"));
@@ -410,7 +487,12 @@ mod tests {
     #[test]
     fn get_tracked_files_finds_ed_files() {
         let (tmp, _guard) = set_temp_home();
-        let ue_dir = tmp.path().join(".ue").join("files").join("home").join("user");
+        let ue_dir = tmp
+            .path()
+            .join(".ue")
+            .join("files")
+            .join("home")
+            .join("user");
         fs::create_dir_all(&ue_dir).unwrap();
         fs::write(ue_dir.join("test.txt.ue"), "{}").unwrap();
         let result = get_tracked_files();
@@ -423,22 +505,27 @@ mod tests {
     #[test]
     fn get_tracked_files_ignores_non_ed_files() {
         let (tmp, _guard) = set_temp_home();
-        let ue_dir = tmp.path().join(".ue").join("files").join("home").join("user");
+        let ue_dir = tmp
+            .path()
+            .join(".ue")
+            .join("files")
+            .join("home")
+            .join("user");
         fs::create_dir_all(&ue_dir).unwrap();
-        
+
         // Valid undo history files (new naming): with and without original extension
         fs::write(ue_dir.join("test.txt.ue"), "{}").unwrap(); // original: test.txt
-        fs::write(ue_dir.join("test.ue"), "{}").unwrap();     // original: test (no extension)
-        
+        fs::write(ue_dir.join("test.ue"), "{}").unwrap(); // original: test (no extension)
+
         // Should be ignored:
-        fs::write(ue_dir.join("test.txt"), "{}").unwrap();    // missing .ue suffix
-        fs::write(ue_dir.join(".test.txt"), "{}").unwrap();   // legacy artificial dot but missing .ue suffix
-        fs::write(ue_dir.join("random.bin"), "{}").unwrap();  // unrelated file
-        
+        fs::write(ue_dir.join("test.txt"), "{}").unwrap(); // missing .ue suffix
+        fs::write(ue_dir.join(".test.txt"), "{}").unwrap(); // legacy artificial dot but missing .ue suffix
+        fs::write(ue_dir.join("random.bin"), "{}").unwrap(); // unrelated file
+
         let result = get_tracked_files();
         assert!(result.is_ok());
         let mut files = result.unwrap();
-        files.sort_by(|a,b| a.path.cmp(&b.path));
+        files.sort_by(|a, b| a.path.cmp(&b.path));
         assert_eq!(files.len(), 2);
         assert_eq!(files[0].path, PathBuf::from("/home/user/test"));
         assert_eq!(files[1].path, PathBuf::from("/home/user/test.txt"));
@@ -459,28 +546,50 @@ mod tests {
         let mut files = result.unwrap();
         assert_eq!(files.len(), 2);
         files.sort_by(|a, b| a.path.cmp(&b.path));
-        assert_eq!(files[0].path, PathBuf::from("/home/user/documents/notes.txt"));
+        assert_eq!(
+            files[0].path,
+            PathBuf::from("/home/user/documents/notes.txt")
+        );
         assert_eq!(files[1].path, PathBuf::from("/tmp/test.sh"));
     }
 
     #[test]
     fn get_tracked_files_detects_unsaved_changes() {
         let (tmp, _guard) = set_temp_home();
-        let ue_dir = tmp.path().join(".ue").join("files").join("home").join("user");
+        let ue_dir = tmp
+            .path()
+            .join(".ue")
+            .join("files")
+            .join("home")
+            .join("user");
         fs::create_dir_all(&ue_dir).unwrap();
         let mut history = UndoHistory::new();
         history.modified = true;
-        fs::write(ue_dir.join("modified.txt.ue"), serde_json::to_string(&history).unwrap()).unwrap();
+        fs::write(
+            ue_dir.join("modified.txt.ue"),
+            serde_json::to_string(&history).unwrap(),
+        )
+        .unwrap();
         let mut history2 = UndoHistory::new();
         history2.modified = false;
-        fs::write(ue_dir.join("saved.txt.ue"), serde_json::to_string(&history2).unwrap()).unwrap();
+        fs::write(
+            ue_dir.join("saved.txt.ue"),
+            serde_json::to_string(&history2).unwrap(),
+        )
+        .unwrap();
         let result = get_tracked_files();
         assert!(result.is_ok());
         let files = result.unwrap();
         assert_eq!(files.len(), 2);
-        let modified_file = files.iter().find(|f| f.path.file_name().unwrap() == "modified.txt").unwrap();
+        let modified_file = files
+            .iter()
+            .find(|f| f.path.file_name().unwrap() == "modified.txt")
+            .unwrap();
         assert!(modified_file.has_unsaved_changes);
-        let saved_file = files.iter().find(|f| f.path.file_name().unwrap() == "saved.txt").unwrap();
+        let saved_file = files
+            .iter()
+            .find(|f| f.path.file_name().unwrap() == "saved.txt")
+            .unwrap();
         assert!(!saved_file.has_unsaved_changes);
     }
 
@@ -489,7 +598,7 @@ mod tests {
         let (tmp, _guard) = set_temp_home();
         let test_file = tmp.path().join("invalid.json");
         fs::write(&test_file, "not valid json").unwrap();
-        
+
         let result = check_unsaved_changes(&test_file);
         assert!(!result);
     }
@@ -542,7 +651,12 @@ mod tests {
     #[test]
     fn file_entry_preserves_full_path() {
         let (tmp, _guard) = set_temp_home();
-        let ue_dir = tmp.path().join(".ue").join("files").join("etc").join("config");
+        let ue_dir = tmp
+            .path()
+            .join(".ue")
+            .join("files")
+            .join("etc")
+            .join("config");
         fs::create_dir_all(&ue_dir).unwrap();
         fs::write(ue_dir.join("app.conf.ue"), "{}").unwrap();
         let result = get_tracked_files();
@@ -573,10 +687,10 @@ mod tests {
         let (tmp, _guard) = set_temp_home();
         let ue_dir = tmp.path().join(".ue").join("files").join("home");
         fs::create_dir_all(&ue_dir).unwrap();
-        
+
         // File with multiple dots in name
         fs::write(ue_dir.join("my.config.yaml.ue"), "{}").unwrap();
-        
+
         let result = get_tracked_files();
         assert!(result.is_ok());
         let files = result.unwrap();
@@ -589,7 +703,7 @@ mod tests {
         let (tmp, _guard) = set_temp_home();
         let ue_dir = tmp.path().join(".ue").join("files").join("empty");
         fs::create_dir_all(&ue_dir).unwrap();
-        
+
         let result = get_tracked_files();
         assert!(result.is_ok());
         let files = result.unwrap();
@@ -599,7 +713,12 @@ mod tests {
     #[test]
     fn legacy_leading_dot_non_hidden_filename() {
         let (tmp, _guard) = set_temp_home();
-        let ue_dir = tmp.path().join(".ue").join("files").join("home").join("user");
+        let ue_dir = tmp
+            .path()
+            .join(".ue")
+            .join("files")
+            .join("home")
+            .join("user");
         fs::create_dir_all(&ue_dir).unwrap();
         fs::write(ue_dir.join(".legacy.txt.ue"), "{}").unwrap();
         let files = get_tracked_files().unwrap();

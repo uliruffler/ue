@@ -23,13 +23,20 @@ fn replace_keybindings(content: &str, settings: &crate::settings::Settings) -> S
         .replace("{save}", &settings.keybindings.save)
         .replace("{close}", &settings.keybindings.close)
         .replace("{quit}", &settings.keybindings.quit)
-        .replace("{double_tap_speed_ms}", &settings.double_tap_speed_ms.to_string())
+        .replace(
+            "{double_tap_speed_ms}",
+            &settings.double_tap_speed_ms.to_string(),
+        )
 }
 
 /// Load and format help content from markdown file
 /// Renders markdown (including tables) to terminal-formatted text
-fn load_help_from_md(content: &str, settings: &crate::settings::Settings, term_width: usize) -> Vec<String> {
-    use termimad::{MadSkin, Area};
+fn load_help_from_md(
+    content: &str,
+    settings: &crate::settings::Settings,
+    term_width: usize,
+) -> Vec<String> {
+    use termimad::{Area, MadSkin};
 
     // First replace keybinding placeholders
     let replaced = replace_keybindings(content, settings);
@@ -44,20 +51,43 @@ fn load_help_from_md(content: &str, settings: &crate::settings::Settings, term_w
     let fmt_text = skin.area_text(&replaced, &area);
 
     // Split into lines for scrolling
-    fmt_text.to_string().lines().map(|line| line.to_string()).collect()
+    fmt_text
+        .to_string()
+        .lines()
+        .map(|line| line.to_string())
+        .collect()
 }
 
 /// Get help content for the given context
-pub(crate) fn get_help_content(context: HelpContext, settings: &crate::settings::Settings, term_width: usize) -> Vec<String> {
+pub(crate) fn get_help_content(
+    context: HelpContext,
+    settings: &crate::settings::Settings,
+    term_width: usize,
+) -> Vec<String> {
     match context {
-        HelpContext::Editor => load_help_from_md(include_str!("../defaults/help-editor.md"), settings, term_width),
-        HelpContext::Find => load_help_from_md(include_str!("../defaults/help-find.md"), settings, term_width),
+        HelpContext::Editor => load_help_from_md(
+            include_str!("../defaults/help-editor.md"),
+            settings,
+            term_width,
+        ),
+        HelpContext::Find => load_help_from_md(
+            include_str!("../defaults/help-find.md"),
+            settings,
+            term_width,
+        ),
     }
 }
 
 /// Get help content for file selector
-pub(crate) fn get_file_selector_help(settings: &crate::settings::Settings, term_width: usize) -> Vec<String> {
-    load_help_from_md(include_str!("../defaults/help-file-selector.md"), settings, term_width)
+pub(crate) fn get_file_selector_help(
+    settings: &crate::settings::Settings,
+    term_width: usize,
+) -> Vec<String> {
+    load_help_from_md(
+        include_str!("../defaults/help-file-selector.md"),
+        settings,
+        term_width,
+    )
 }
 
 /// Truncate a string to a maximum display width, handling UTF-8 and ANSI escape codes
@@ -103,7 +133,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 /// Returns true if help mode should exit
 pub(crate) fn handle_help_input(key_event: KeyEvent) -> bool {
     let KeyEvent { code, .. } = key_event;
-    
+
     match code {
         KeyCode::Esc | KeyCode::F(1) => true,
         _ => false,
@@ -118,42 +148,49 @@ pub(crate) fn render_help(
     term_width: u16,
     term_height: u16,
 ) -> Result<(), std::io::Error> {
-    use crossterm::{cursor, execute, terminal, style::ResetColor};
-    
+    use crossterm::{cursor, execute, style::ResetColor, terminal};
+
     execute!(stdout, cursor::Hide)?;
     execute!(stdout, cursor::MoveTo(0, 0))?;
     execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
-    
+
     let visible_lines = (term_height as usize).saturating_sub(1); // Leave room for footer
-    
+
     // Render help content
-    for (i, line) in help_lines.iter().skip(scroll_offset).take(visible_lines).enumerate() {
+    for (i, line) in help_lines
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_lines)
+        .enumerate()
+    {
         execute!(stdout, cursor::MoveTo(0, i as u16))?;
         // Truncate line if too wide - use char-aware truncation to avoid UTF-8 boundary errors
         let display_line = truncate_to_width(line, term_width as usize);
         write!(stdout, "{}", display_line)?;
         execute!(stdout, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
-    
+
     // Clear remaining lines
     for i in help_lines.len().saturating_sub(scroll_offset)..visible_lines {
         execute!(stdout, cursor::MoveTo(0, i as u16))?;
         execute!(stdout, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     }
-    
+
     // Render footer
     execute!(stdout, cursor::MoveTo(0, term_height - 1))?;
     let footer = if help_lines.len() > visible_lines {
-        format!(" Line {}/{} - Use Up/Down to scroll, ESC/F1 to close ", 
-                scroll_offset.min(help_lines.len().saturating_sub(visible_lines)) + 1,
-                help_lines.len().saturating_sub(visible_lines).max(1))
+        format!(
+            " Line {}/{} - Use Up/Down to scroll, ESC/F1 to close ",
+            scroll_offset.min(help_lines.len().saturating_sub(visible_lines)) + 1,
+            help_lines.len().saturating_sub(visible_lines).max(1)
+        )
     } else {
         " Press ESC or F1 to close help ".to_string()
     };
     write!(stdout, "{}", footer)?;
     execute!(stdout, terminal::Clear(terminal::ClearType::UntilNewLine))?;
     execute!(stdout, ResetColor)?;
-    
+
     stdout.flush()?;
     Ok(())
 }
@@ -168,11 +205,19 @@ mod tests {
         let term_width = 80;
         let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
         assert!(!editor_help.is_empty());
-        assert!(editor_help.iter().any(|line| line.contains("Navigation") || line.contains("NAVIGATION")));
-        
+        assert!(
+            editor_help
+                .iter()
+                .any(|line| line.contains("Navigation") || line.contains("NAVIGATION"))
+        );
+
         let find_help = get_help_content(HelpContext::Find, &settings, term_width);
         assert!(!find_help.is_empty());
-        assert!(find_help.iter().any(|line| line.contains("Find Mode") || line.contains("FIND MODE")));
+        assert!(
+            find_help
+                .iter()
+                .any(|line| line.contains("Find Mode") || line.contains("FIND MODE"))
+        );
     }
 
     #[test]
@@ -181,7 +226,11 @@ mod tests {
         let term_width = 80;
         let selector_help = get_file_selector_help(&settings, term_width);
         assert!(!selector_help.is_empty());
-        assert!(selector_help.iter().any(|line| line.contains("File Selector") || line.contains("FILE SELECTOR")));
+        assert!(
+            selector_help
+                .iter()
+                .any(|line| line.contains("File Selector") || line.contains("FILE SELECTOR"))
+        );
     }
 
     #[test]
@@ -189,16 +238,16 @@ mod tests {
         // ESC should exit help
         let esc_event = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
         assert!(handle_help_input(esc_event));
-        
+
         // F1 should exit help
         let f1_event = KeyEvent::new(KeyCode::F(1), crossterm::event::KeyModifiers::NONE);
         assert!(handle_help_input(f1_event));
-        
+
         // Other keys should not exit help
         let other_event = KeyEvent::new(KeyCode::Char('a'), crossterm::event::KeyModifiers::NONE);
         assert!(!handle_help_input(other_event));
     }
-    
+
     #[test]
     fn test_help_loads_from_markdown_files() {
         let settings = Default::default();
@@ -215,9 +264,13 @@ mod tests {
 
         // File selector help should be loaded and rendered from markdown
         let selector_help = get_file_selector_help(&settings, term_width);
-        assert!(selector_help.iter().any(|line| line.contains("File Selector")));
+        assert!(
+            selector_help
+                .iter()
+                .any(|line| line.contains("File Selector"))
+        );
     }
-    
+
     #[test]
     fn test_help_exit_with_esc_only_closes_help() {
         // This test verifies that ESC in help mode only closes help
@@ -225,14 +278,14 @@ mod tests {
         let esc_event = KeyEvent::new(KeyCode::Esc, crossterm::event::KeyModifiers::NONE);
         assert!(handle_help_input(esc_event), "ESC should signal help exit");
     }
-    
+
     #[test]
     fn test_help_exit_with_f1_only_closes_help() {
         // This test verifies that F1 in help mode only closes help
         let f1_event = KeyEvent::new(KeyCode::F(1), crossterm::event::KeyModifiers::NONE);
         assert!(handle_help_input(f1_event), "F1 should signal help exit");
     }
-    
+
     #[test]
     fn test_keybinding_replacement() {
         let settings = Default::default();
@@ -240,10 +293,22 @@ mod tests {
         let editor_help = get_help_content(HelpContext::Editor, &settings, term_width);
 
         // Verify that placeholders were replaced with actual keybindings
-        assert!(editor_help.iter().any(|line| line.contains(&settings.keybindings.help)));
-        assert!(editor_help.iter().any(|line| line.contains(&settings.keybindings.find)));
-        assert!(editor_help.iter().any(|line| line.contains(&settings.keybindings.save)));
-        
+        assert!(
+            editor_help
+                .iter()
+                .any(|line| line.contains(&settings.keybindings.help))
+        );
+        assert!(
+            editor_help
+                .iter()
+                .any(|line| line.contains(&settings.keybindings.find))
+        );
+        assert!(
+            editor_help
+                .iter()
+                .any(|line| line.contains(&settings.keybindings.save))
+        );
+
         // Verify no placeholders remain
         assert!(!editor_help.iter().any(|line| line.contains("{help}")));
         assert!(!editor_help.iter().any(|line| line.contains("{find}")));
@@ -267,16 +332,24 @@ mod tests {
 
         // Verify table content is present and formatted
         // The table should have multiple lines with content from the markdown tables
-        let navigation_section = editor_help.iter()
+        let navigation_section = editor_help
+            .iter()
             .skip_while(|line| !line.contains("Navigation"))
             .take(15)
             .collect::<Vec<_>>();
-        assert!(!navigation_section.is_empty(), "Navigation section should exist");
+        assert!(
+            !navigation_section.is_empty(),
+            "Navigation section should exist"
+        );
 
         // Test find help tables
         let find_help = get_help_content(HelpContext::Find, &settings, term_width);
         let find_text = find_help.join("\n");
-        assert!(find_text.contains("Regex Examples") || find_text.contains("Pattern") || find_text.contains("Matches"));
+        assert!(
+            find_text.contains("Regex Examples")
+                || find_text.contains("Pattern")
+                || find_text.contains("Matches")
+        );
 
         // Test file selector help tables
         let selector_help = get_file_selector_help(&settings, term_width);
@@ -295,7 +368,11 @@ mod tests {
         // Verify specific table entries are present
         // These are from the Navigation table in help-editor.md
         assert!(editor_help.iter().any(|line| line.contains("Arrow Keys")));
-        assert!(editor_help.iter().any(|line| line.contains("Home") && line.contains("End")));
+        assert!(
+            editor_help
+                .iter()
+                .any(|line| line.contains("Home") && line.contains("End"))
+        );
         assert!(editor_help.iter().any(|line| line.contains("Page")));
 
         // Verify no raw markdown table syntax remains (| --- | --- |)
@@ -309,11 +386,17 @@ mod tests {
 
         // Test with narrow terminal - the content should be rendered
         let narrow_help = get_help_content(HelpContext::Editor, &settings, 40);
-        assert!(!narrow_help.is_empty(), "Help should have content even with narrow terminal");
+        assert!(
+            !narrow_help.is_empty(),
+            "Help should have content even with narrow terminal"
+        );
 
         // Test with wide terminal
         let wide_help = get_help_content(HelpContext::Editor, &settings, 120);
-        assert!(!wide_help.is_empty(), "Help should have content with wide terminal");
+        assert!(
+            !wide_help.is_empty(),
+            "Help should have content with wide terminal"
+        );
 
         // Both should contain the same basic content
         let narrow_text = narrow_help.join("\n");
@@ -336,11 +419,19 @@ mod tests {
 
         // Find help should have tables
         let find_help = get_help_content(HelpContext::Find, &settings, term_width);
-        assert!(find_help.iter().any(|line| line.contains("Basic Usage") || line.contains("Find Mode")));
+        assert!(
+            find_help
+                .iter()
+                .any(|line| line.contains("Basic Usage") || line.contains("Find Mode"))
+        );
 
         // File selector help should have tables
         let selector_help = get_file_selector_help(&settings, term_width);
-        assert!(selector_help.iter().any(|line| line.contains("Navigation") || line.contains("File Operations")));
+        assert!(
+            selector_help
+                .iter()
+                .any(|line| line.contains("Navigation") || line.contains("File Operations"))
+        );
     }
 
     #[test]
@@ -353,12 +444,24 @@ mod tests {
         let output = editor_help.join("\n");
 
         // Verify that markdown table delimiters are not present
-        assert!(!output.contains("| Key | Action |"), "Raw table header should be rendered");
-        assert!(!output.contains("|-----|--------|"), "Table separator should be rendered");
+        assert!(
+            !output.contains("| Key | Action |"),
+            "Raw table header should be rendered"
+        );
+        assert!(
+            !output.contains("|-----|--------|"),
+            "Table separator should be rendered"
+        );
 
         // Verify actual table content is present (these are from the markdown)
-        assert!(output.contains("Arrow Keys"), "Table content should be present");
-        assert!(output.contains("Move cursor") || output.contains("cursor"), "Table actions should be present");
+        assert!(
+            output.contains("Arrow Keys"),
+            "Table content should be present"
+        );
+        assert!(
+            output.contains("Move cursor") || output.contains("cursor"),
+            "Table actions should be present"
+        );
 
         // Print a sample for manual verification (visible with --nocapture)
         eprintln!("\n=== Sample of rendered help (first 30 lines) ===");

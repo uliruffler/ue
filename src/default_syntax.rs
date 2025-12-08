@@ -49,13 +49,12 @@ fn get_default_syntax(extension: &str) -> Option<&'static str> {
 
 /// Deploy all default syntax files to ~/.ue/syntax/, skipping existing files
 pub(crate) fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))?;
+    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
     let syntax_dir = PathBuf::from(home).join(".ue").join("syntax");
-    
+
     // Create directory if it doesn't exist
     fs::create_dir_all(&syntax_dir)?;
-    
+
     // List of all syntax files to deploy (extension, content)
     let syntax_files = [
         ("rs", SYNTAX_RS),
@@ -78,17 +77,17 @@ pub(crate) fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Er
         ("sql", SYNTAX_SQL),
         ("txt", SYNTAX_TXT),
     ];
-    
+
     // Deploy each file if it doesn't exist
     for (ext, content) in syntax_files {
         let file_path = syntax_dir.join(format!("{}.ue-syntax", ext));
-        
+
         // Skip if file already exists (don't overwrite user customizations)
         if !file_path.exists() {
             fs::write(&file_path, content)?;
         }
     }
-    
+
     Ok(())
 }
 
@@ -101,12 +100,12 @@ pub(crate) fn get_syntax_content(extension: &str) -> Option<String> {
             .join(".ue")
             .join("syntax")
             .join(format!("{}.ue-syntax", extension));
-        
+
         if let Ok(content) = fs::read_to_string(&user_path) {
             return Some(content);
         }
     }
-    
+
     // Fall back to embedded default
     get_default_syntax(extension).map(|s| s.to_string())
 }
@@ -130,4 +129,3 @@ mod tests {
         assert!(get_default_syntax("h").is_some());
     }
 }
-

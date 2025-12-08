@@ -3,19 +3,21 @@ use std::io;
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    cursor::{SetCursorStyle, Hide, Show},
-    event::{self, Event, KeyCode, EnableMouseCapture, DisableMouseCapture},
+    cursor::{Hide, SetCursorStyle, Show},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
     execute,
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen, size},
 };
 
 use crate::coordinates::adjust_view_for_resize;
+use crate::double_esc::{DoubleEscDetector, EscResult};
 use crate::editor_state::FileViewerState;
-use crate::event_handlers::{handle_key_event, handle_mouse_event, show_undo_conflict_confirmation};
+use crate::event_handlers::{
+    handle_key_event, handle_mouse_event, show_undo_conflict_confirmation,
+};
 use crate::rendering::render_screen;
 use crate::settings::Settings;
 use crate::undo::{UndoHistory, ValidationResult};
-use crate::double_esc::{DoubleEscDetector, EscResult};
 
 // Type alias for file selector result: (modified, next_file, quit, close)
 type FileSelectorResult = Option<(bool, Option<String>, bool, bool)>;
@@ -26,7 +28,7 @@ const STATUS_LINE_HEIGHT: usize = 2;
 const CURSOR_CONTEXT_LINES: usize = 5;
 
 // File watching constants for multi-instance synchronization
-// 
+//
 // UNDO_FILE_CHECK_INTERVAL_MS: How often to poll the undo file for changes from other instances.
 // - 150ms provides responsive updates without excessive I/O overhead
 // - Filesystem mtime resolution is typically 1ms on ext4/NTFS, so we can detect changes reliably
@@ -47,18 +49,23 @@ enum SelectorResult {
 }
 
 /// Run file selector overlay and return selected file path if confirmed (None if cancelled)
-fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, settings: &Settings) -> crossterm::Result<SelectorResult> {
-    use crossterm::event::{KeyCode, Event};
+fn run_file_selector_overlay(
+    current_file: &str,
+    visible_lines: &mut usize,
+    settings: &Settings,
+) -> crossterm::Result<SelectorResult> {
+    use crossterm::event::{Event, KeyCode};
     let mut stdout = io::stdout();
     let tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
     if tracked.is_empty() {
         return Ok(SelectorResult::Cancelled);
     }
-    
+
     let current_canon = std::fs::canonicalize(current_file)
         .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
     let current_str = current_canon.to_string_lossy();
-    let mut selected_index = tracked.iter()
+    let mut selected_index = tracked
+        .iter()
         .position(|e| e.path.to_string_lossy() == current_str)
         .unwrap_or(0);
     let scroll_offset = 0usize;
@@ -80,7 +87,7 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
 
         // Poll with timeout to detect when to cancel
         let timeout = last_esc.remaining_timeout();
-        
+
         if !event::poll(timeout)? {
             // Timeout elapsed, check again at top of loop
             continue;
@@ -101,14 +108,18 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
                         // Normal key handling
                     }
                 }
-                
+
                 match k.code {
                     KeyCode::Up | KeyCode::Char('k') => {
                         if selected_index > 0 {
                             let prev = selected_index;
                             selected_index -= 1;
                             crate::file_selector::render_selection_change(
-                                &tracked, prev, selected_index, scroll_offset, vis
+                                &tracked,
+                                prev,
+                                selected_index,
+                                scroll_offset,
+                                vis,
                             )?;
                         }
                     }
@@ -117,14 +128,18 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
                             let prev = selected_index;
                             selected_index += 1;
                             crate::file_selector::render_selection_change(
-                                &tracked, prev, selected_index, scroll_offset, vis
+                                &tracked,
+                                prev,
+                                selected_index,
+                                scroll_offset,
+                                vis,
                             )?;
                         }
                     }
                     KeyCode::Enter => {
                         execute!(stdout, Show)?;
                         return Ok(SelectorResult::Selected(
-                            tracked[selected_index].path.to_string_lossy().to_string()
+                            tracked[selected_index].path.to_string_lossy().to_string(),
                         ));
                     }
                     _ => {}
@@ -133,7 +148,12 @@ fn run_file_selector_overlay(current_file: &str, visible_lines: &mut usize, sett
             Event::Resize(_, h) => {
                 *visible_lines = (h as usize).saturating_sub(2);
                 let vis_new = (h as usize).saturating_sub(1);
-                crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis_new)?;
+                crate::file_selector::render_file_list(
+                    &tracked,
+                    selected_index,
+                    scroll_offset,
+                    vis_new,
+                )?;
             }
             Event::Mouse(_) => { /* ignore mouse */ }
             _ => {}
@@ -158,19 +178,28 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
     let mut idx: usize = 0;
 
     loop {
-        if idx >= current_files.len() { break; }
+        if idx >= current_files.len() {
+            break;
+        }
         let file = current_files[idx].clone();
         match fs::read_to_string(&file) {
             Ok(content) => {
-                let (modified, next, quit, close_file) = editing_session(&file, content, &settings)?;
-                if modified { if !unsaved.contains(&file) { unsaved.push(file.clone()); } } else { unsaved.retain(|f| f != &file); }
-                
+                let (modified, next, quit, close_file) =
+                    editing_session(&file, content, &settings)?;
+                if modified {
+                    if !unsaved.contains(&file) {
+                        unsaved.push(file.clone());
+                    }
+                } else {
+                    unsaved.retain(|f| f != &file);
+                }
+
                 // Handle close file signal
                 if close_file {
                     // Remove from current files list and unsaved tracking
                     current_files.remove(idx);
                     unsaved.retain(|f| f != &file);
-                    
+
                     // Always show file selector after closing a file
                     // The closed file has already been removed from the tracked files list (undo history deleted)
                     // Exit alternate screen to show full file selector
@@ -196,7 +225,9 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
                             )?;
 
                             // Find or add the selected file
-                            if let Some(pos) = current_files.iter().position(|f| f == &selected_file) {
+                            if let Some(pos) =
+                                current_files.iter().position(|f| f == &selected_file)
+                            {
                                 idx = pos;
                             } else {
                                 current_files.insert(0, selected_file);
@@ -213,17 +244,36 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
                         }
                     }
                 }
-                
+
                 if let Some(target) = next {
                     // Switch to selected file
-                    if let Some(pos) = current_files.iter().position(|f| f == &target) { idx = pos; } else { current_files.insert(0, target.clone()); idx = 0; }
+                    if let Some(pos) = current_files.iter().position(|f| f == &target) {
+                        idx = pos;
+                    } else {
+                        current_files.insert(0, target.clone());
+                        idx = 0;
+                    }
                     continue; // start next session immediately
                 }
-                if quit { break; }
+                if quit {
+                    break;
+                }
                 // Advance to next originally provided file if any
-                if idx + 1 < current_files.len() { idx += 1 } else { break }
+                if idx + 1 < current_files.len() {
+                    idx += 1
+                } else {
+                    break;
+                }
             }
-            Err(e) => { eprintln!("Could not read file {}: {}", file, e); if idx + 1 < current_files.len() { idx += 1; continue; } else { break; } }
+            Err(e) => {
+                eprintln!("Could not read file {}: {}", file, e);
+                if idx + 1 < current_files.len() {
+                    idx += 1;
+                    continue;
+                } else {
+                    break;
+                }
+            }
         }
     }
 
@@ -234,7 +284,12 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
         LeaveAlternateScreen
     )?;
     terminal::disable_raw_mode()?;
-    if !unsaved.is_empty() { println!("Warning: Unsaved changes (not saved) for: {}", unsaved.join(", ")); }
+    if !unsaved.is_empty() {
+        println!(
+            "Warning: Unsaved changes (not saved) for: {}",
+            unsaved.join(", ")
+        );
+    }
 
     // Save selector session when exiting completely (all files closed)
     if let Err(e) = crate::session::save_selector_session() {
@@ -252,18 +307,14 @@ fn show_file_selector_and_return(
 ) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
     let mut visible_lines = DEFAULT_VISIBLE_LINES;
     match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-        SelectorResult::Selected(selected_file) => {
-            Ok((false, Some(selected_file), false, false))
-        }
+        SelectorResult::Selected(selected_file) => Ok((false, Some(selected_file), false, false)),
         SelectorResult::Quit => {
             if let Err(e) = crate::session::save_selector_session() {
                 eprintln!("Warning: failed to save selector session: {}", e);
             }
             Ok((false, None, true, false))
         }
-        SelectorResult::Cancelled => {
-            Ok((false, None, true, false))
-        }
+        SelectorResult::Cancelled => Ok((false, None, true, false)),
     }
 }
 
@@ -272,7 +323,8 @@ fn update_undo_timestamp(undo_history: &mut UndoHistory, file: &str) {
     use std::time::SystemTime;
     if let Ok(metadata) = std::fs::metadata(file)
         && let Ok(modified) = metadata.modified()
-        && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+        && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+    {
         undo_history.file_timestamp = Some(duration.as_secs());
         // find_history is already in undo_history, no need to update it here
         let _ = undo_history.save(file);
@@ -305,8 +357,11 @@ fn try_reload_undo_from_external_change(
 
     // Check if we're within grace period of our own save
     let now = Instant::now();
-    let within_grace_period = state.last_save_time
-        .map(|save_time| now.duration_since(save_time) < Duration::from_millis(SAVE_GRACE_PERIOD_MS))
+    let within_grace_period = state
+        .last_save_time
+        .map(|save_time| {
+            now.duration_since(save_time) < Duration::from_millis(SAVE_GRACE_PERIOD_MS)
+        })
         .unwrap_or(false);
 
     if within_grace_period {
@@ -321,39 +376,60 @@ fn try_reload_undo_from_external_change(
 
     // Check if there's file content to restore
     if let Some(new_content) = &new_history.file_content {
-        // Update document content
-        *lines = new_content.clone();
+        // Check if content or undo history actually changed
+        // Don't reload cursor position if only the cursor moved (common case when we saved after an edit)
+        let content_changed = *lines != *new_content;
+        let undo_changed = state.undo_history.edits != new_history.edits
+            || state.undo_history.current != new_history.current;
 
-        // Restore cursor and scroll position from the new history
-        state.top_line = new_history.scroll_top.min(lines.len());
-        let new_cursor_line = new_history.cursor_line;
-        let new_cursor_col = new_history.cursor_col;
+        if content_changed {
+            // Content changed - do a full reload
+            *lines = new_content.clone();
 
-        if new_cursor_line < lines.len() {
-            state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
-            if new_cursor_col <= lines[new_cursor_line].len() {
-                state.cursor_col = new_cursor_col;
+            // Restore cursor and scroll position from the new history
+            state.top_line = new_history.scroll_top.min(lines.len());
+            let new_cursor_line = new_history.cursor_line;
+            let new_cursor_col = new_history.cursor_col;
+
+            if new_cursor_line < lines.len() {
+                state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
+                if new_cursor_col <= lines[new_cursor_line].len() {
+                    state.cursor_col = new_cursor_col;
+                }
             }
+
+            // Ensure cursor is visible after reload (similar to undo/redo)
+            state.ensure_cursor_visible(visible_lines);
+        } else if undo_changed {
+            // Only undo history changed, not content - update history but keep cursor position
+            // This handles the case where another instance did undo/redo
+            // Keep current cursor position as the user may have moved it since the last save
         }
 
-        // Ensure cursor is visible after reload (similar to undo/redo)
-        state.ensure_cursor_visible(visible_lines);
-
-        // Update the undo history in state
+        // Always update the undo history and metadata
         state.undo_history = new_history.clone();
         state.find_history = new_history.find_history.clone(); // Sync find history
         state.modified = state.undo_history.modified;
-        state.needs_redraw = true;
 
-        (true, Some(current_mtime))
+        if content_changed {
+            state.needs_redraw = true;
+        }
+
+        (content_changed, Some(current_mtime))
     } else {
         // No file content (e.g., after save in another instance)
         // But we should still sync the modified flag and other metadata
+        let undo_changed = state.undo_history.edits != new_history.edits
+            || state.undo_history.current != new_history.current;
+
         state.undo_history = new_history.clone();
         state.find_history = new_history.find_history.clone(); // Sync find history
         state.modified = state.undo_history.modified;
-        state.needs_redraw = true;
-        
+
+        if undo_changed {
+            state.needs_redraw = true;
+        }
+
         (false, Some(current_mtime))
     }
 }
@@ -361,7 +437,9 @@ fn try_reload_undo_from_external_change(
 /// Persist editor state (undo history and session) to disk
 /// This consolidates the common pattern of saving both undo history and editor session
 fn persist_editor_state(state: &mut FileViewerState, file: &str) {
-    state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    state
+        .undo_history
+        .update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
     state.undo_history.find_history = state.find_history.clone(); // Save find history
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
@@ -381,12 +459,14 @@ fn handle_file_selector_in_loop(
     settings: &Settings,
 ) -> crossterm::Result<FileSelectorResult> {
     // Persist state before showing selector
-    state.undo_history.update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    state
+        .undo_history
+        .update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
     }
     state.last_save_time = Some(Instant::now());
-    
+
     match run_file_selector_overlay(file, visible_lines, settings)? {
         SelectorResult::Selected(selected_file) => {
             Ok(Some((state.modified, Some(selected_file), false, false)))
@@ -404,13 +484,17 @@ fn handle_file_selector_in_loop(
     }
 }
 
-fn editing_session(file: &str, content: String, settings: &Settings) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
+fn editing_session(
+    file: &str,
+    content: String,
+    settings: &Settings,
+) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
     // Set the current file for syntax highlighting
     crate::syntax::set_current_file(file);
-    
+
     let mut stdout = io::stdout();
     let mut undo_history = UndoHistory::load(file).unwrap_or_else(|_| UndoHistory::new());
-    
+
     // Validate undo file against current file modification time
     let validation_result = undo_history.validate(file);
     match validation_result {
@@ -435,10 +519,10 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
             }
         }
     };
-    
-    let mut lines: Vec<String> = if let Some(saved) = &undo_history.file_content { 
-        saved.clone() 
-    } else { 
+
+    let mut lines: Vec<String> = if let Some(saved) = &undo_history.file_content {
+        saved.clone()
+    } else {
         let mut l: Vec<String> = content.lines().map(String::from).collect();
         // Ensure at least one empty line for empty files
         if l.is_empty() {
@@ -446,9 +530,9 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
         }
         l
     };
-    
+
     let (term_width, term_height) = size()?;
-    
+
     let mut state = FileViewerState::new(term_width, undo_history.clone(), settings);
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
@@ -456,11 +540,16 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     let saved_cursor_line = undo_history.cursor_line;
     let saved_cursor_col = undo_history.cursor_col;
     if saved_cursor_line < lines.len() {
-        if saved_cursor_line < state.top_line || saved_cursor_line >= state.top_line + (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT) {
+        if saved_cursor_line < state.top_line
+            || saved_cursor_line
+                >= state.top_line + (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT)
+        {
             state.top_line = saved_cursor_line.saturating_sub(CURSOR_CONTEXT_LINES);
         }
         state.cursor_line = saved_cursor_line.saturating_sub(state.top_line);
-        if saved_cursor_col <= lines[saved_cursor_line].len() { state.cursor_col = saved_cursor_col; }
+        if saved_cursor_col <= lines[saved_cursor_line].len() {
+            state.cursor_col = saved_cursor_col;
+        }
     }
     let mut visible_lines = (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT);
     state.needs_redraw = true;
@@ -468,7 +557,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
     // Track last Esc press time for double-press detection
     let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
     let mut esc_was_in_normal_mode = false; // Track if first Esc was in normal mode
-    
+
     // File watching state for multi-instance synchronization
     let mut last_undo_check = Instant::now();
     let mut last_known_undo_mtime = UndoHistory::get_undo_file_mtime(file);
@@ -478,17 +567,25 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
             if state.help_active {
                 // Render help screen
                 let (tw, th) = terminal::size()?;
-                let help_content = crate::help::get_help_content(state.help_context, settings, tw as usize);
-                crate::help::render_help(&mut stdout, &help_content, state.help_scroll_offset, tw, th)?;
+                let help_content =
+                    crate::help::get_help_content(state.help_context, settings, tw as usize);
+                crate::help::render_help(
+                    &mut stdout,
+                    &help_content,
+                    state.help_scroll_offset,
+                    tw,
+                    th,
+                )?;
             } else {
                 render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
             }
             state.needs_redraw = false;
         }
-        
+
         // Check for external undo file changes (multi-instance editing)
         let now = Instant::now();
-        if now.duration_since(last_undo_check) >= Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS) {
+        if now.duration_since(last_undo_check) >= Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS)
+        {
             last_undo_check = now;
             let (_reloaded, new_mtime) = try_reload_undo_from_external_change(
                 &mut state,
@@ -499,22 +596,28 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
             );
             last_known_undo_mtime = new_mtime;
         }
-        
+
         // Check if we should open file selector after timeout
         if last_esc.timed_out() {
             last_esc.clear();
-            if let Some(result) = handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)? {
+            if let Some(result) =
+                handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)?
+            {
                 return Ok(result);
             }
             continue;
         }
-        
+
         // Use poll with timeout to detect when to open file selector
         // Cap timeout to file check interval so we wake up regularly to check for external changes
         let esc_timeout = last_esc.remaining_timeout();
         let file_check_timeout = Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS);
-        let timeout = if esc_timeout < file_check_timeout { esc_timeout } else { file_check_timeout };
-        
+        let timeout = if esc_timeout < file_check_timeout {
+            esc_timeout
+        } else {
+            file_check_timeout
+        };
+
         if !event::poll(timeout)? {
             if last_esc.timed_out() {
                 last_esc.clear();
@@ -522,7 +625,12 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                 // (not in find or selection mode, which we already exited)
                 if esc_was_in_normal_mode {
                     esc_was_in_normal_mode = false;
-                    if let Some(result) = handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)? {
+                    if let Some(result) = handle_file_selector_in_loop(
+                        file,
+                        &mut state,
+                        &mut visible_lines,
+                        settings,
+                    )? {
                         return Ok(result);
                     }
                 }
@@ -530,13 +638,15 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
             }
             continue;
         }
-        
+
         match event::read()? {
             Event::Key(key_event) => {
                 // Special handling for help mode - process before double-Esc detector
                 if state.help_active {
                     // In help mode, ESC should just exit help, not trigger file selector
-                    if matches!(key_event.code, KeyCode::Esc) || matches!(key_event.code, KeyCode::F(1)) {
+                    if matches!(key_event.code, KeyCode::Esc)
+                        || matches!(key_event.code, KeyCode::F(1))
+                    {
                         state.help_active = false;
                         state.needs_redraw = true;
                         continue;
@@ -544,7 +654,7 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                     // Handle other help navigation through regular key handler
                     // which will return early for help mode
                 }
-                
+
                 // Always process Esc through double-Esc detector (except when in help mode, handled above)
                 match last_esc.process_key(&key_event) {
                     EscResult::Double => {
@@ -588,9 +698,16 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                         esc_was_in_normal_mode = false; // Clear the flag
                     }
                 }
-                
+
                 // Handle key event and check for quit or close signals
-                let (should_quit, should_close) = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, file)?;
+                let (should_quit, should_close) = handle_key_event(
+                    &mut state,
+                    &mut lines,
+                    key_event,
+                    settings,
+                    visible_lines,
+                    file,
+                )?;
                 if should_quit {
                     return Ok((state.modified, None, true, false));
                 }
@@ -603,14 +720,21 @@ fn editing_session(file: &str, content: String, settings: &Settings) -> crosster
                 let cursor_col = state.cursor_col;
                 state.term_width = w;
                 visible_lines = (h as usize).saturating_sub(STATUS_LINE_HEIGHT);
-                let (new_top, rel_cursor) = adjust_view_for_resize(state.top_line, absolute_cursor_line, visible_lines, lines.len());
+                let (new_top, rel_cursor) = adjust_view_for_resize(
+                    state.top_line,
+                    absolute_cursor_line,
+                    visible_lines,
+                    lines.len(),
+                );
                 state.top_line = new_top;
                 state.cursor_line = rel_cursor;
                 state.cursor_col = cursor_col;
                 execute!(stdout, terminal::Clear(ClearType::All))?;
                 state.needs_redraw = true;
             }
-            Event::Mouse(mouse_event) => { handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines); }
+            Event::Mouse(mouse_event) => {
+                handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines);
+            }
             _ => {}
         }
     }

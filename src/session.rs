@@ -1,7 +1,10 @@
 use std::{fs, io, path::PathBuf};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum SessionMode { Editor, Selector }
+pub(crate) enum SessionMode {
+    Editor,
+    Selector,
+}
 
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub(crate) struct LastSession {
@@ -19,13 +22,17 @@ fn session_file_path() -> io::Result<PathBuf> {
 
 pub(crate) fn load_last_session() -> io::Result<Option<LastSession>> {
     let path = session_file_path()?;
-    if !path.exists() { return Ok(None); }
+    if !path.exists() {
+        return Ok(None);
+    }
     let content = fs::read_to_string(&path)?;
     let mut mode: Option<SessionMode> = None;
     let mut file: Option<PathBuf> = None;
     for line in content.lines() {
         let line = line.trim();
-        if line.is_empty() { continue; }
+        if line.is_empty() {
+            continue;
+        }
         if let Some(rest) = line.strip_prefix("mode=") {
             mode = match rest.trim() {
                 "editor" => Some(SessionMode::Editor),
@@ -37,12 +44,18 @@ pub(crate) fn load_last_session() -> io::Result<Option<LastSession>> {
             file = Some(p);
         }
     }
-    if let Some(m) = mode { Ok(Some(LastSession { mode: m, file })) } else { Ok(None) }
+    if let Some(m) = mode {
+        Ok(Some(LastSession { mode: m, file }))
+    } else {
+        Ok(None)
+    }
 }
 
 pub(crate) fn save_editor_session(file: &str) -> io::Result<()> {
     let path = session_file_path()?;
-    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     let data = format!("mode=editor\nfile={}\n", file);
     fs::write(path, data)?;
     Ok(())
@@ -50,7 +63,9 @@ pub(crate) fn save_editor_session(file: &str) -> io::Result<()> {
 
 pub(crate) fn save_selector_session() -> io::Result<()> {
     let path = session_file_path()?;
-    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
     fs::write(path, "mode=selector\n")?;
     Ok(())
 }
@@ -94,7 +109,9 @@ mod tests {
     fn corrupt_file_returns_none() {
         let (_tmp, _guard) = set_temp_home();
         let path = session_file_path().unwrap();
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
         fs::write(path, "bad=stuff\nfile=/x\n").unwrap();
         let loaded = load_last_session().unwrap();
         assert!(loaded.is_none());
@@ -155,7 +172,9 @@ mod tests {
     fn session_empty_file_contents() {
         let (_tmp, _guard) = set_temp_home();
         let path = session_file_path().unwrap();
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
 
         // Write empty file
         fs::write(path, "").unwrap();
@@ -167,7 +186,9 @@ mod tests {
     fn session_malformed_mode() {
         let (_tmp, _guard) = set_temp_home();
         let path = session_file_path().unwrap();
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
 
         // Write invalid mode
         fs::write(path, "mode=invalid\n").unwrap();
@@ -179,7 +200,9 @@ mod tests {
     fn session_editor_mode_without_file() {
         let (_tmp, _guard) = set_temp_home();
         let path = session_file_path().unwrap();
-        if let Some(parent) = path.parent() { fs::create_dir_all(parent).unwrap(); }
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).unwrap();
+        }
 
         // Editor mode but no file specified
         fs::write(path, "mode=editor\n").unwrap();
@@ -188,4 +211,3 @@ mod tests {
         assert!(loaded.is_none() || loaded.unwrap().file.is_none());
     }
 }
-

@@ -15,7 +15,9 @@ pub fn set_temp_home() -> (TempDir, std::sync::MutexGuard<'static, ()>) {
         }
     };
     let dir = TempDir::new().expect("temp dir");
-    unsafe { std::env::set_var("UE_TEST_HOME", dir.path()); }
+    unsafe {
+        std::env::set_var("UE_TEST_HOME", dir.path());
+    }
     (dir, guard)
 }
 
@@ -27,11 +29,11 @@ mod tests {
     #[test]
     fn test_set_temp_home_creates_directory() {
         let (_temp_dir, _guard) = set_temp_home();
-        
+
         // Verify UE_TEST_HOME is set
         let home = std::env::var("UE_TEST_HOME").expect("UE_TEST_HOME should be set");
         let home_path = Path::new(&home);
-        
+
         // Verify the directory exists
         assert!(home_path.exists(), "Temp home directory should exist");
         assert!(home_path.is_dir(), "Temp home should be a directory");
@@ -48,9 +50,12 @@ mod tests {
         // Second temp home
         let (_temp_dir2, _guard2) = set_temp_home();
         let home2 = std::env::var("UE_TEST_HOME").expect("UE_TEST_HOME should be set");
-        
+
         // Paths should be different (though first may no longer exist)
-        assert_ne!(home1, home2, "Each call should create a unique temp directory");
+        assert_ne!(
+            home1, home2,
+            "Each call should create a unique temp directory"
+        );
     }
 
     #[test]
@@ -62,11 +67,14 @@ mod tests {
             assert!(path.exists(), "Temp dir should exist while in scope");
             // temp_dir and guard drop here
         }
-        
+
         // After dropping, the temp directory should be cleaned up
         // Note: This test may be flaky on some systems due to timing
         std::thread::sleep(std::time::Duration::from_millis(10));
-        assert!(!path.exists(), "Temp dir should be cleaned up after dropping");
+        assert!(
+            !path.exists(),
+            "Temp dir should be cleaned up after dropping"
+        );
     }
 
     #[test]
@@ -74,16 +82,15 @@ mod tests {
         // This test verifies that the lock is held
         let (_temp_dir1, guard1) = set_temp_home();
         let home1 = std::env::var("UE_TEST_HOME").expect("should be set");
-        
+
         // Try to get another lock in the same thread (this should succeed in sequence)
         drop(guard1);
         drop(_temp_dir1);
-        
+
         let (_temp_dir2, _guard2) = set_temp_home();
         let home2 = std::env::var("UE_TEST_HOME").expect("should be set");
-        
+
         // Should get different temp dirs
         assert_ne!(home1, home2);
     }
 }
-

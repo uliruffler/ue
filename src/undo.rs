@@ -27,14 +27,37 @@ pub enum ValidationResult {
     ModifiedWithUnsaved,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Edit {
-    InsertChar { line: usize, col: usize, ch: char },
-    DeleteChar { line: usize, col: usize, ch: char },
-    InsertLine { line: usize, content: String },
-    DeleteLine { line: usize, content: String },
-    SplitLine { line: usize, col: usize, before: String, after: String },
-    MergeLine { line: usize, first: String, second: String },
+    InsertChar {
+        line: usize,
+        col: usize,
+        ch: char,
+    },
+    DeleteChar {
+        line: usize,
+        col: usize,
+        ch: char,
+    },
+    InsertLine {
+        line: usize,
+        content: String,
+    },
+    DeleteLine {
+        line: usize,
+        content: String,
+    },
+    SplitLine {
+        line: usize,
+        col: usize,
+        before: String,
+        after: String,
+    },
+    MergeLine {
+        line: usize,
+        first: String,
+        second: String,
+    },
     DragBlock {
         before: Vec<String>,
         after: Vec<String>,
@@ -88,7 +111,13 @@ impl UndoHistory {
     }
 
     // Update cursor, scroll position, and unsaved file content (marks modified)
-    pub fn update_state(&mut self, scroll_top: usize, cursor_line: usize, cursor_col: usize, file_content: Vec<String>) {
+    pub fn update_state(
+        &mut self,
+        scroll_top: usize,
+        cursor_line: usize,
+        cursor_col: usize,
+        file_content: Vec<String>,
+    ) {
         self.scroll_top = scroll_top;
         self.cursor_line = cursor_line;
         self.cursor_col = cursor_col;
@@ -111,30 +140,48 @@ impl UndoHistory {
         self.saved_at = self.current;
     }
 
-    pub fn can_undo(&self) -> bool { self.current > 0 }
-    pub fn can_redo(&self) -> bool { self.current < self.edits.len() }
+    pub fn can_undo(&self) -> bool {
+        self.current > 0
+    }
+    pub fn can_redo(&self) -> bool {
+        self.current < self.edits.len()
+    }
 
     pub fn undo(&mut self) -> Option<Edit> {
-        if self.can_undo() { self.current -= 1; self.edits.get(self.current).cloned() } else { None }
+        if self.can_undo() {
+            self.current -= 1;
+            self.edits.get(self.current).cloned()
+        } else {
+            None
+        }
     }
     pub fn redo(&mut self) -> Option<Edit> {
-        if self.can_redo() { let edit = self.edits.get(self.current).cloned(); self.current += 1; edit } else { None }
+        if self.can_redo() {
+            let edit = self.edits.get(self.current).cloned();
+            self.current += 1;
+            edit
+        } else {
+            None
+        }
     }
 
     pub fn save(&self, file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         let history_path = Self::history_path(file_path)?;
         // Create parent directories if they don't exist
-        if let Some(parent) = history_path.parent() { fs::create_dir_all(parent)?; }
-        
+        if let Some(parent) = history_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
         // Create a copy with updated timestamp
         let mut history_to_save = self.clone();
         // Capture current file modification time
         if let Ok(metadata) = fs::metadata(file_path)
             && let Ok(modified) = metadata.modified()
-            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH) {
+            && let Ok(duration) = modified.duration_since(SystemTime::UNIX_EPOCH)
+        {
             history_to_save.file_timestamp = Some(duration.as_secs());
         }
-        
+
         let serialized = serde_json::to_string(&history_to_save)?;
         fs::write(&history_path, serialized)?;
         Ok(())
@@ -145,7 +192,9 @@ impl UndoHistory {
             let content = fs::read_to_string(&history_path)?;
             let history: UndoHistory = serde_json::from_str(&content)?;
             Ok(history)
-        } else { Ok(Self::new()) }
+        } else {
+            Ok(Self::new())
+        }
     }
 
     /// Validate undo history against current file modification timestamp
@@ -200,7 +249,7 @@ impl UndoHistory {
         let home = std::env::var("UE_TEST_HOME")
             .or_else(|_| std::env::var("HOME"))
             .or_else(|_| std::env::var("USERPROFILE"))?;
-        
+
         // Convert to absolute path if relative
         let absolute_path = if file_path.starts_with('/') {
             PathBuf::from(file_path)
@@ -208,19 +257,24 @@ impl UndoHistory {
             // Relative path - make it absolute using current directory
             std::env::current_dir()?.join(file_path)
         };
-        
+
         // Canonicalize to resolve symlinks and get clean absolute path
         let canonical_path = absolute_path.canonicalize().unwrap_or(absolute_path);
-        
+
         // Get the path without leading /
         let path_str = canonical_path.to_string_lossy();
-        let normalized_path = if let Some(stripped) = path_str.strip_prefix('/') { stripped } else { &*path_str };
-        
+        let normalized_path = if let Some(stripped) = path_str.strip_prefix('/') {
+            stripped
+        } else {
+            &*path_str
+        };
+
         // Get the filename with extension
-        let filename = canonical_path.file_name()
+        let filename = canonical_path
+            .file_name()
             .and_then(|n| n.to_str())
             .ok_or("Invalid filename")?;
-        
+
         // Get directory path
         let home_path = PathBuf::from(&home);
         let dir_path = home_path
@@ -230,10 +284,10 @@ impl UndoHistory {
             .parent()
             .map(|p| p.to_path_buf())
             .unwrap_or_else(|| PathBuf::from(&home).join(".ue").join("files"));
-        
+
         // Create the FILENAME.ue format (removed leading dot)
         let ue_filename = format!("{}{}.ue", "", filename);
-        
+
         Ok(dir_path.join(ue_filename))
     }
 }
@@ -248,27 +302,65 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let mut h = UndoHistory::new();
         assert!(!h.can_undo());
-        h.push(Edit::InsertChar { line:0, col:0, ch:'a' });
-        h.push(Edit::InsertChar { line:0, col:1, ch:'b' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         assert!(h.can_undo());
         let e2 = h.undo().unwrap();
-        assert!(matches!(e2, Edit::InsertChar { line:0, col:1, ch:'b' }));
+        assert!(matches!(
+            e2,
+            Edit::InsertChar {
+                line: 0,
+                col: 1,
+                ch: 'b'
+            }
+        ));
         assert!(h.can_redo());
         let e2r = h.redo().unwrap();
-        assert!(matches!(e2r, Edit::InsertChar { line:0, col:1, ch:'b' }));
+        assert!(matches!(
+            e2r,
+            Edit::InsertChar {
+                line: 0,
+                col: 1,
+                ch: 'b'
+            }
+        ));
     }
 
     #[test]
     fn branching_after_undo_truncates_redo_chain() {
         let (_tmp, _guard) = set_temp_home();
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line:0, col:0, ch:'a' });
-        h.push(Edit::InsertChar { line:0, col:1, ch:'b' });
-        h.push(Edit::InsertChar { line:0, col:2, ch:'c' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 2,
+            ch: 'c',
+        });
         let _ = h.undo();
         let _ = h.undo();
         assert!(h.can_redo());
-        h.push(Edit::InsertChar { line:0, col:1, ch:'X' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'X',
+        });
         assert!(!h.can_redo());
         assert_eq!(h.edits.len(), 2);
     }
@@ -279,13 +371,20 @@ mod tests {
         let file = tmp.path().join("test.txt");
         let file_str = file.to_string_lossy();
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line:0, col:0, ch:'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["a".into()]);
         h.save(&file_str).expect("save");
         let loaded = UndoHistory::load(&file_str).expect("load");
         assert_eq!(loaded.edits.len(), 1);
         assert_eq!(loaded.cursor_col, 1);
-        assert_eq!(loaded.file_content.as_ref().unwrap(), &vec!["a".to_string()]);
+        assert_eq!(
+            loaded.file_content.as_ref().unwrap(),
+            &vec!["a".to_string()]
+        );
     }
 
     #[test]
@@ -296,8 +395,16 @@ mod tests {
         let file_str = file_path.to_string_lossy();
 
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line:0, col:0, ch:'a' });
-        h.push(Edit::InsertChar { line:0, col:1, ch:'b' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         h.update_state(0, 0, 2, vec!["ab".into()]);
         h.save(&file_str).unwrap();
 
@@ -323,9 +430,9 @@ mod tests {
         assert!(h.file_content.is_some());
         assert_eq!(h.cursor_line, 5);
         assert_eq!(h.cursor_col, 10);
-        
+
         h.clear_unsaved_state();
-        
+
         assert!(h.file_content.is_none());
         assert_eq!(h.cursor_line, 5); // cursor position should remain
         assert_eq!(h.cursor_col, 10);
@@ -334,18 +441,37 @@ mod tests {
     #[test]
     fn different_edit_types_preserve_correctly() {
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertLine { line: 0, content: "new line".into() });
-        h.push(Edit::DeleteChar { line: 0, col: 5, ch: 'x' });
-        h.push(Edit::SplitLine { line: 0, col: 3, before: "new".into(), after: " line".into() });
-        
+        h.push(Edit::InsertLine {
+            line: 0,
+            content: "new line".into(),
+        });
+        h.push(Edit::DeleteChar {
+            line: 0,
+            col: 5,
+            ch: 'x',
+        });
+        h.push(Edit::SplitLine {
+            line: 0,
+            col: 3,
+            before: "new".into(),
+            after: " line".into(),
+        });
+
         assert_eq!(h.edits.len(), 3);
-        
+
         let e = h.undo().unwrap();
         assert!(matches!(e, Edit::SplitLine { .. }));
-        
+
         let e = h.undo().unwrap();
-        assert!(matches!(e, Edit::DeleteChar { line: 0, col: 5, ch: 'x' }));
-        
+        assert!(matches!(
+            e,
+            Edit::DeleteChar {
+                line: 0,
+                col: 5,
+                ch: 'x'
+            }
+        ));
+
         let e = h.undo().unwrap();
         assert!(matches!(e, Edit::InsertLine { .. }));
     }
@@ -366,16 +492,20 @@ mod tests {
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("corrupted.txt");
         let file_str = file.to_string_lossy();
-        
+
         // Create a valid history first to get the path
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line:0, col:0, ch:'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.save(&file_str).expect("save");
-        
+
         // Now corrupt the history file
         let history_path = UndoHistory::history_path(&file_str).unwrap();
         fs::write(&history_path, "{ this is not valid json ").expect("write corrupted");
-        
+
         // Loading should fail
         let result = UndoHistory::load(&file_str);
         assert!(result.is_err());
@@ -388,7 +518,10 @@ mod tests {
         assert!(result.is_ok());
         let path = result.unwrap();
         // Should be .ue/files/home/user/test.txt.ue (no leading dot before filename)
-        assert!(path.to_string_lossy().contains(".ue/files/home/user/test.txt.ue"));
+        assert!(
+            path.to_string_lossy()
+                .contains(".ue/files/home/user/test.txt.ue")
+        );
     }
 
     #[test]
@@ -406,27 +539,35 @@ mod tests {
     fn modified_flag_resets_when_all_changes_undone() {
         let (_tmp, _guard) = set_temp_home();
         let mut h = UndoHistory::new();
-        
+
         // Initially not modified
         assert!(!h.modified);
-        
+
         // Make some edits
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["a".into()]);
         assert!(h.modified);
         assert_eq!(h.current, 1);
-        
-        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         h.update_state(0, 0, 2, vec!["ab".into()]);
         assert!(h.modified);
         assert_eq!(h.current, 2);
-        
+
         // Undo one change - should still be modified
         let _ = h.undo();
         h.update_state(0, 0, 1, vec!["a".into()]);
         assert!(h.modified);
         assert_eq!(h.current, 1);
-        
+
         // Undo all changes - should not be modified
         let _ = h.undo();
         h.update_state(0, 0, 0, vec!["".into()]);
@@ -474,11 +615,11 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create history without timestamp (simulating old format)
         let mut h = UndoHistory::new();
         h.file_timestamp = None;
-        
+
         let result = h.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
     }
@@ -489,12 +630,16 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Save and load to capture timestamp
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.save(&file_str).unwrap();
-        
+
         let loaded = UndoHistory::load(&file_str).unwrap();
         let result = loaded.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
@@ -504,24 +649,24 @@ mod tests {
     fn validate_returns_modified_no_unsaved_when_file_changed() {
         use std::thread;
         use std::time::Duration;
-        
+
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Save history
         let h = UndoHistory::new();
         h.save(&file_str).unwrap();
-        
+
         // Wait enough time to ensure timestamp changes (filesystem resolution)
         thread::sleep(Duration::from_secs(2));
         fs::write(&file, "modified content").unwrap();
-        
+
         // Load and validate
         let loaded = UndoHistory::load(&file_str).unwrap();
         let result = loaded.validate(&file_str);
-        
+
         // This test may not work on all filesystems - mark as ignored
         assert_eq!(result, ValidationResult::ModifiedNoUnsaved);
     }
@@ -530,27 +675,31 @@ mod tests {
     fn validate_returns_modified_with_unsaved_when_file_changed_and_has_unsaved() {
         use std::thread;
         use std::time::Duration;
-        
+
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create history with unsaved changes
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["a".into()]);
         h.save(&file_str).unwrap();
-        
+
         // Wait enough time to ensure timestamp changes (filesystem resolution)
         thread::sleep(Duration::from_secs(2));
         fs::write(&file, "modified content").unwrap();
-        
+
         // Load and validate
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(loaded.modified);
         let result = loaded.validate(&file_str);
-        
+
         // This test may not work on all filesystems - mark as ignored
         assert_eq!(result, ValidationResult::ModifiedWithUnsaved);
     }
@@ -561,10 +710,10 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         let h = UndoHistory::new();
         h.save(&file_str).unwrap();
-        
+
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(loaded.file_timestamp.is_some());
     }
@@ -575,16 +724,16 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "original content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Save history with no edits and no unsaved content
         let h = UndoHistory::new();
         h.save(&file_str).unwrap();
-        
+
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(!loaded.modified);
         assert!(loaded.file_content.is_none());
         assert_eq!(loaded.edits.len(), 0);
-        
+
         // Validation should pass - file unchanged
         let result = loaded.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
@@ -596,17 +745,17 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "original content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create history with file content but modified=false (simulating saved state)
         let mut h = UndoHistory::new();
         h.file_content = Some(vec!["saved content".to_string()]);
         h.modified = false;
         h.save(&file_str).unwrap();
-        
+
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(!loaded.modified);
         assert!(loaded.file_content.is_some());
-        
+
         // Validation should pass - no modifications
         let result = loaded.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
@@ -618,19 +767,23 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "original").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create history with edits and unsaved changes
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["aoriginal".to_string()]);
         assert!(h.modified);
         h.save(&file_str).unwrap();
-        
+
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(loaded.modified);
         assert_eq!(loaded.edits.len(), 1);
         assert!(loaded.file_content.is_some());
-        
+
         // Validation should pass - file unchanged
         let result = loaded.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
@@ -642,44 +795,59 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "original").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create history with multiple edits, then undo some
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
-        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
-        h.push(Edit::InsertChar { line: 0, col: 2, ch: 'c' });
-        
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 2,
+            ch: 'c',
+        });
+
         // Undo one
         h.undo();
         h.update_state(0, 0, 2, vec!["aboriginal".to_string()]);
-        
+
         assert!(h.modified);
         assert_eq!(h.current, 2); // 2 edits in effect
         assert_eq!(h.edits.len(), 3); // 3 total edits (can redo)
         h.save(&file_str).unwrap();
-        
+
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(loaded.modified);
         assert_eq!(loaded.current, 2);
         assert_eq!(loaded.edits.len(), 3);
         assert!(loaded.can_redo());
-        
+
         // Validation should pass
         let result = loaded.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
     }
 
-
     #[test]
     fn validation_handles_missing_file() {
         let (_tmp, _guard) = set_temp_home();
-        
+
         // Create history for a file that doesn't exist
         let mut h = UndoHistory::new();
         h.file_timestamp = Some(12345);
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["a".to_string()]);
-        
+
         // Validate against non-existent file - should return Valid (graceful handling)
         let result = h.validate("/tmp/nonexistent_file_xyz_123.txt");
         assert_eq!(result, ValidationResult::Valid);
@@ -688,25 +856,33 @@ mod tests {
     #[test]
     fn clear_unsaved_state_preserves_edits_and_cursor() {
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
-        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         h.update_state(5, 10, 15, vec!["ab".to_string()]);
-        
+
         assert!(h.modified);
         assert!(h.file_content.is_some());
         assert_eq!(h.edits.len(), 2);
         assert_eq!(h.scroll_top, 5);
         assert_eq!(h.cursor_line, 10);
         assert_eq!(h.cursor_col, 15);
-        
+
         h.clear_unsaved_state();
-        
+
         // Edits and cursor should be preserved
         assert_eq!(h.edits.len(), 2);
         assert_eq!(h.scroll_top, 5);
         assert_eq!(h.cursor_line, 10);
         assert_eq!(h.cursor_col, 15);
-        
+
         // But modified and file_content should be cleared
         assert!(!h.modified);
         assert!(h.file_content.is_none());
@@ -718,14 +894,18 @@ mod tests {
         let file = tmp.path().join("test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create an old-format undo history manually (without using save)
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["a".to_string()]);
         // Explicitly set timestamp to None to simulate old format
         h.file_timestamp = None;
-        
+
         // Manually save as JSON without timestamp
         let history_path = UndoHistory::history_path_for(&file_str).unwrap();
         if let Some(parent) = history_path.parent() {
@@ -733,12 +913,12 @@ mod tests {
         }
         let serialized = serde_json::to_string(&h).unwrap();
         fs::write(&history_path, serialized).unwrap();
-        
+
         // Load and validate
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(loaded.file_timestamp.is_none());
         assert!(loaded.modified);
-        
+
         // Should validate as Valid (backward compatibility)
         let result = loaded.validate(&file_str);
         assert_eq!(result, ValidationResult::Valid);
@@ -748,70 +928,84 @@ mod tests {
     fn undo_file_exists_after_validation_with_modified_no_unsaved() {
         use std::thread;
         use std::time::Duration;
-        
+
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("test.txt");
         fs::write(&file, "original content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create and save undo history with no unsaved changes
         let h = UndoHistory::new();
         h.save(&file_str).unwrap();
-        
+
         // Verify undo file exists
         let history_path = UndoHistory::history_path_for(&file_str).unwrap();
         assert!(history_path.exists());
-        
+
         // Modify file externally
         thread::sleep(Duration::from_millis(100));
         fs::write(&file, "modified content").unwrap();
-        
+
         // Load and validate
         let loaded = UndoHistory::load(&file_str).unwrap();
         let _result = loaded.validate(&file_str);
-        
+
         // Validation should detect modification (or Valid if timestamps don't differ)
         // But importantly, the undo file should STILL exist
-        assert!(history_path.exists(), "Undo file should not be deleted by validation");
+        assert!(
+            history_path.exists(),
+            "Undo file should not be deleted by validation"
+        );
     }
 
     #[test]
     fn undo_file_exists_after_validation_with_modified_with_unsaved() {
         use std::thread;
         use std::time::Duration;
-        
+
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("test.txt");
         fs::write(&file, "original").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Create undo history with unsaved changes
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
-        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         h.update_state(0, 0, 2, vec!["aboriginal".to_string()]);
         assert!(h.modified);
         h.save(&file_str).unwrap();
-        
+
         // Verify undo file exists
         let history_path = UndoHistory::history_path_for(&file_str).unwrap();
         assert!(history_path.exists());
-        
+
         // Modify file externally
         thread::sleep(Duration::from_millis(100));
         fs::write(&file, "completely different").unwrap();
-        
+
         // Load and validate
         let loaded = UndoHistory::load(&file_str).unwrap();
         assert!(loaded.modified);
         assert_eq!(loaded.edits.len(), 2);
-        
+
         let _result = loaded.validate(&file_str);
-        
+
         // Validation should detect modification (or Valid if timestamps don't differ)
         // But the undo file should STILL exist with all its edits
-        assert!(history_path.exists(), "Undo file should not be deleted by validation");
-        
+        assert!(
+            history_path.exists(),
+            "Undo file should not be deleted by validation"
+        );
+
         // Reload and verify edits are preserved
         let reloaded = UndoHistory::load(&file_str).unwrap();
         assert_eq!(reloaded.edits.len(), 2);
@@ -823,34 +1017,48 @@ mod tests {
     fn get_undo_file_mtime_returns_none_for_nonexistent_file() {
         let (_tmp, _guard) = set_temp_home();
         let file_str = "/tmp/nonexistent_file_for_mtime_test.txt";
-        
+
         // Undo file doesn't exist yet
         let mtime = UndoHistory::get_undo_file_mtime(file_str);
-        assert!(mtime.is_none(), "Should return None for nonexistent undo file");
+        assert!(
+            mtime.is_none(),
+            "Should return None for nonexistent undo file"
+        );
     }
 
     #[test]
     fn get_undo_file_mtime_returns_timestamp_after_save() {
         let (_tmp, _guard) = set_temp_home();
         let file_str = "/tmp/test_mtime_file.txt";
-        
+
         // Create and save undo history
         let mut h = UndoHistory::new();
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'x' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'x',
+        });
         h.save(file_str).unwrap();
-        
+
         // Should now return a timestamp
         let mtime1 = UndoHistory::get_undo_file_mtime(file_str);
         assert!(mtime1.is_some(), "Should return timestamp after save");
-        
+
         // Wait a bit and save again
         std::thread::sleep(std::time::Duration::from_millis(10));
-        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'y' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'y',
+        });
         h.save(file_str).unwrap();
-        
+
         // Timestamp should be different (or at least not None)
         let mtime2 = UndoHistory::get_undo_file_mtime(file_str);
-        assert!(mtime2.is_some(), "Should return timestamp after second save");
+        assert!(
+            mtime2.is_some(),
+            "Should return timestamp after second save"
+        );
         // Note: mtime2 >= mtime1, but might be equal on fast systems
     }
 
@@ -860,41 +1068,52 @@ mod tests {
     fn multi_instance_detects_external_undo_file_change() {
         use std::thread;
         use std::time::Duration;
-        
+
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("shared.txt");
         fs::write(&file, "original").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Instance 1: Create and save undo history
         let mut h1 = UndoHistory::new();
-        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h1.update_state(0, 0, 1, vec!["aoriginal".to_string()]);
         h1.save(&file_str).unwrap();
-        
+
         let mtime1 = UndoHistory::get_undo_file_mtime(&file_str);
         assert!(mtime1.is_some());
-        
+
         // Wait to ensure mtime changes
         thread::sleep(Duration::from_millis(10));
-        
+
         // Instance 2: Make different changes and save
         let mut h2 = UndoHistory::load(&file_str).unwrap();
-        h2.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h2.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         h2.update_state(0, 0, 2, vec!["aboriginal".to_string()]);
         h2.save(&file_str).unwrap();
-        
+
         let mtime2 = UndoHistory::get_undo_file_mtime(&file_str);
         assert!(mtime2.is_some());
-        
+
         // mtimes should be different
         assert_ne!(mtime1, mtime2);
-        
+
         // Instance 1: Reload and verify it sees instance 2's changes
         let h1_reloaded = UndoHistory::load(&file_str).unwrap();
         assert_eq!(h1_reloaded.edits.len(), 2);
         assert_eq!(h1_reloaded.cursor_col, 2);
-        assert_eq!(h1_reloaded.file_content, Some(vec!["aboriginal".to_string()]));
+        assert_eq!(
+            h1_reloaded.file_content,
+            Some(vec!["aboriginal".to_string()])
+        );
     }
 
     #[test]
@@ -903,13 +1122,26 @@ mod tests {
         let file = tmp.path().join("cursor_test.txt");
         fs::write(&file, "line1\nline2\nline3").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Instance 1: Position cursor at line 2, column 3, scroll top at 1
         let mut h1 = UndoHistory::new();
-        h1.push(Edit::InsertChar { line: 1, col: 0, ch: 'x' });
-        h1.update_state(1, 2, 3, vec!["line1".to_string(), "xline2".to_string(), "line3".to_string()]);
+        h1.push(Edit::InsertChar {
+            line: 1,
+            col: 0,
+            ch: 'x',
+        });
+        h1.update_state(
+            1,
+            2,
+            3,
+            vec![
+                "line1".to_string(),
+                "xline2".to_string(),
+                "line3".to_string(),
+            ],
+        );
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Load and verify cursor restoration
         let h2 = UndoHistory::load(&file_str).unwrap();
         assert_eq!(h2.scroll_top, 1);
@@ -923,25 +1155,29 @@ mod tests {
         let file = tmp.path().join("modified_test.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Instance 1: Make edits (modified=true)
         let mut h1 = UndoHistory::new();
-        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h1.update_state(0, 0, 1, vec!["acontent".to_string()]);
         assert!(h1.modified);
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Load and verify modified flag is true
         let h2 = UndoHistory::load(&file_str).unwrap();
         assert!(h2.modified);
         assert_eq!(h2.edits.len(), 1);
-        
+
         // Instance 1: Undo all changes (modified=false)
         h1.undo();
         h1.update_state(0, 0, 0, vec!["content".to_string()]);
         assert!(!h1.modified);
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Reload and verify modified flag is now false
         let h2_reloaded = UndoHistory::load(&file_str).unwrap();
         assert!(!h2_reloaded.modified);
@@ -953,23 +1189,31 @@ mod tests {
         let file = tmp.path().join("concurrent.txt");
         fs::write(&file, "base").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Both instances start from same state
         let h_base = UndoHistory::new();
         h_base.save(&file_str).unwrap();
-        
+
         // Instance 1: Add edit 'x'
         let mut h1 = UndoHistory::load(&file_str).unwrap();
-        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'x' });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'x',
+        });
         h1.update_state(0, 0, 1, vec!["xbase".to_string()]);
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Add edit 'y' (loads instance 1's state first)
         let mut h2 = UndoHistory::load(&file_str).unwrap();
-        h2.push(Edit::InsertChar { line: 0, col: 0, ch: 'y' });
+        h2.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'y',
+        });
         h2.update_state(0, 0, 1, vec!["yxbase".to_string()]);
         h2.save(&file_str).unwrap();
-        
+
         // Final state should be instance 2's changes (which includes instance 1's edit)
         let h_final = UndoHistory::load(&file_str).unwrap();
         // h2 loaded h1's state (with 'x') then added 'y', so we have 2 edits
@@ -982,18 +1226,30 @@ mod tests {
         let file = tmp.path().join("chain.txt");
         fs::write(&file, "text").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Instance 1: Create undo chain with redo capability
         let mut h1 = UndoHistory::new();
-        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
-        h1.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
-        h1.push(Edit::InsertChar { line: 0, col: 2, ch: 'c' });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 2,
+            ch: 'c',
+        });
         h1.undo(); // Undo 'c'
         assert_eq!(h1.current, 2);
         assert!(h1.can_redo());
         h1.update_state(0, 0, 2, vec!["abtext".to_string()]);
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Load and verify redo chain preserved
         let h2 = UndoHistory::load(&file_str).unwrap();
         assert_eq!(h2.current, 2);
@@ -1006,27 +1262,31 @@ mod tests {
     fn get_undo_file_mtime_changes_after_modification() {
         use std::thread;
         use std::time::Duration;
-        
+
         let (tmp, _guard) = set_temp_home();
         let file = tmp.path().join("mtime_change.txt");
         fs::write(&file, "data").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Initial save
         let h1 = UndoHistory::new();
         h1.save(&file_str).unwrap();
         let mtime1 = UndoHistory::get_undo_file_mtime(&file_str);
         assert!(mtime1.is_some());
-        
+
         // Wait and modify
         thread::sleep(Duration::from_millis(10));
         let mut h2 = UndoHistory::load(&file_str).unwrap();
-        h2.push(Edit::InsertChar { line: 0, col: 0, ch: 'z' });
+        h2.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'z',
+        });
         h2.save(&file_str).unwrap();
-        
+
         let mtime2 = UndoHistory::get_undo_file_mtime(&file_str);
         assert!(mtime2.is_some());
-        
+
         // mtimes should differ (though on fast systems with low-res fs, may be equal)
         // We just verify both are Some and the second is >= first
         assert!(mtime2.unwrap() >= mtime1.unwrap());
@@ -1036,58 +1296,73 @@ mod tests {
     fn modified_flag_tracks_save_baseline() {
         let (_tmp, _guard) = set_temp_home();
         let mut h = UndoHistory::new();
-        
+
         // Initially not modified, saved_at = 0
         assert!(!h.modified);
         assert_eq!(h.saved_at, 0);
         assert_eq!(h.current, 0);
-        
+
         // Make edit 1
-        h.push(Edit::InsertChar { line: 0, col: 0, ch: 'a' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'a',
+        });
         h.update_state(0, 0, 1, vec!["a".into()]);
         assert!(h.modified);
         assert_eq!(h.current, 1);
         assert_eq!(h.saved_at, 0);
-        
+
         // Make edit 2
-        h.push(Edit::InsertChar { line: 0, col: 1, ch: 'b' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 1,
+            ch: 'b',
+        });
         h.update_state(0, 0, 2, vec!["ab".into()]);
         assert!(h.modified);
         assert_eq!(h.current, 2);
-        
+
         // Save - sets saved_at to current position
         h.clear_unsaved_state();
         assert!(!h.modified);
         assert_eq!(h.saved_at, 2);
         assert_eq!(h.current, 2);
-        
+
         // Make edit 3
-        h.push(Edit::InsertChar { line: 0, col: 2, ch: 'c' });
+        h.push(Edit::InsertChar {
+            line: 0,
+            col: 2,
+            ch: 'c',
+        });
         h.update_state(0, 0, 3, vec!["abc".into()]);
         assert!(h.modified);
         assert_eq!(h.current, 3);
         assert_eq!(h.saved_at, 2);
-        
+
         // Undo to saved position - should not be modified
         h.undo();
         h.update_state(0, 0, 2, vec!["ab".into()]);
         assert!(!h.modified, "Should not be modified when at saved position");
         assert_eq!(h.current, 2);
         assert_eq!(h.saved_at, 2);
-        
+
         // Undo past saved position - should be modified
         h.undo();
         h.update_state(0, 0, 1, vec!["a".into()]);
         assert!(h.modified, "Should be modified when before saved position");
         assert_eq!(h.current, 1);
         assert_eq!(h.saved_at, 2);
-        
+
         // Redo back to saved position - should not be modified
         h.redo();
         h.update_state(0, 0, 2, vec!["ab".into()]);
-        assert!(!h.modified, "Should not be modified when back at saved position");
+        assert!(
+            !h.modified,
+            "Should not be modified when back at saved position"
+        );
         assert_eq!(h.current, 2);
-        
+
         // Redo past saved position - should be modified
         h.redo();
         h.update_state(0, 0, 3, vec!["abc".into()]);
@@ -1101,30 +1376,111 @@ mod tests {
         let file = tmp.path().join("save_flag.txt");
         fs::write(&file, "content").unwrap();
         let file_str = file.to_string_lossy();
-        
+
         // Instance 1: Make edits (modified=true)
         let mut h1 = UndoHistory::new();
-        h1.push(Edit::InsertChar { line: 0, col: 0, ch: 'x' });
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'x',
+        });
         h1.update_state(0, 0, 1, vec!["xcontent".to_string()]);
         assert!(h1.modified);
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Load and verify modified=true
         let h2 = UndoHistory::load(&file_str).unwrap();
         assert!(h2.modified);
         assert_eq!(h2.current, 1);
         assert_eq!(h2.saved_at, 0);
-        
+
         // Instance 1: Save the file (clears modified flag)
         h1.clear_unsaved_state();
         assert!(!h1.modified);
         assert_eq!(h1.saved_at, 1);
         h1.save(&file_str).unwrap();
-        
+
         // Instance 2: Reload and verify modified=false
         let h2_reloaded = UndoHistory::load(&file_str).unwrap();
-        assert!(!h2_reloaded.modified, "Modified flag should propagate from save in other instance");
+        assert!(
+            !h2_reloaded.modified,
+            "Modified flag should propagate from save in other instance"
+        );
         assert_eq!(h2_reloaded.current, 1);
         assert_eq!(h2_reloaded.saved_at, 1);
+    }
+
+    #[test]
+    fn multi_instance_cursor_only_change_without_content_change() {
+        // Test for the cursor jumping bug fix:
+        // When user makes an edit (e.g., Space), the undo file is saved with cursor position A
+        // Then user quickly moves cursor (e.g., CursorDown) to position B
+        // The undo file reload mechanism should NOT restore cursor to position A
+        // because the content hasn't changed, only the cursor moved
+
+        let (tmp, _guard) = set_temp_home();
+        let file = tmp.path().join("cursor_bug.txt");
+        fs::write(&file, "line1\nline2\nline3").unwrap();
+        let file_str = file.to_string_lossy();
+
+        // Simulate: User types a space at line 0, col 5
+        let mut h1 = UndoHistory::new();
+        h1.push(Edit::InsertChar {
+            line: 0,
+            col: 5,
+            ch: ' ',
+        });
+        h1.update_state(
+            0,
+            0,
+            6,
+            vec![
+                "line1 ".to_string(),
+                "line2".to_string(),
+                "line3".to_string(),
+            ],
+        );
+        h1.save(&file_str).unwrap();
+
+        // Get the undo file mtime after first save
+        let mtime1 = UndoHistory::get_undo_file_mtime(&file_str).unwrap();
+
+        // Simulate: User then quickly moves cursor down (CursorDown) to line 1, col 0
+        // In this scenario, we would check if the content changed before restoring cursor
+        // The content is the same, so cursor should NOT be restored to (0, 6)
+
+        // Simulate a very small time passing (cursor movement without save in between)
+        std::thread::sleep(std::time::Duration::from_millis(10));
+
+        // Now simulate cursor moved to line 1, col 0 but undo file hasn't been updated yet
+        // Then another save happens (e.g., from another quick edit or periodic save)
+        let mut h2 = h1.clone();
+        h2.update_cursor(0, 1, 0); // Cursor moved to line 1, col 0
+        h2.save(&file_str).unwrap();
+
+        // Get mtime after second save
+        let mtime2 = UndoHistory::get_undo_file_mtime(&file_str).unwrap();
+        assert!(mtime2 > mtime1, "Undo file should have been modified");
+
+        // Load the history - this simulates the reload mechanism detecting mtime change
+        let loaded = UndoHistory::load(&file_str).unwrap();
+
+        // Verify the content is the same
+        assert_eq!(
+            loaded.file_content, h1.file_content,
+            "Content should be unchanged"
+        );
+
+        // The key point: In the ui.rs reload logic, we compare content before restoring cursor
+        // Since content is unchanged, cursor position should come from the latest save (line 1, col 0)
+        // not from the first save (line 0, col 6)
+        assert_eq!(
+            loaded.cursor_line, 1,
+            "Cursor line should reflect the latest cursor movement"
+        );
+        assert_eq!(
+            loaded.cursor_col, 0,
+            "Cursor col should reflect the latest cursor movement"
+        );
     }
 }

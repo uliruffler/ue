@@ -1,11 +1,11 @@
-use std::time::{Duration, Instant};
 use crossterm::event::{KeyCode, KeyEvent};
+use std::time::{Duration, Instant};
 
 /// Result of processing an Esc key
 pub(crate) enum EscResult {
-    None,         // Not an Esc handling event
-    First,        // First Esc registered, waiting for second
-    Double,       // Second Esc within threshold
+    None,   // Not an Esc handling event
+    First,  // First Esc registered, waiting for second
+    Double, // Second Esc within threshold
 }
 
 /// Detector for double-Esc presses within a configured threshold
@@ -16,7 +16,10 @@ pub(crate) struct DoubleEscDetector {
 
 impl DoubleEscDetector {
     pub(crate) fn new(threshold_ms: u64) -> Self {
-        Self { last_press: None, threshold: Duration::from_millis(threshold_ms) }
+        Self {
+            last_press: None,
+            threshold: Duration::from_millis(threshold_ms),
+        }
     }
 
     /// Process a key event; returns EscResult if Esc logic applies
@@ -50,14 +53,20 @@ impl DoubleEscDetector {
     }
 
     /// Clear any pending first Esc state (after handling timeout)
-    pub(crate) fn clear(&mut self) { self.last_press = None; }
+    pub(crate) fn clear(&mut self) {
+        self.last_press = None;
+    }
 
     /// Poll timeout to pass to event::poll so we wake exactly at deadline
     pub(crate) fn remaining_timeout(&self) -> Duration {
         match self.last_press {
             Some(prev) => {
                 let elapsed = Instant::now().duration_since(prev);
-                if elapsed >= self.threshold { Duration::from_millis(0) } else { self.threshold - elapsed }
+                if elapsed >= self.threshold {
+                    Duration::from_millis(0)
+                } else {
+                    self.threshold - elapsed
+                }
             }
             None => Duration::from_secs(86400), // effectively 'infinite'
         }
@@ -114,11 +123,11 @@ mod tests {
         let mut detector = DoubleEscDetector::new(300);
         let esc = create_esc_key();
         let other = create_char_key('a');
-        
+
         let _ = detector.process_key(&esc);
         let result = detector.process_key(&other);
         assert!(matches!(result, EscResult::None));
-        
+
         // Next esc should be First again
         let result = detector.process_key(&esc);
         assert!(matches!(result, EscResult::First));
@@ -129,7 +138,7 @@ mod tests {
         let mut detector = DoubleEscDetector::new(300);
         let plain_esc = create_esc_key();
         let ctrl_esc = KeyEvent::new(KeyCode::Esc, KeyModifiers::CONTROL);
-        
+
         let _ = detector.process_key(&plain_esc);
         let result = detector.process_key(&ctrl_esc);
         assert!(matches!(result, EscResult::None));
@@ -198,13 +207,13 @@ mod tests {
     fn triple_esc_first_two_are_double_third_is_first() {
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         let r1 = detector.process_key(&key);
         assert!(matches!(r1, EscResult::First));
-        
+
         let r2 = detector.process_key(&key);
         assert!(matches!(r2, EscResult::Double));
-        
+
         let r3 = detector.process_key(&key);
         assert!(matches!(r3, EscResult::First));
     }
@@ -221,15 +230,15 @@ mod tests {
     fn single_esc_in_normal_mode_workflow() {
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // First Esc
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
-        
+
         // Timeout should occur
         std::thread::sleep(Duration::from_millis(350));
         assert!(detector.timed_out());
-        
+
         // Clear after timeout
         detector.clear();
         assert!(!detector.timed_out());
@@ -239,12 +248,12 @@ mod tests {
     fn double_esc_exits_from_any_mode() {
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // Simulate being in find/selection mode:
         // First Esc should register as First (caller handles mode exit)
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
-        
+
         // Second Esc within threshold should be Double (exits editor)
         std::thread::sleep(Duration::from_millis(50));
         let result = detector.process_key(&key);
@@ -255,18 +264,18 @@ mod tests {
     fn single_esc_clears_mode_but_not_editor() {
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // First Esc exits mode (registered as First)
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
-        
+
         // Wait for timeout
         std::thread::sleep(Duration::from_millis(350));
         assert!(detector.timed_out());
-        
+
         // After timeout, state should be clearable without opening file selector
         detector.clear();
-        
+
         // Next Esc should be a new First
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
@@ -276,11 +285,11 @@ mod tests {
     fn rapid_double_esc_in_find_mode_scenario() {
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // User presses Esc in find mode (exits find, registers First)
         let r1 = detector.process_key(&key);
         assert!(matches!(r1, EscResult::First));
-        
+
         // User quickly presses Esc again (exits editor)
         std::thread::sleep(Duration::from_millis(100));
         let r2 = detector.process_key(&key);
@@ -291,14 +300,14 @@ mod tests {
     fn slow_double_esc_in_selection_mode_scenario() {
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // User presses Esc in selection mode (clears selection, registers First)
         let r1 = detector.process_key(&key);
         assert!(matches!(r1, EscResult::First));
-        
+
         // User waits too long
         std::thread::sleep(Duration::from_millis(350));
-        
+
         // Second Esc should be treated as new First (not Double)
         let r2 = detector.process_key(&key);
         assert!(matches!(r2, EscResult::First));
@@ -309,15 +318,15 @@ mod tests {
         let mut detector = DoubleEscDetector::new(300);
         let esc = create_esc_key();
         let other = create_char_key('j');
-        
+
         // First Esc in find mode
         let r1 = detector.process_key(&esc);
         assert!(matches!(r1, EscResult::First));
-        
+
         // User presses another key (navigation, typing, etc.)
         let r2 = detector.process_key(&other);
         assert!(matches!(r2, EscResult::None));
-        
+
         // Next Esc should be First again (not Double)
         let r3 = detector.process_key(&esc);
         assert!(matches!(r3, EscResult::First));
@@ -331,18 +340,18 @@ mod tests {
         // 2. Timeout occurs -> should open file selector
         // Note: The actual file selector opening is handled in ui.rs
         // This test just verifies the detector part works correctly
-        
+
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // First Esc in normal mode
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
-        
+
         // Wait for timeout
         std::thread::sleep(Duration::from_millis(350));
         assert!(detector.timed_out());
-        
+
         // After clearing, detector is ready for next sequence
         detector.clear();
         assert!(!detector.timed_out());
@@ -355,18 +364,18 @@ mod tests {
         // 1. User presses Esc -> exits find mode (handled in ui.rs)
         // 2. Timeout occurs -> should NOT open file selector
         // The detector behavior is the same, but ui.rs tracks the mode
-        
+
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // First Esc (ui.rs would exit find mode here)
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
-        
+
         // Timeout
         std::thread::sleep(Duration::from_millis(350));
         assert!(detector.timed_out());
-        
+
         // ui.rs should clear without opening file selector
         detector.clear();
     }
@@ -377,18 +386,18 @@ mod tests {
         // With text selection:
         // 1. User presses Esc -> clears selection (handled in ui.rs)
         // 2. Timeout occurs -> should NOT open file selector
-        
+
         let mut detector = DoubleEscDetector::new(300);
         let key = create_esc_key();
-        
+
         // First Esc (ui.rs would clear selection here)
         let result = detector.process_key(&key);
         assert!(matches!(result, EscResult::First));
-        
+
         // Timeout
         std::thread::sleep(Duration::from_millis(350));
         assert!(detector.timed_out());
-        
+
         // ui.rs should clear without opening file selector
         detector.clear();
     }
