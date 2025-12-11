@@ -20,7 +20,12 @@ fn save_undo_with_timestamp(state: &mut FileViewerState, filename: &str) {
 pub(crate) fn handle_copy(state: &FileViewerState, lines: &[String]) -> Result<(), std::io::Error> {
     if let (Some(sel_start), Some(sel_end)) = (state.selection_start, state.selection_end) {
         let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
-        let selected_text = extract_selection(&lines_refs, sel_start, sel_end);
+        let selected_text = if state.block_selection {
+            let (start, end) = normalize_selection(sel_start, sel_end);
+            extract_block_selection(&lines_refs, start.0, start.1, end.0, end.1)
+        } else {
+            extract_selection(&lines_refs, sel_start, sel_end)
+        };
         let mut clipboard_guard = get_clipboard().lock().unwrap();
         if let Some(ref mut cb) = *clipboard_guard
             && let Err(e) = cb.set_text(selected_text)
@@ -194,6 +199,53 @@ pub(crate) fn remove_selection(
         return false;
     }
 
+    if state.block_selection {
+        // Block selection deletion - remove column range from each line
+        for line_idx in s_line..=e_line {
+            if line_idx >= lines.len() {
+                break;
+            }
+            let line = &mut lines[line_idx];
+            let chars: Vec<char> = line.chars().collect();
+            let line_start = s_col.min(chars.len());
+            let line_end = e_col.min(chars.len());
+
+            if line_start < line_end {
+                let removed: Vec<char> = chars[line_start..line_end].to_vec();
+                // Record deletes in reverse order
+                for (i, ch) in removed.into_iter().enumerate().rev() {
+                    state.undo_history.push(Edit::DeleteChar {
+                        line: line_idx,
+                        col: line_start + i,
+                        ch,
+                    });
+                }
+                // Rebuild line without the removed range
+                let new_line: String = chars[..line_start]
+                    .iter()
+                    .chain(chars[line_end..].iter())
+                    .collect();
+                *line = new_line;
+            }
+        }
+
+        // Position cursor at start of selection
+        state.cursor_line = s_line.saturating_sub(state.top_line);
+        state.cursor_col = s_col;
+        state.clear_selection();
+        state.modified = true;
+        let absolute_line = state.absolute_line();
+        state.undo_history.update_state(
+            state.top_line,
+            absolute_line,
+            state.cursor_col,
+            lines.clone(),
+        );
+        save_undo_with_timestamp(state, filename);
+        state.needs_redraw = true;
+        return true;
+    }
+
     if s_line == e_line {
         // Single-line removal
         let line = &mut lines[s_line];
@@ -297,6 +349,71 @@ pub(crate) fn insert_char(
         state
             .undo_history
             .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
+        save_undo_with_timestamp(state, filename);
+        true
+    } else {
+        false
+    }
+}
+
+/// Insert character on multiple lines for zero-width block selection
+fn insert_char_block(
+    state: &mut FileViewerState,
+    lines: &mut [String],
+    c: char,
+    filename: &str,
+) -> bool {
+    if !state.has_selection() || !state.block_selection {
+        return false;
+    }
+
+    let (sel_start, sel_end) = {
+        let s = state.selection_start.unwrap();
+        let e = state.selection_end.unwrap();
+        if s.0 < e.0 || (s.0 == e.0 && s.1 <= e.1) {
+            (s, e)
+        } else {
+            (e, s)
+        }
+    };
+
+    let (s_line, s_col) = sel_start;
+    let (e_line, e_col) = sel_end;
+
+    // Only handle zero-width selections (multi-cursor)
+    if s_col != e_col {
+        return false;
+    }
+
+    // Insert character on each line in the block
+    let mut inserted = false;
+    for line_idx in s_line..=e_line {
+        if line_idx < lines.len() {
+            let line = &mut lines[line_idx];
+            let insert_col = s_col.min(line.len());
+            line.insert(insert_col, c);
+            state.undo_history.push(Edit::InsertChar {
+                line: line_idx,
+                col: insert_col,
+                ch: c,
+            });
+            inserted = true;
+        }
+    }
+
+    if inserted {
+        // Move cursor and selection one column to the right
+        state.cursor_col = s_col + 1;
+        state.selection_start = Some((s_line, s_col + 1));
+        state.selection_end = Some((e_line, e_col + 1));
+
+        let absolute_line = state.absolute_line();
+        state.undo_history.update_state(
+            state.top_line,
+            absolute_line,
+            state.cursor_col,
+            lines.to_vec(),
+        );
         save_undo_with_timestamp(state, filename);
         true
     } else {
@@ -834,6 +951,26 @@ pub(crate) fn handle_editing_keys(
     use crossterm::event::{KeyCode, KeyModifiers};
 
     let selection_active = state.has_selection();
+
+    // Handle multi-cursor typing
+    if state.has_multi_cursors() {
+        match code {
+            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT) => {
+                return insert_char_multi_cursor(state, lines, *c, filename);
+            }
+            KeyCode::Backspace => {
+                return delete_backward_multi_cursor(state, lines, filename);
+            }
+            KeyCode::Delete => {
+                return delete_forward_multi_cursor(state, lines, filename);
+            }
+            // Any other key clears multi-cursors
+            _ => {
+                state.clear_multi_cursors();
+            }
+        }
+    }
+
     match code {
         KeyCode::Backspace | KeyCode::Delete if selection_active => {
             remove_selection(state, lines, filename)
@@ -842,7 +979,26 @@ pub(crate) fn handle_editing_keys(
             if !modifiers.contains(KeyModifiers::CONTROL)
                 && !modifiers.contains(KeyModifiers::ALT) =>
         {
-            if selection_active {
+            // Check for zero-width block selection (multi-cursor)
+            if selection_active && state.block_selection {
+                let (s, e) = if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                    if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                        (start, end)
+                    } else {
+                        (end, start)
+                    }
+                } else {
+                    ((0, 0), (0, 0))
+                };
+
+                // Zero-width block selection - use multi-cursor insert
+                if s.1 == e.1 && s.0 != e.0 {
+                    return insert_char_block(state, lines, *c, filename);
+                } else {
+                    // Non-zero width - remove selection first
+                    remove_selection(state, lines, filename);
+                }
+            } else if selection_active {
                 remove_selection(state, lines, filename);
             }
             insert_char(state, lines, *c, filename)
@@ -865,6 +1021,150 @@ pub(crate) fn handle_editing_keys(
     }
 }
 
+/// Insert character at all cursor positions for multi-cursor mode
+fn insert_char_multi_cursor(
+    state: &mut FileViewerState,
+    lines: &mut [String],
+    c: char,
+    filename: &str,
+) -> bool {
+    let positions = state.all_cursor_positions();
+    let mut inserted = false;
+
+    // Insert in reverse order to maintain position validity
+    for &(line_idx, col) in positions.iter().rev() {
+        if line_idx < lines.len() && col <= lines[line_idx].len() {
+            lines[line_idx].insert(col, c);
+            state.undo_history.push(Edit::InsertChar {
+                line: line_idx,
+                col,
+                ch: c,
+            });
+            inserted = true;
+        }
+    }
+
+    if inserted {
+        // Update all cursor positions to move right by 1
+        state.cursor_col += 1;
+        for cursor in &mut state.multi_cursors {
+            cursor.1 += 1;
+        }
+
+        let absolute_line = state.absolute_line();
+        state.undo_history.update_state(
+            state.top_line,
+            absolute_line,
+            state.cursor_col,
+            lines.to_vec(),
+        );
+        save_undo_with_timestamp(state, filename);
+        true
+    } else {
+        false
+    }
+}
+
+/// Delete backward at all cursor positions for multi-cursor mode
+fn delete_backward_multi_cursor(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+    filename: &str,
+) -> bool {
+    let mut positions = state.all_cursor_positions();
+    let mut deleted = false;
+
+    // Sort in reverse order to maintain validity
+    positions.sort_by(|a, b| b.cmp(a));
+
+    for &(line_idx, col) in &positions {
+        if line_idx < lines.len() && col > 0 {
+            let line = &mut lines[line_idx];
+            if col <= line.len() {
+                let chars: Vec<char> = line.chars().collect();
+                if col > 0 && col <= chars.len() {
+                    let removed_char = chars[col - 1];
+                    state.undo_history.push(Edit::DeleteChar {
+                        line: line_idx,
+                        col: col - 1,
+                        ch: removed_char,
+                    });
+                    line.remove(col - 1);
+                    deleted = true;
+                }
+            }
+        }
+    }
+
+    if deleted {
+        // Update all cursor positions to move left by 1
+        if state.cursor_col > 0 {
+            state.cursor_col -= 1;
+        }
+        for cursor in &mut state.multi_cursors {
+            if cursor.1 > 0 {
+                cursor.1 -= 1;
+            }
+        }
+
+        let absolute_line = state.absolute_line();
+        state.undo_history.update_state(
+            state.top_line,
+            absolute_line,
+            state.cursor_col,
+            lines.clone(),
+        );
+        save_undo_with_timestamp(state, filename);
+        true
+    } else {
+        false
+    }
+}
+
+/// Delete forward at all cursor positions for multi-cursor mode
+fn delete_forward_multi_cursor(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+    filename: &str,
+) -> bool {
+    let mut positions = state.all_cursor_positions();
+    let mut deleted = false;
+
+    // Sort in reverse order to maintain validity
+    positions.sort_by(|a, b| b.cmp(a));
+
+    for &(line_idx, col) in &positions {
+        if line_idx < lines.len() {
+            let line = &mut lines[line_idx];
+            let chars: Vec<char> = line.chars().collect();
+            if col < chars.len() {
+                let removed_char = chars[col];
+                state.undo_history.push(Edit::DeleteChar {
+                    line: line_idx,
+                    col,
+                    ch: removed_char,
+                });
+                line.remove(col);
+                deleted = true;
+            }
+        }
+    }
+
+    if deleted {
+        let absolute_line = state.absolute_line();
+        state.undo_history.update_state(
+            state.top_line,
+            absolute_line,
+            state.cursor_col,
+            lines.clone(),
+        );
+        save_undo_with_timestamp(state, filename);
+        true
+    } else {
+        false
+    }
+}
+
 fn extract_selection(lines: &[&str], sel_start: Position, sel_end: Position) -> String {
     let (start, end) = normalize_selection(sel_start, sel_end);
     let (start_line, start_col) = start;
@@ -875,6 +1175,34 @@ fn extract_selection(lines: &[&str], sel_start: Position, sel_end: Position) -> 
     }
 
     extract_multi_line_selection(lines, start_line, start_col, end_line, end_col)
+}
+
+fn extract_block_selection(
+    lines: &[&str],
+    start_line: usize,
+    start_col: usize,
+    end_line: usize,
+    end_col: usize,
+) -> String {
+    let mut result = String::new();
+
+    for line_idx in start_line..=end_line {
+        if let Some(line) = lines.get(line_idx) {
+            let chars: Vec<char> = line.chars().collect();
+            let line_start = start_col.min(chars.len());
+            let line_end = end_col.min(chars.len());
+
+            if line_start < line_end {
+                result.extend(&chars[line_start..line_end]);
+            }
+            // Always add newline except for the last line
+            if line_idx < end_line {
+                result.push('\n');
+            }
+        }
+    }
+
+    result
 }
 
 fn extract_single_line_selection(
@@ -1250,6 +1578,87 @@ mod tests {
         assert_eq!(s, (1, 3));
         assert_eq!(e, (2, 8));
     }
+
+    #[test]
+    fn extract_block_selection_full_columns() {
+        let lines = vec!["hello world", "beautiful day", "nice weather"];
+        let result = extract_block_selection(&lines, 0, 6, 2, 11);
+        // Should extract columns 6-10 (indices 6,7,8,9,10) from each line
+        // "hello world" -> indices 6-10 = "world"
+        // "beautiful day" -> indices 6-10 = "ful d"
+        // "nice weather" -> indices 6-10 = "eathe"
+        assert_eq!(result, "world\nful d\neathe");
+    }
+
+    #[test]
+    fn extract_block_selection_short_lines() {
+        let lines = vec!["hello world", "short", "nice weather"];
+        let result = extract_block_selection(&lines, 0, 6, 2, 11);
+        // Second line is too short (only 5 chars) - column 6 is beyond its length
+        assert_eq!(result, "world\n\neathe");
+    }
+
+    #[test]
+    fn extract_block_selection_single_column() {
+        let lines = vec!["hello", "world", "tests"];
+        let result = extract_block_selection(&lines, 0, 0, 2, 1);
+        // Should extract first character from each line
+        assert_eq!(result, "h\nw\nt");
+    }
+
+    #[test]
+    fn extract_block_selection_beyond_line_length() {
+        let lines = vec!["hi", "hello", "hey"];
+        let result = extract_block_selection(&lines, 0, 1, 2, 10);
+        // Should extract from col 1 to end of each line
+        assert_eq!(result, "i\nello\ney");
+    }
+
+    #[test]
+    fn insert_char_block_multiline_cursor() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["abc".to_string(), "def".to_string(), "ghi".to_string()];
+
+        // Set up zero-width block selection at column 1 across lines 0-2
+        state.selection_start = Some((0, 1));
+        state.selection_end = Some((2, 1));
+        state.block_selection = true;
+        state.cursor_col = 1;
+
+        // Insert 'X' - should insert on all three lines
+        let result = insert_char_block(&mut state, &mut lines, 'X', "test.txt");
+
+        assert!(result);
+        assert_eq!(lines[0], "aXbc");
+        assert_eq!(lines[1], "dXef");
+        assert_eq!(lines[2], "gXhi");
+
+        // Cursor and selection should move right by one
+        assert_eq!(state.cursor_col, 2);
+        assert_eq!(state.selection_start, Some((0, 2)));
+        assert_eq!(state.selection_end, Some((2, 2)));
+    }
+
+    #[test]
+    fn insert_char_block_preserves_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["line1".to_string(), "line2".to_string()];
+
+        // Set up zero-width block selection
+        state.selection_start = Some((0, 0));
+        state.selection_end = Some((1, 0));
+        state.block_selection = true;
+
+        insert_char_block(&mut state, &mut lines, '#', "test.txt");
+
+        // Block selection should still be active
+        assert!(state.block_selection);
+        assert_eq!(state.selection_start, Some((0, 1)));
+        assert_eq!(state.selection_end, Some((1, 1)));
+    }
+
     #[test]
     fn delete_file_history_removes_file() {
         let (_tmp, _guard) = set_temp_home();

@@ -341,6 +341,7 @@ pub(crate) fn handle_mouse_event(
                     );
                     if let Some((logical_line, col)) = pos_opt {
                         let clicked = (logical_line, col.min(lines[logical_line].len()));
+
                         // Check if this might be a multi-click first (within 500ms of last click)
                         let is_potential_multiclick = if let Some(last_time) = state.last_click_time
                         {
@@ -388,7 +389,7 @@ pub(crate) fn handle_mouse_event(
                     // Dragging on line number - extend line selection
                     handle_line_number_drag(state, lines, visual_line, visible_lines);
                 } else {
-                    handle_mouse_drag(state, lines, visual_line, column, visible_lines);
+                    handle_mouse_drag(state, lines, visual_line, column, visible_lines, modifiers);
                 }
             }
         }
@@ -439,13 +440,19 @@ fn handle_mouse_drag(
     visual_line: usize,
     column: u16,
     visible_lines: usize,
+    modifiers: KeyModifiers,
 ) {
     if !state.mouse_dragging {
         return;
     }
     // Initialize selection on first drag
-    if state.selection_start.is_none() {
-        state.selection_start = Some(state.current_position());
+    if state.selection_anchor.is_none() {
+        let pos = state.current_position();
+        state.selection_anchor = Some(pos);
+        state.selection_start = Some(pos);
+        state.selection_end = Some(pos);
+        // Enable block selection if Alt key is pressed
+        state.block_selection = modifiers.contains(KeyModifiers::ALT);
     }
     if let Some((logical_line, col)) =
         visual_to_logical_position(state, lines, visual_line, column, visible_lines)
@@ -1623,6 +1630,280 @@ mod tests {
 
         // Should select just around the non-word character
         // The selection should be minimal for non-word chars
+        assert!(state.selection_start.is_some());
+        assert!(state.selection_end.is_some());
+    }
+
+    #[test]
+    fn alt_click_does_not_create_multi_cursor() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+            "line three".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let click_col = (line_num_width as usize) + 2;
+
+        // Alt+Click should NOT create multi-cursors (removed feature)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: click_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should NOT have created multi-cursors
+        assert!(!state.has_multi_cursors(), "Alt+Click should not create multi-cursors");
+
+        // Should have positioned cursor normally
+        assert_eq!(state.cursor_line, 0);
+        assert_eq!(state.cursor_col, 2);
+
+        // Should be ready for dragging
+        assert!(state.mouse_dragging);
+    }
+
+    #[test]
+    fn alt_drag_creates_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "hello world".to_string(),
+            "test line".to_string(),
+            "another line".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let start_col = (line_num_width as usize) + 2;
+
+        // Alt+Click to start
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        assert!(state.mouse_dragging, "Should be dragging after click");
+
+        // Alt+Drag to second line
+        let end_col = (line_num_width as usize) + 5;
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: end_col as u16,
+            row: 2, // Second line
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should have created block selection
+        assert!(state.block_selection, "Should have enabled block selection");
+        assert!(state.selection_start.is_some(), "Should have selection start");
+        assert!(state.selection_end.is_some(), "Should have selection end");
+
+        // Verify block selection range
+        let (start, end) = state.selection_range().unwrap();
+        assert_eq!(start.0, 0, "Should start at line 0");
+        assert_eq!(end.0, 1, "Should end at line 1");
+        assert_eq!(start.1, 2, "Should start at column 2");
+        assert_eq!(end.1, 5, "Should end at column 5");
+    }
+
+    #[test]
+    fn alt_drag_zero_width_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "hello world".to_string(),
+            "test line".to_string(),
+            "another line".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let col = (line_num_width as usize) + 3;
+
+        // Alt+Click to start
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: col as u16,
+            row: 1,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Alt+Drag vertically (same column, different row) = zero-width block
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: col as u16, // Same column
+            row: 3, // Third line
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should have created block selection
+        assert!(state.block_selection, "Should have enabled block selection");
+
+        // Verify it's zero-width (same column for start and end)
+        let (start, end) = state.selection_range().unwrap();
+        assert_eq!(start.1, end.1, "Should be zero-width (same column)");
+        assert_ne!(start.0, end.0, "Should span multiple lines");
+
+        // Should span from line 0 to line 2
+        assert_eq!(start.0, 0);
+        assert_eq!(end.0, 2);
+        assert_eq!(start.1, 3); // Column 3
+    }
+
+    #[test]
+    fn alt_drag_horizontal_expands_column_range() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "hello world".to_string(),
+            "test line".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let start_col = (line_num_width as usize) + 2;
+
+        // Alt+Click to start at (0, 2)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Alt+Drag down one line
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: start_col as u16,
+            row: 2,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Now drag horizontally to expand column range
+        let end_col = (line_num_width as usize) + 6;
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: end_col as u16,
+            row: 2,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Verify column range expanded
+        let (start, end) = state.selection_range().unwrap();
+        assert_eq!(start.1, 2, "Should start at column 2");
+        assert_eq!(end.1, 6, "Should end at column 6");
+        assert!(state.block_selection, "Should maintain block selection");
+    }
+
+    #[test]
+    fn alt_drag_left_changes_direction() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "hello world".to_string(),
+            "test line".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let start_col = (line_num_width as usize) + 5;
+
+        // Alt+Click at column 5
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Drag to different line
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: start_col as u16,
+            row: 2,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Now drag left (reduce column)
+        let left_col = (line_num_width as usize) + 2;
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: left_col as u16,
+            row: 2,
+            modifiers: KeyModifiers::ALT,
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should have selection from col 2 to col 5
+        let (start, end) = state.selection_range().unwrap();
+        assert_eq!(start.1, 2, "Should start at leftmost column");
+        assert_eq!(end.1, 5, "Should end at rightmost column");
+    }
+
+    #[test]
+    fn normal_drag_without_alt_not_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let mut state = create_test_state(settings);
+        let mut lines = vec![
+            "hello world".to_string(),
+            "test line".to_string(),
+        ];
+
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let start_col = (line_num_width as usize) + 2;
+
+        // Normal click (no Alt)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column: start_col as u16,
+            row: 1,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Normal drag (no Alt)
+        let mouse_event = MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column: (start_col + 5) as u16,
+            row: 2,
+            modifiers: KeyModifiers::empty(),
+        };
+        handle_mouse_event(&mut state, &mut lines, mouse_event, 10);
+
+        // Should NOT be block selection
+        assert!(!state.block_selection, "Should not be block selection without Alt");
+
+        // But should have normal selection
         assert!(state.selection_start.is_some());
         assert!(state.selection_end.is_some());
     }

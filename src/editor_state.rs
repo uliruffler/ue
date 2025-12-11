@@ -11,6 +11,17 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) cursor_col: usize,
     pub(crate) selection_start: Option<Position>,
     pub(crate) selection_end: Option<Position>,
+    /// Anchor point for selection - the fixed point when extending selection with Shift+arrows
+    pub(crate) selection_anchor: Option<Position>,
+    /// True if selection is block-wise (column selection), false for normal line-wise
+    pub(crate) block_selection: bool,
+    /// Multiple cursor positions (for Alt+Down multi-cursor mode)
+    /// When non-empty, typing inserts at all cursor positions
+    pub(crate) multi_cursors: Vec<Position>,
+    /// Cursor blink state for multi-cursor indicators (true = visible/inverted, false = hidden/normal)
+    pub(crate) cursor_blink_state: bool,
+    /// Last cursor blink toggle time
+    pub(crate) last_blink_time: Option<Instant>,
     pub(crate) needs_redraw: bool,
     pub(crate) modified: bool,
     pub(crate) term_width: u16,
@@ -95,6 +106,11 @@ impl<'a> FileViewerState<'a> {
             cursor_col: 0,
             selection_start: None,
             selection_end: None,
+            selection_anchor: None,
+            block_selection: false,
+            multi_cursors: Vec::new(),
+            cursor_blink_state: true,
+            last_blink_time: None,
             needs_redraw: true,
             modified: false,
             term_width,
@@ -153,13 +169,48 @@ impl<'a> FileViewerState<'a> {
     }
 
     pub(crate) fn start_selection(&mut self) {
-        if self.selection_start.is_none() {
+        if self.selection_anchor.is_none() {
+            // Set anchor at current position
+            self.selection_anchor = Some(self.current_position());
             self.selection_start = Some(self.current_position());
+            self.selection_end = Some(self.current_position());
         }
     }
 
     pub(crate) fn update_selection(&mut self) {
-        self.selection_end = Some(self.current_position());
+        if let Some(anchor) = self.selection_anchor {
+            let cursor = self.current_position();
+
+            if self.block_selection {
+                // For block selection, handle line and column ranges independently
+                let (start_line, end_line) = if anchor.0 <= cursor.0 {
+                    (anchor.0, cursor.0)
+                } else {
+                    (cursor.0, anchor.0)
+                };
+
+                let (start_col, end_col) = if anchor.1 <= cursor.1 {
+                    (anchor.1, cursor.1)
+                } else {
+                    (cursor.1, anchor.1)
+                };
+
+                self.selection_start = Some((start_line, start_col));
+                self.selection_end = Some((end_line, end_col));
+            } else {
+                // For normal line-wise selection, use overall position comparison
+                if anchor.0 < cursor.0 || (anchor.0 == cursor.0 && anchor.1 <= cursor.1) {
+                    self.selection_start = Some(anchor);
+                    self.selection_end = Some(cursor);
+                } else {
+                    self.selection_start = Some(cursor);
+                    self.selection_end = Some(anchor);
+                }
+            }
+        } else {
+            // Fallback if no anchor (shouldn't happen in normal use)
+            self.selection_end = Some(self.current_position());
+        }
         self.needs_redraw = true;
     }
 
@@ -167,6 +218,8 @@ impl<'a> FileViewerState<'a> {
         if self.selection_start.is_some() || self.selection_end.is_some() {
             self.selection_start = None;
             self.selection_end = None;
+            self.selection_anchor = None;
+            self.block_selection = false;
             self.needs_redraw = true;
         }
     }
@@ -242,19 +295,30 @@ impl<'a> FileViewerState<'a> {
             let (l, c) = pos;
             let (sl, sc) = start;
             let (el, ec) = end;
-            if l < sl || l > el {
-                return false;
+
+            if self.block_selection {
+                // Block selection: check if line is in range and column is in range
+                if l < sl || l > el {
+                    return false;
+                }
+                // For block selection, column range applies to all lines
+                c >= sc && c < ec
+            } else {
+                // Normal line-wise selection
+                if l < sl || l > el {
+                    return false;
+                }
+                if sl == el {
+                    return c >= sc && c < ec;
+                }
+                if l == sl {
+                    return c >= sc;
+                }
+                if l == el {
+                    return c < ec;
+                }
+                true
             }
-            if sl == el {
-                return c >= sc && c < ec;
-            }
-            if l == sl {
-                return c >= sc;
-            }
-            if l == el {
-                return c < ec;
-            }
-            true
         } else {
             false
         }
@@ -275,6 +339,70 @@ impl<'a> FileViewerState<'a> {
         self.drag_text = None;
         self.dragging_selection_active = false;
         self.drag_target = None;
+    }
+
+    /// Add a cursor at the given position (for multi-cursor mode)
+    pub(crate) fn add_cursor(&mut self, pos: Position) {
+        if !self.multi_cursors.contains(&pos) {
+            self.multi_cursors.push(pos);
+            self.multi_cursors.sort();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Check if multi-cursor mode is active
+    pub(crate) fn has_multi_cursors(&self) -> bool {
+        !self.multi_cursors.is_empty()
+    }
+
+    /// Clear all multi-cursors
+    pub(crate) fn clear_multi_cursors(&mut self) {
+        if !self.multi_cursors.is_empty() {
+            self.multi_cursors.clear();
+            self.needs_redraw = true;
+        }
+    }
+
+    /// Get all cursor positions (main cursor + multi-cursors)
+    pub(crate) fn all_cursor_positions(&self) -> Vec<Position> {
+        let mut positions = vec![self.current_position()];
+        positions.extend(self.multi_cursors.iter().copied());
+        positions.sort();
+        positions.dedup();
+        positions
+    }
+
+    /// Update cursor blink state (toggles every 500ms)
+    /// Returns true if blink state changed and redraw is needed
+    pub(crate) fn update_cursor_blink(&mut self) -> bool {
+        // Check if we should blink: either multi-cursors or zero-width block selection
+        let is_zero_width_block = self.block_selection
+            && if let Some((start, end)) = self.selection_range() {
+                start.1 == end.1 && start.0 != end.0 // Zero width, multiple lines
+            } else {
+                false
+            };
+
+        let should_blink = self.has_multi_cursors() || is_zero_width_block;
+
+        if !should_blink {
+            return false;
+        }
+
+        let now = Instant::now();
+        let should_toggle = if let Some(last_time) = self.last_blink_time {
+            now.duration_since(last_time).as_millis() >= 500
+        } else {
+            true // First time, initialize
+        };
+
+        if should_toggle {
+            self.cursor_blink_state = !self.cursor_blink_state;
+            self.last_blink_time = Some(now);
+            true // Blink state changed, needs redraw
+        } else {
+            false
+        }
     }
 }
 
@@ -447,5 +575,137 @@ mod tests {
         assert!(state.needs_redraw);
         assert!(state.selection_start.is_none());
         assert!(state.selection_end.is_none());
+    }
+
+    #[test]
+    fn multi_cursors_can_be_added_and_cleared() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+
+        // Initially no multi-cursors
+        assert!(!state.has_multi_cursors());
+
+        // Add a cursor
+        state.add_cursor((1, 5));
+        assert!(state.has_multi_cursors());
+        assert_eq!(state.multi_cursors.len(), 1);
+
+        // Add another cursor
+        state.add_cursor((3, 10));
+        assert!(state.has_multi_cursors());
+        assert_eq!(state.multi_cursors.len(), 2);
+
+        // Clear multi-cursors
+        state.clear_multi_cursors();
+        assert!(!state.has_multi_cursors());
+        assert_eq!(state.multi_cursors.len(), 0);
+        assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn block_selection_checks_column_range_only() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+
+        // Set up a block selection from line 1, col 5 to line 3, col 10
+        state.selection_start = Some((1, 5));
+        state.selection_end = Some((3, 10));
+        state.block_selection = true;
+
+        // Points within the block (line 1-3, col 5-9)
+        assert!(state.is_point_in_selection((1, 5))); // Start
+        assert!(state.is_point_in_selection((1, 7))); // Middle of line 1
+        assert!(state.is_point_in_selection((2, 5))); // Start of line 2
+        assert!(state.is_point_in_selection((2, 9))); // Middle of line 2
+        assert!(state.is_point_in_selection((3, 5))); // Start of line 3
+
+        // Points outside the block
+        assert!(!state.is_point_in_selection((0, 5))); // Line too early
+        assert!(!state.is_point_in_selection((4, 5))); // Line too late
+        assert!(!state.is_point_in_selection((2, 4))); // Column too early
+        assert!(!state.is_point_in_selection((2, 10))); // Column at end (not included)
+        assert!(!state.is_point_in_selection((2, 11))); // Column too late
+    }
+
+    #[test]
+    fn clear_selection_resets_block_mode() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+
+        // Set up a block selection
+        state.selection_start = Some((0, 0));
+        state.selection_end = Some((2, 5));
+        state.block_selection = true;
+
+        // Clear the selection
+        state.clear_selection();
+
+        // Verify block mode is reset
+        assert!(!state.block_selection);
+    }
+
+    #[test]
+    fn block_selection_direction_change_left() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+
+        // Start at line 2, col 5
+        state.top_line = 0;
+        state.cursor_line = 2;
+        state.cursor_col = 5;
+        state.block_selection = true;
+
+        // Start selection (anchor at 2,5)
+        state.start_selection();
+        assert_eq!(state.selection_anchor, Some((2, 5)));
+
+        // Move down (line 3, col 5)
+        state.cursor_line = 3;
+        state.update_selection();
+        assert_eq!(state.selection_start, Some((2, 5)));
+        assert_eq!(state.selection_end, Some((3, 5)));
+
+        // Move right (line 3, col 6)
+        state.cursor_col = 6;
+        state.update_selection();
+        assert_eq!(state.selection_start, Some((2, 5)));
+        assert_eq!(state.selection_end, Some((3, 6)));
+
+        // Move left to anchor (line 3, col 5)
+        state.cursor_col = 5;
+        state.update_selection();
+        // Should have zero-width selection (col 5-5)
+        assert_eq!(state.selection_start, Some((2, 5)));
+        assert_eq!(state.selection_end, Some((3, 5)));
+
+        // Move left past anchor (line 3, col 4)
+        state.cursor_col = 4;
+        state.update_selection();
+        // Should now select from col 4 to anchor col 5
+        assert_eq!(state.selection_start, Some((2, 4)));
+        assert_eq!(state.selection_end, Some((3, 5)));
+
+        // Move left further (line 3, col 3)
+        state.cursor_col = 3;
+        state.update_selection();
+        // Should select from col 3 to anchor col 5
+        assert_eq!(state.selection_start, Some((2, 3)));
+        assert_eq!(state.selection_end, Some((3, 5)));
     }
 }

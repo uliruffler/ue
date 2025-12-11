@@ -377,10 +377,36 @@ pub(crate) fn handle_key_event(
     }
 
     let is_shift = modifiers.contains(KeyModifiers::SHIFT);
+    let is_alt = modifiers.contains(KeyModifiers::ALT);
     let is_navigation = is_navigation_key(&code);
+
+    // Alt+Up/Down without Shift: Add cursor above/below (multi-cursor mode)
+    if is_alt && !is_shift && matches!(code, KeyCode::Up | KeyCode::Down) {
+        // Add current position as a cursor if this is the first multi-cursor
+        if !state.has_multi_cursors() {
+            state.add_cursor(state.current_position());
+        }
+
+        // Move cursor and add it to multi-cursors
+        let moved = handle_navigation(state, lines, code, visible_lines);
+        if moved {
+            state.add_cursor(state.current_position());
+        }
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+
+    // Any other navigation clears multi-cursors
+    if is_navigation && !is_alt {
+        state.clear_multi_cursors();
+    }
 
     if is_navigation && is_shift {
         state.start_selection();
+        // Enable block selection if Alt key is also pressed
+        if is_alt {
+            state.block_selection = true;
+        }
     }
 
     let did_edit = handle_editing_keys(state, lines, &code, &modifiers, visible_lines, filename);
@@ -1658,8 +1684,10 @@ mod tests {
         assert_eq!(state.top_line, 0);
         assert_eq!(state.cursor_line, 0);
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(state.selection_start, Some(start_pos));
-        assert_eq!(state.selection_end, Some((0, 0)));
+        // With anchor-based selection, start and end are normalized
+        assert_eq!(state.selection_start, Some((0, 0)));
+        assert_eq!(state.selection_end, Some(start_pos));
+        assert_eq!(state.selection_anchor, Some(start_pos));
         assert!(state.needs_redraw);
     }
 
@@ -1689,8 +1717,10 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(state.absolute_line(), 49);
         assert_eq!(state.cursor_col, lines[49].len());
+        // With anchor-based selection, start and end are kept in order
         assert_eq!(state.selection_start, Some(start_pos));
         assert_eq!(state.selection_end, Some((49, lines[49].len())));
+        assert_eq!(state.selection_anchor, Some(start_pos));
         assert!(state.needs_redraw);
     }
 }

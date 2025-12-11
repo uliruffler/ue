@@ -619,6 +619,11 @@ fn editing_session(
         };
 
         if !event::poll(timeout)? {
+            // Update cursor blink state for multi-cursors
+            if state.update_cursor_blink() {
+                state.needs_redraw = true;
+            }
+
             if last_esc.timed_out() {
                 last_esc.clear();
                 // Only open file selector if the first Esc was in normal mode
@@ -663,7 +668,7 @@ fn editing_session(
                         return Ok((state.modified, None, true, false));
                     }
                     EscResult::First => {
-                        // First Esc: exit find/goto/selection mode if active, but continue waiting for second Esc
+                        // First Esc: exit find/goto/selection/multi-cursor mode if active, but continue waiting for second Esc
                         if state.find_active {
                             // Exit find mode
                             state.find_active = false;
@@ -682,6 +687,11 @@ fn editing_session(
                             state.goto_line_typing_started = false;
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in goto mode
+                        } else if state.has_multi_cursors() {
+                            // Clear multi-cursors
+                            state.clear_multi_cursors();
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in multi-cursor mode
                         } else if state.has_selection() {
                             // Clear selection
                             state.clear_selection();

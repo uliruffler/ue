@@ -645,6 +645,79 @@ fn position_cursor(
     if !state.is_cursor_visible(lines, visible_lines, text_width) {
         return Ok(());
     }
+
+    // Handle multi-cursor mode OR zero-width block selection - show blinking block cursors
+    let is_zero_width_block = state.block_selection
+        && if let Some((start, end)) = state.selection_range() {
+            start.1 == end.1 && start.0 != end.0 // Zero width, multiple lines
+        } else {
+            false
+        };
+
+    let should_show_block_cursors = state.has_multi_cursors() || is_zero_width_block;
+
+    if should_show_block_cursors {
+        let tab_width = state.settings.tab_width;
+        let blink_visible = state.cursor_blink_state;
+
+        // Get all cursor positions (either multi-cursors or block selection range)
+        let cursor_positions: Vec<Position> = if state.has_multi_cursors() {
+            state.all_cursor_positions()
+        } else if let Some((start, end)) = state.selection_range() {
+            // Zero-width block selection: create cursors for each line in range
+            (start.0..=end.0).map(|line| (line, start.1)).collect()
+        } else {
+            vec![state.current_position()]
+        };
+
+        // Draw blinking block cursor on ALL cursor lines (including main cursor)
+        for &(cursor_line_abs, cursor_col) in &cursor_positions {
+            if cursor_line_abs < state.top_line || cursor_line_abs >= state.top_line + visible_lines {
+                continue; // Not visible
+            }
+            if cursor_line_abs >= lines.len() {
+                continue;
+            }
+
+            // Calculate Y position for this cursor
+            let mut cursor_y = 1u16;
+            for i in state.top_line..cursor_line_abs {
+                cursor_y += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width);
+            }
+
+            // Calculate X position
+            let line_len = lines[cursor_line_abs].chars().count();
+            let actual_col = cursor_col.min(line_len);
+            let visual_col = visual_width_up_to(&lines[cursor_line_abs], actual_col, tab_width);
+            let cursor_wrapped_line = visual_col / (text_width as usize);
+            cursor_y += cursor_wrapped_line as u16;
+            let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+
+            // Get the character at this position (or space if at end of line)
+            let char_at_cursor = if cursor_col < line_len {
+                lines[cursor_line_abs].chars().nth(cursor_col).unwrap_or(' ')
+            } else {
+                ' '
+            };
+
+            // Draw blinking block cursor: alternate between normal and inverted
+            execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+            if blink_visible {
+                // Blink ON: show inverted (block cursor)
+                execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::Reverse))?;
+                write!(stdout, "{}", char_at_cursor)?;
+                execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::NoReverse))?;
+            } else {
+                // Blink OFF: show normal character (cursor invisible)
+                write!(stdout, "{}", char_at_cursor)?;
+            }
+        }
+
+        // Hide the terminal cursor since we're using block cursors
+        execute!(stdout, cursor::Hide)?;
+        return Ok(());
+    }
+
     let tab_width = state.settings.tab_width;
     let mut cursor_y = 1u16;
     for i in 0..state.cursor_line {
@@ -905,15 +978,24 @@ fn render_line_segment_with_selection_expanded(
     }
 
     // Convert selection character indices to visual column range
-    let start_visual_col = if segment.line_index == start_line {
-        visual_width_up_to(original_line, start_col, segment.tab_width)
+    let (start_visual_col, end_visual_col) = if ctx.state.block_selection {
+        // Block selection: use the column range for all lines in the selection
+        let block_start_col = visual_width_up_to(original_line, start_col, segment.tab_width);
+        let block_end_col = visual_width_up_to(original_line, end_col, segment.tab_width);
+        (block_start_col, block_end_col)
     } else {
-        0
-    };
-    let end_visual_col = if segment.line_index == end_line {
-        visual_width_up_to(original_line, end_col, segment.tab_width)
-    } else {
-        usize::MAX
+        // Normal line-wise selection
+        let start_visual_col = if segment.line_index == start_line {
+            visual_width_up_to(original_line, start_col, segment.tab_width)
+        } else {
+            0
+        };
+        let end_visual_col = if segment.line_index == end_line {
+            visual_width_up_to(original_line, end_col, segment.tab_width)
+        } else {
+            usize::MAX
+        };
+        (start_visual_col, end_visual_col)
     };
 
     // Cache current match range to avoid recalculating in the loop
