@@ -41,13 +41,11 @@ fn main() -> crossterm::Result<()> {
         if let Ok(Some(last)) = session::load_last_session() {
             match last.mode {
                 session::SessionMode::Editor => {
-                    if let Some(f) = last.file.as_ref()
-                        && f.exists()
-                    {
+                    if let Some(f) = last.file.as_ref() {
+                        // Open last file even if it doesn't exist (new buffer support)
                         files = vec![f.to_string_lossy().to_string()];
-                    }
-                    if files.is_empty() {
-                        // Fall back to selector
+                    } else {
+                        // No file recorded - fall back to selector
                         match file_selector::select_file()? {
                             Some(f) => files = vec![f],
                             None => {

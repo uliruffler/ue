@@ -3,6 +3,9 @@ name = "ue"
 version = "0.0.1"
 edition = "2024"
 
+[lib]
+name = "ue"
+path = "src/lib.rs"
 
 [[bin]]
 name="ue"
@@ -21,6 +24,8 @@ termimad = "0.30"
 
 [dev-dependencies]
 tempfile = "3"
+sha2 = "0.10"
+serial_test = "3.0"
 
 [profile.release]
 lto = true

@@ -5,9 +5,20 @@
 
 **Key Philosophy**: Internal tool with no public APIs. Use `pub(crate)` only when needed for cross-module access.
 
+**Recent Improvements** (December 2025):
+- Full UTF-8/Unicode support (German umlauts, emoji, multi-byte characters)
+- New file creation: Open non-existent files, track immediately, save creates file on disk
+- File closing from file selector: `Ctrl+w` to close/untrack files
+- Session restoration: Remembers last mode (editor/selector) and file when reopening
+- Recent files ordering: Most recently opened file appears at top of file selector
+- Bug fixes: File removal path construction, test infrastructure improvements
+
 ## Core Features
 
 ### Text Editing
+- **UTF-8 support**: Full Unicode support including multi-byte characters (e.g., German umlauts "ü", emoji)
+  - Cursor position tracked in character indices, not byte offsets
+  - Proper handling of character boundaries for all editing operations
 - **Line numbering** with configurable gutter width
 - **Line wrapping** for long lines
 - **Persistent undo/redo** mechanism with file-based history
@@ -45,9 +56,18 @@
 ### File Management
 - **File selector**: Press `Esc` to toggle between editor and file selector
   - Shows all tracked files from `~/.ue/files/**`
-  - Sorted by recent usage (via `~/.ue/recent`)
+  - Sorted by recent usage (via `~/.ue/files.ue`) - most recently opened file at top
   - Shows unsaved changes indicator
   - `Enter` opens file, `Esc` returns to editor
+  - `Ctrl+w` closes selected file (removes from tracking)
+- **New file creation**: Can open with non-existent filename (e.g., `ue newfile.txt`)
+  - File tracked immediately with full undo support
+  - Actual file created on disk only when saved (`Ctrl+s`)
+  - Undo history persisted even for unsaved new files
+- **Session restoration**: Opening `ue` without arguments restores previous state
+  - If quit from editor mode on file A, reopens in editor mode on file A
+  - If quit from file selector, reopens in file selector
+  - Preserves cursor position, scroll state, and mode
 - **Quick exit**: Double-tap `Esc` (within 300ms default) to exit without saving
   - Changes are not lost; state is persisted to `~/.ue/files/`
 
@@ -61,6 +81,7 @@
 ### Module Structure
 ```
 main.rs          Entry point, CLI argument parsing
+lib.rs           Test-only module exports (NOT a public API - for integration tests only)
 ui.rs            Orchestration layer, main event loop, terminal setup/teardown
 editor_state.rs  FileViewerState struct (cursor, selection, scroll, flags)
 coordinates.rs   Position calculations, line wrapping, visual ↔ logical mapping
@@ -71,18 +92,22 @@ mouse_handlers.rs Mouse-specific logic (selection, double-click, block mode)
 undo.rs          Undo/redo history management, persistence
 settings.rs      Configuration loading, keybinding parsing
 syntax.rs        Syntax highlighting engine
-file_selector.rs File selector UI and logic
+file_selector.rs File selector UI and logic (includes remove_tracked_file)
 find.rs          Find mode logic, search history
 help.rs          Help system rendering
 session.rs       Session state persistence (last file, mode)
-recent.rs        Recent files tracking
+recent.rs        Recent files tracking (most recently used ordering)
 double_esc.rs    Double-tap Esc detection
+env.rs           Test environment utilities (temp home directory with locking)
 ```
 
 ### Key Design Principles
 
 1. **Single Responsibility**: Each module has one clear purpose
-2. **No Public APIs**: Internal tool, no `pub` items except for cross-module `pub(crate)`
+2. **No Public APIs**: Internal tool, not a library
+   - All modules use `pub(crate)` for cross-module access
+   - `lib.rs` exists solely for integration test infrastructure (re-exports with `pub`)
+   - Not intended for external consumption or as a library dependency
 3. **Orchestration via ui.rs**: Main event loop coordinates modules; modules don't call each other directly
 4. **State-Driven Rendering**: `FileViewerState.needs_redraw` flag controls when screen updates
 5. **Testable**: Logic isolated in pure functions where possible; comprehensive test coverage
@@ -143,23 +168,29 @@ All editor state stored in `~/.ue/`:
 ```
 ~/.ue/
   settings.toml       User configuration
-  recent              Recent files list (one per line)
+  files.ue            Recent files list (most recent first, one per line)
   last_session        Last active file/mode
   syntax/             Syntax definitions
-  files/              Per-file state
-    {hash}/           SHA-256 hash of absolute file path
-      content         File content
-      position.json   Cursor & scroll state
-      undo.json       Undo history
+  files/              Per-file state (mirrors absolute path structure)
+    path/to/          Directory structure matching file location
+      file.txt.ue     Combined state file (undo history, position, content)
 ```
+
+Note: The `.ue` files in `files/` directory mirror the absolute path of the original file. For example:
+- `/home/user/doc.txt` → `~/.ue/files/home/user/doc.txt.ue`
+- Hidden files like `.bashrc` → `~/.ue/files/home/user/.bashrc.ue`
 
 ## Testing
 
 - Run tests with `cargo test`
+- **Unit tests**: 324 tests per binary (lib + main), use `#[cfg(test)]` modules within each file
+- **Integration tests**: 7 tests in `tests/integration_tests.rs`, test full workflows
+  - Use `#[serial]` attribute from `serial_test` crate to prevent race conditions
+  - Tests run sequentially to avoid environment variable conflicts
 - Use `UE_TEST_HOME` environment variable to isolate test state
-- Tests should not produce warnings
+- Tests should not produce warnings (zero warnings policy)
 - Add tests for new features
-- Modules with significant test coverage: undo.rs (13 tests), coordinates.rs (5 tests), settings.rs (7 tests)
+- Modules with significant test coverage: undo.rs, coordinates.rs, settings.rs, file_selector.rs
 
 ## Dependencies
 
@@ -170,7 +201,8 @@ All editor state stored in `~/.ue/`:
 - **regex**: Pattern matching for search & syntax highlighting
 - **termimad**: Markdown rendering for help
 - **serde_json**: Undo history persistence
-- **tempfile**: Test utilities
+- **tempfile**: Test utilities (dev-dependency)
+- **serial_test**: Sequential test execution for integration tests (dev-dependency)
 
 ## Common Workflows
 

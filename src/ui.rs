@@ -54,9 +54,9 @@ fn run_file_selector_overlay(
     visible_lines: &mut usize,
     settings: &Settings,
 ) -> crossterm::Result<SelectorResult> {
-    use crossterm::event::{Event, KeyCode};
+    use crossterm::event::{Event, KeyCode, KeyModifiers};
     let mut stdout = io::stdout();
-    let tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
+    let mut tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
     if tracked.is_empty() {
         return Ok(SelectorResult::Cancelled);
     }
@@ -68,7 +68,7 @@ fn run_file_selector_overlay(
         .iter()
         .position(|e| e.path.to_string_lossy() == current_str)
         .unwrap_or(0);
-    let scroll_offset = 0usize;
+    let mut scroll_offset = 0usize;
     let (_, th) = terminal::size()?;
     let vis = (th as usize).saturating_sub(1);
     execute!(stdout, Hide)?;
@@ -110,6 +110,27 @@ fn run_file_selector_overlay(
                 }
 
                 match k.code {
+                    KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
+                        // Close selected file (remove its tracked undo entry)
+                        if let Some(entry) = tracked.get(selected_index) {
+                            let _ = crate::file_selector::remove_tracked_file(&entry.path);
+                            tracked.remove(selected_index);
+                            // Adjust selection and scroll
+                            if selected_index >= tracked.len() && selected_index > 0 {
+                                selected_index -= 1;
+                            }
+                            if scroll_offset > 0 && scroll_offset + vis > tracked.len() {
+                                scroll_offset = scroll_offset.saturating_sub(1);
+                            }
+                            // If all files are closed, exit overlay
+                            if tracked.is_empty() {
+                                execute!(stdout, Show)?;
+                                return Ok(SelectorResult::Cancelled);
+                            }
+                            // Full redraw after removal
+                            crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
+                        }
+                    }
                     KeyCode::Up | KeyCode::Char('k') => {
                         if selected_index > 0 {
                             let prev = selected_index;
@@ -182,6 +203,8 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
             break;
         }
         let file = current_files[idx].clone();
+        // Update recent list so selector orders most recent first
+        let _ = crate::recent::update_recent_file(&file);
         match fs::read_to_string(&file) {
             Ok(content) => {
                 let (modified, next, quit, close_file) =
@@ -265,11 +288,69 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
                     break;
                 }
             }
-            Err(e) => {
-                eprintln!("Could not read file {}: {}", file, e);
-                if idx + 1 < current_files.len() {
-                    idx += 1;
+            Err(_e) => {
+                // Treat missing/unreadable file as a new buffer with empty content
+                let (modified, next, quit, close_file) =
+                    editing_session(&file, String::new(), &settings)?;
+                if modified {
+                    if !unsaved.contains(&file) {
+                        unsaved.push(file.clone());
+                    }
+                } else {
+                    unsaved.retain(|f| f != &file);
+                }
+
+                if close_file {
+                    current_files.remove(idx);
+                    unsaved.retain(|f| f != &file);
+                    execute!(
+                        stdout,
+                        SetCursorStyle::DefaultUserShape,
+                        DisableMouseCapture,
+                        LeaveAlternateScreen
+                    )?;
+                    terminal::disable_raw_mode()?;
+                    match crate::file_selector::select_file()? {
+                        Some(selected_file) => {
+                            terminal::enable_raw_mode()?;
+                            execute!(
+                                stdout,
+                                EnterAlternateScreen,
+                                EnableMouseCapture,
+                                SetCursorStyle::BlinkingBar,
+                                terminal::Clear(ClearType::All)
+                            )?;
+                            if let Some(pos) = current_files.iter().position(|f| f == &selected_file) {
+                                idx = pos;
+                            } else {
+                                current_files.insert(0, selected_file);
+                                idx = 0;
+                            }
+                            continue;
+                        }
+                        None => {
+                            if let Err(e) = crate::session::save_selector_session() {
+                                eprintln!("Warning: failed to save selector session: {}", e);
+                            }
+                            return Ok(());
+                        }
+                    }
+                }
+
+                if let Some(target) = next {
+                    if let Some(pos) = current_files.iter().position(|f| f == &target) {
+                        idx = pos;
+                    } else {
+                        current_files.insert(0, target.clone());
+                        idx = 0;
+                    }
                     continue;
+                }
+                if quit {
+                    break;
+                }
+                if idx + 1 < current_files.len() {
+                    idx += 1
                 } else {
                     break;
                 }
@@ -291,10 +372,10 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
         );
     }
 
-    // Save selector session when exiting completely (all files closed)
-    if let Err(e) = crate::session::save_selector_session() {
-        eprintln!("Warning: failed to save selector session: {}", e);
-    }
+    // Note: Session is already saved in event_handlers.rs when quitting from editor
+    // (via is_exit_command or save_and_quit handlers, or double-Esc in persist_editor_state).
+    // Only save selector session if we explicitly switch to the selector or have no files.
+    // If we reached here normally (quit=true from a single file), the editor session was already saved.
 
     Ok(())
 }

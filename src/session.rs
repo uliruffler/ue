@@ -1,15 +1,15 @@
 use std::{fs, io, path::PathBuf};
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
-pub(crate) enum SessionMode {
+pub enum SessionMode {
     Editor,
     Selector,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone)]
-pub(crate) struct LastSession {
-    pub(crate) mode: SessionMode,
-    pub(crate) file: Option<PathBuf>,
+pub struct LastSession {
+    pub mode: SessionMode,
+    pub file: Option<PathBuf>,
 }
 
 fn session_file_path() -> io::Result<PathBuf> {
@@ -20,7 +20,7 @@ fn session_file_path() -> io::Result<PathBuf> {
     Ok(PathBuf::from(home).join(".ue").join("last_session"))
 }
 
-pub(crate) fn load_last_session() -> io::Result<Option<LastSession>> {
+pub fn load_last_session() -> io::Result<Option<LastSession>> {
     let path = session_file_path()?;
     if !path.exists() {
         return Ok(None);
@@ -51,7 +51,7 @@ pub(crate) fn load_last_session() -> io::Result<Option<LastSession>> {
     }
 }
 
-pub(crate) fn save_editor_session(file: &str) -> io::Result<()> {
+pub fn save_editor_session(file: &str) -> io::Result<()> {
     let path = session_file_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -61,7 +61,7 @@ pub(crate) fn save_editor_session(file: &str) -> io::Result<()> {
     Ok(())
 }
 
-pub(crate) fn save_selector_session() -> io::Result<()> {
+pub fn save_selector_session() -> io::Result<()> {
     let path = session_file_path()?;
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
@@ -191,23 +191,57 @@ mod tests {
         }
 
         // Write invalid mode
-        fs::write(path, "mode=invalid\n").unwrap();
+        fs::write(path, "mode=invalid\nfile=/test.txt\n").unwrap();
         let loaded = load_last_session().unwrap();
-        assert!(loaded.is_none(), "Invalid mode should return None");
+        assert!(loaded.is_none());
     }
 
     #[test]
-    fn session_editor_mode_without_file() {
-        let (_tmp, _guard) = set_temp_home();
-        let path = session_file_path().unwrap();
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
+    fn session_persists_nonexistent_file() {
+        let (tmp, _guard) = set_temp_home();
+        let nonexistent = tmp.path().join("does_not_exist.txt");
+        let nonexistent_str = nonexistent.to_string_lossy().to_string();
 
-        // Editor mode but no file specified
-        fs::write(path, "mode=editor\n").unwrap();
-        let loaded = load_last_session().unwrap();
-        // Should handle gracefully (either None or default behavior)
-        assert!(loaded.is_none() || loaded.unwrap().file.is_none());
+        // Save session with non-existent file
+        save_editor_session(&nonexistent_str).unwrap();
+
+        // Load session - should work even though file doesn't exist
+        let session = load_last_session().unwrap().unwrap();
+        assert_eq!(session.mode, SessionMode::Editor);
+        assert_eq!(session.file.unwrap().to_string_lossy(), nonexistent_str);
+    }
+
+    #[test]
+    fn session_editor_to_selector_transition() {
+        let (_tmp, _guard) = set_temp_home();
+
+        // Start in editor mode
+        save_editor_session("/tmp/file1.txt").unwrap();
+        let session1 = load_last_session().unwrap().unwrap();
+        assert_eq!(session1.mode, SessionMode::Editor);
+
+        // Switch to selector mode
+        save_selector_session().unwrap();
+        let session2 = load_last_session().unwrap().unwrap();
+        assert_eq!(session2.mode, SessionMode::Selector);
+    }
+
+    #[test]
+    fn session_selector_to_editor_transition() {
+        let (_tmp, _guard) = set_temp_home();
+
+        // Start in selector mode
+        save_selector_session().unwrap();
+        let session1 = load_last_session().unwrap().unwrap();
+        assert_eq!(session1.mode, SessionMode::Selector);
+
+        // Switch to editor mode
+        save_editor_session("/tmp/file2.txt").unwrap();
+        let session2 = load_last_session().unwrap().unwrap();
+        assert_eq!(session2.mode, SessionMode::Editor);
+        assert_eq!(
+            session2.file.unwrap().to_string_lossy(),
+            "/tmp/file2.txt"
+        );
     }
 }

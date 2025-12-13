@@ -10,13 +10,14 @@ use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 /// File entry with metadata
-pub(crate) struct FileEntry {
-    pub(crate) path: PathBuf,
-    pub(crate) has_unsaved_changes: bool,
+#[derive(Clone)]
+pub struct FileEntry {
+    pub path: PathBuf,
+    pub has_unsaved_changes: bool,
 }
 
 /// Get list of all files in ~/.ue/files/** (prefers UE_TEST_HOME for tests)
-pub(crate) fn get_tracked_files() -> io::Result<Vec<FileEntry>> {
+pub fn get_tracked_files() -> io::Result<Vec<FileEntry>> {
     let home = std::env::var("UE_TEST_HOME")
         .or_else(|_| std::env::var("HOME"))
         .or_else(|_| std::env::var("USERPROFILE"))
@@ -179,6 +180,50 @@ pub(crate) fn select_file() -> io::Result<Option<String>> {
     result
 }
 
+pub fn remove_tracked_file(path: &Path) -> io::Result<()> {
+    // Remove the tracked file by deleting its .ue undo history file
+    // Uses the same mapping logic as get_tracked_files to locate undo file
+    let home = std::env::var("UE_TEST_HOME")
+        .or_else(|_| std::env::var("HOME"))
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
+    let base_dir = PathBuf::from(home).join(".ue").join("files");
+
+    // Compute relative path from root and construct undo path
+    // The file structure mirrors absolute path under ~/.ue/files
+    // We need to add only the directory part, not the filename
+    let mut undo_dir = base_dir.clone();
+    if let Some(parent) = path.parent() {
+        for comp in parent.components() {
+            use std::path::Component;
+            match comp {
+                Component::RootDir => {}
+                _ => {
+                    undo_dir.push(comp.as_os_str());
+                }
+            }
+        }
+    }
+    // There are two variants: hidden originals (.name.ue) or normal (name.ue)
+    // We try normal first, then hidden variant
+    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+    let mut undo_file = undo_dir.join(format!("{}.ue", filename));
+    if !undo_file.exists() {
+        // Hidden original mapping: .name -> .name.ue
+        if filename.starts_with('.') {
+            undo_file = undo_dir.join(format!("{}.ue", filename));
+        } else {
+            // Legacy mapping with artificial dot prefix: .name.ext.ue
+            undo_file = undo_dir.join(format!(".{}.ue", filename));
+        }
+    }
+
+    if undo_file.exists() {
+        fs::remove_file(&undo_file)?;
+    }
+    Ok(())
+}
+
 fn run_file_selector(
     files: &[FileEntry],
     settings: &crate::settings::Settings,
@@ -190,11 +235,13 @@ fn run_file_selector(
     let mut needs_full_redraw = true;
     let mut help_active = false;
     let mut help_scroll_offset = 0;
+    let mut current_files: Vec<FileEntry> = files.to_vec();
 
     loop {
         let (term_width, term_height) = crossterm::terminal::size()?;
         let visible_lines = (term_height as usize).saturating_sub(1); // only footer reserved
 
+        let files_view = &current_files;
         if help_active {
             // Render help screen
             let help_content = crate::help::get_file_selector_help(settings, term_width as usize);
@@ -207,12 +254,12 @@ fn run_file_selector(
             )?;
         } else if needs_full_redraw || scroll_offset != prev_scroll_offset {
             // Full redraw needed (first time or scrolling occurred)
-            render_file_list(files, selected_index, scroll_offset, visible_lines)?;
+            render_file_list(files_view, selected_index, scroll_offset, visible_lines)?;
             needs_full_redraw = false;
         } else if selected_index != prev_selected_index {
             // Only selection changed, redraw affected lines
             render_selection_change(
-                files,
+                files_view,
                 prev_selected_index,
                 selected_index,
                 scroll_offset,
@@ -270,8 +317,30 @@ fn run_file_selector(
                     return Ok(None);
                 }
                 KeyCode::Enter => {
-                    if let Some(entry) = files.get(selected_index) {
+                    if let Some(entry) = current_files.get(selected_index) {
                         return Ok(Some(entry.path.to_string_lossy().to_string()));
+                    }
+                }
+                KeyCode::Char('w') if key_event.modifiers.contains(KeyModifiers::CONTROL) => {
+                    // Close selected file (remove its tracked undo entry)
+                    if let Some(entry) = current_files.get(selected_index) {
+                        let _ = remove_tracked_file(&entry.path);
+                        current_files.remove(selected_index);
+                        // Adjust selection and scroll
+                        if selected_index >= current_files.len() && selected_index > 0 {
+                            selected_index -= 1;
+                        }
+                        if scroll_offset > 0 && scroll_offset + visible_lines > current_files.len() {
+                            scroll_offset = scroll_offset.saturating_sub(1);
+                        }
+                        needs_full_redraw = true;
+                        // Persist selector session
+                        let _ = crate::session::save_selector_session();
+                        // If all files are closed, exit selector
+                        if current_files.is_empty() {
+                            return Ok(None);
+                        }
+                        continue;
                     }
                 }
                 KeyCode::Up | KeyCode::Char('k') => {
@@ -283,7 +352,7 @@ fn run_file_selector(
                     }
                 }
                 KeyCode::Down | KeyCode::Char('j') => {
-                    if selected_index + 1 < files.len() {
+                    if selected_index + 1 < current_files.len() {
                         selected_index += 1;
                         if selected_index >= scroll_offset + visible_lines {
                             scroll_offset = selected_index - visible_lines + 1;
@@ -296,10 +365,10 @@ fn run_file_selector(
                 }
                 KeyCode::PageDown => {
                     selected_index =
-                        (selected_index + visible_lines).min(files.len().saturating_sub(1));
+                        (selected_index + visible_lines).min(current_files.len().saturating_sub(1));
                     scroll_offset += visible_lines;
-                    if scroll_offset + visible_lines > files.len() {
-                        scroll_offset = files.len().saturating_sub(visible_lines);
+                    if scroll_offset + visible_lines > current_files.len() {
+                        scroll_offset = current_files.len().saturating_sub(visible_lines);
                     }
                 }
                 KeyCode::Home => {
@@ -311,12 +380,12 @@ fn run_file_selector(
                     scroll_offset = 0;
                 }
                 KeyCode::End => {
-                    selected_index = files.len().saturating_sub(1);
-                    scroll_offset = files.len().saturating_sub(visible_lines);
+                    selected_index = current_files.len().saturating_sub(1);
+                    scroll_offset = current_files.len().saturating_sub(visible_lines);
                 }
                 KeyCode::Char('G') if key_event.modifiers.contains(KeyModifiers::SHIFT) => {
-                    selected_index = files.len().saturating_sub(1);
-                    scroll_offset = files.len().saturating_sub(visible_lines);
+                    selected_index = current_files.len().saturating_sub(1);
+                    scroll_offset = current_files.len().saturating_sub(visible_lines);
                 }
                 _ => {}
             }
@@ -743,5 +812,41 @@ mod tests {
         assert_eq!(files[0].path.file_name().unwrap(), "a.txt");
         assert_eq!(files[1].path.file_name().unwrap(), "b.txt");
         assert_eq!(files[2].path.file_name().unwrap(), "c.txt");
+    }
+
+    #[test]
+    fn remove_tracked_file_deletes_undo_history() {
+        let (tmp, _guard) = set_temp_home();
+        let ue_files = tmp.path().join(".ue").join("files").join("test");
+        std::fs::create_dir_all(&ue_files).unwrap();
+
+        // Create tracked files
+        std::fs::write(ue_files.join("file1.txt.ue"), "{}").unwrap();
+        std::fs::write(ue_files.join("file2.txt.ue"), "{}").unwrap();
+
+        let files = get_tracked_files().unwrap();
+        assert_eq!(files.len(), 2);
+
+        // Close file1
+        let file1_path = PathBuf::from("/test/file1.txt");
+        remove_tracked_file(&file1_path).unwrap();
+
+        // Verify file1 is gone
+        let files_after = get_tracked_files().unwrap();
+        assert_eq!(files_after.len(), 1);
+        assert!(!files_after.iter().any(|f| f.path == file1_path));
+        assert!(files_after
+            .iter()
+            .any(|f| f.path == PathBuf::from("/test/file2.txt")));
+    }
+
+    #[test]
+    fn remove_tracked_file_handles_nonexistent() {
+        let (_tmp, _guard) = set_temp_home();
+        let nonexistent = PathBuf::from("/nonexistent/file.txt");
+
+        // Should not error when trying to remove non-existent file
+        let result = remove_tracked_file(&nonexistent);
+        assert!(result.is_ok());
     }
 }
