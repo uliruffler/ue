@@ -11,7 +11,7 @@ pub(crate) fn handle_find_input(
     state: &mut FileViewerState,
     lines: &[String],
     key_event: KeyEvent,
-    visible_lines: usize,
+    _visible_lines: usize,
 ) -> bool {
     let KeyEvent { code, .. } = key_event;
 
@@ -31,35 +31,25 @@ pub(crate) fn handle_find_input(
             true
         }
         KeyCode::Enter => {
-            // Perform search and exit find mode
+            // Exit find mode and activate search highlighting (don't jump to match)
             if !state.find_pattern.is_empty() {
                 // Make search case-insensitive by default
                 let pattern = format!("(?i){}", state.find_pattern);
                 match Regex::new(&pattern) {
-                    Ok(regex) => {
-                        // Always set last_search_pattern for highlighting
+                    Ok(_regex) => {
+                        // Set last_search_pattern for highlighting
                         state.last_search_pattern = Some(state.find_pattern.clone());
                         add_to_history(state, state.find_pattern.clone());
 
-                        if let Some(pos) = find_next(
-                            lines,
-                            state.current_position(),
-                            &regex,
-                            false,
-                            state.find_scope,
-                        ) {
-                            move_to_position(state, pos, lines.len(), visible_lines);
-                            state.search_wrapped = false;
-                            state.wrap_warning_pending = None;
-                            state.find_error = None;
-                        } else {
-                            // No match found forward - show message
-                            state.find_error = Some("No matches found forward".to_string());
-                            state.wrap_warning_pending = None;
-                        }
+                        // Update hit count but don't jump to match
+                        update_search_hit_count(state, lines);
+
+                        state.search_wrapped = false;
+                        state.wrap_warning_pending = None;
+                        state.find_error = None;
                         state.find_active = false;
                         state.find_history_index = None;
-                        state.saved_search_pattern = None; // Clear saved pattern
+                        state.saved_search_pattern = None;
                         // Note: Don't clear selection - keep it visible to show the search scope
                         // Note: Don't clear find_scope - keep it so highlighting remains scoped
                         state.needs_redraw = true;
@@ -104,6 +94,7 @@ pub(crate) fn handle_find_input(
             state.find_error = None;
             // Update highlights in real-time
             update_live_highlights(state);
+            update_search_hit_count(state, lines);
             state.needs_redraw = true;
             false
         }
@@ -123,6 +114,7 @@ pub(crate) fn handle_find_input(
                 state.find_error = None;
                 // Update highlights in real-time
                 update_live_highlights(state);
+                update_search_hit_count(state, lines);
                 state.needs_redraw = true;
             }
             false
@@ -143,6 +135,7 @@ pub(crate) fn handle_find_input(
                 state.find_history_index = None;
                 // Update highlights in real-time
                 update_live_highlights(state);
+                update_search_hit_count(state, lines);
                 state.needs_redraw = true;
             }
             false
@@ -191,6 +184,7 @@ pub(crate) fn handle_find_input(
             state.find_history_index = None;
             // Update highlights in real-time
             update_live_highlights(state);
+            update_search_hit_count(state, lines);
             state.needs_redraw = true;
             false
         }
@@ -220,35 +214,25 @@ pub(crate) fn find_next_occurrence(
                 state.search_wrapped = false;
                 state.wrap_warning_pending = None;
                 state.find_error = None;
+                update_search_hit_count(state, lines);
             } else {
-                // No match found in forward direction
-                // Check if we have a pending wrap warning for next
-                if state.wrap_warning_pending.as_deref() == Some("next") {
-                    // Second press - actually wrap
-                    if let Some(pos) = find_next(
-                        lines,
-                        state.current_position(),
-                        &regex,
-                        true,
-                        state.find_scope,
-                    ) {
-                        move_to_position(state, pos, lines.len(), visible_lines);
-                        state.search_wrapped = true;
-                        state.wrap_warning_pending = None;
-                        state.find_error = Some("Search wrapped to beginning".to_string());
-                    } else {
-                        state.find_error = Some("No matches found".to_string());
-                        state.wrap_warning_pending = None;
-                    }
-                } else {
-                    // First press - show warning
-                    state.wrap_warning_pending = Some("next".to_string());
-                    state.find_error = Some("Press again to wrap to beginning".to_string());
+                // No match found forward - wrap immediately
+                if let Some(pos) = find_next(
+                    lines,
+                    state.current_position(),
+                    &regex,
+                    true,
+                    state.find_scope,
+                ) {
+                    move_to_position(state, pos, lines.len(), visible_lines);
+                    state.search_wrapped = true;
+                    state.wrap_warning_pending = None;
+                    state.find_error = None;
+                    update_search_hit_count(state, lines);
                 }
+                // If still no match, just stay at current position (no error message)
             }
         }
-    } else {
-        state.find_error = Some("No previous search".to_string());
     }
     state.needs_redraw = true;
 }
@@ -275,35 +259,25 @@ pub(crate) fn find_prev_occurrence(
                 state.search_wrapped = false;
                 state.wrap_warning_pending = None;
                 state.find_error = None;
+                update_search_hit_count(state, lines);
             } else {
-                // No match found in backward direction
-                // Check if we have a pending wrap warning for prev
-                if state.wrap_warning_pending.as_deref() == Some("prev") {
-                    // Second press - actually wrap
-                    if let Some(pos) = find_prev(
-                        lines,
-                        state.current_position(),
-                        &regex,
-                        true,
-                        state.find_scope,
-                    ) {
-                        move_to_position(state, pos, lines.len(), visible_lines);
-                        state.search_wrapped = true;
-                        state.wrap_warning_pending = None;
-                        state.find_error = Some("Search wrapped to end".to_string());
-                    } else {
-                        state.find_error = Some("No matches found".to_string());
-                        state.wrap_warning_pending = None;
-                    }
-                } else {
-                    // First press - show warning
-                    state.wrap_warning_pending = Some("prev".to_string());
-                    state.find_error = Some("Press again to wrap to end".to_string());
+                // No match found backward - wrap immediately
+                if let Some(pos) = find_prev(
+                    lines,
+                    state.current_position(),
+                    &regex,
+                    true,
+                    state.find_scope,
+                ) {
+                    move_to_position(state, pos, lines.len(), visible_lines);
+                    state.search_wrapped = true;
+                    state.wrap_warning_pending = None;
+                    state.find_error = None;
+                    update_search_hit_count(state, lines);
                 }
+                // If still no match, just stay at current position (no error message)
             }
         }
-    } else {
-        state.find_error = Some("No previous search".to_string());
     }
     state.needs_redraw = true;
 }
@@ -313,6 +287,8 @@ fn update_live_highlights(state: &mut FileViewerState) {
     if state.find_pattern.is_empty() {
         // Clear highlights when pattern is empty
         state.last_search_pattern = None;
+        state.search_hit_count = 0;
+        state.search_current_hit = 0;
     } else {
         // Try to compile as regex - if valid, update highlights
         // Make search case-insensitive by default
@@ -650,6 +626,90 @@ fn move_to_position(
     state.needs_redraw = true;
 }
 
+/// Calculate the total number of search hits and determine the current hit index
+/// Returns (current_hit_index, total_hits) where current_hit_index is 1-based (0 if not on a hit)
+pub(crate) fn calculate_search_hits(
+    lines: &[String],
+    cursor_pos: Position,
+    pattern: &str,
+    scope: Option<(Position, Position)>,
+) -> (usize, usize) {
+    // Make search case-insensitive by default
+    let pattern_with_flags = format!("(?i){}", pattern);
+    let Ok(regex) = Regex::new(&pattern_with_flags) else {
+        return (0, 0);
+    };
+
+    let (cursor_line, cursor_col) = cursor_pos;
+    let mut total_hits = 0;
+    let mut current_hit = 0;
+    let mut found_cursor_hit = false;
+
+    // Determine search boundaries
+    let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
+        (scope_start_line, scope_end_line)
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
+
+    for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
+        let line = &lines[line_idx];
+
+        // Determine search boundaries for this line based on scope
+        let (search_start, search_end) =
+            if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
+                scope
+            {
+                let start_offset = if line_idx == scope_start_line {
+                    scope_start_col
+                } else {
+                    0
+                };
+                let end_offset = if line_idx == scope_end_line {
+                    scope_end_col.min(line.len())
+                } else {
+                    line.len()
+                };
+                (start_offset, end_offset)
+            } else {
+                (0, line.len())
+            };
+
+        if search_start < search_end {
+            let search_slice = &line[search_start..search_end];
+            for m in regex.find_iter(search_slice) {
+                let match_col = search_start + m.start();
+                total_hits += 1;
+
+                // Check if this match is at the cursor position
+                if !found_cursor_hit && line_idx == cursor_line && match_col == cursor_col {
+                    current_hit = total_hits;
+                    found_cursor_hit = true;
+                }
+            }
+        }
+    }
+
+    (current_hit, total_hits)
+}
+
+/// Update the search hit count in the state
+pub(crate) fn update_search_hit_count(state: &mut FileViewerState, lines: &[String]) {
+    if let Some(ref pattern) = state.last_search_pattern {
+        let (current, total) = calculate_search_hits(
+            lines,
+            state.current_position(),
+            pattern,
+            state.find_scope,
+        );
+        state.search_current_hit = current;
+        state.search_hit_count = total;
+    } else {
+        state.search_current_hit = 0;
+        state.search_hit_count = 0;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -739,24 +799,12 @@ mod tests {
         state.cursor_col = 0;
         state.last_search_pattern = Some("hello".to_string());
 
-        // First press: should show warning, not wrap
-        find_next_occurrence(&mut state, &lines, 10);
-        assert_eq!(state.wrap_warning_pending, Some("next".to_string()));
-        assert_eq!(
-            state.find_error,
-            Some("Press again to wrap to beginning".to_string())
-        );
-        assert_eq!(state.cursor_line, 2); // cursor should not move
-
-        // Second press: should actually wrap
+        // Should wrap immediately without warning
         find_next_occurrence(&mut state, &lines, 10);
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 0); // cursor should move to line 0
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(
-            state.find_error,
-            Some("Search wrapped to beginning".to_string())
-        );
+        assert_eq!(state.find_error, None); // No error message
     }
 
     #[test]
@@ -777,21 +825,12 @@ mod tests {
         state.cursor_col = 0;
         state.last_search_pattern = Some("hello".to_string());
 
-        // First press: should show warning, not wrap
-        find_prev_occurrence(&mut state, &lines, 10);
-        assert_eq!(state.wrap_warning_pending, Some("prev".to_string()));
-        assert_eq!(
-            state.find_error,
-            Some("Press again to wrap to end".to_string())
-        );
-        assert_eq!(state.cursor_line, 0); // cursor should not move
-
-        // Second press: should actually wrap
+        // Should wrap immediately without warning
         find_prev_occurrence(&mut state, &lines, 10);
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 2); // cursor should move to line 2
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(state.find_error, Some("Search wrapped to end".to_string()));
+        assert_eq!(state.find_error, None); // No error message
     }
 
     #[test]
@@ -838,21 +877,12 @@ mod tests {
         state.cursor_col = 0; // Cursor at position where match starts
         state.last_search_pattern = Some("find".to_string());
 
-        // First find_next should not find anything forward (starts search from col 1)
-        find_next_occurrence(&mut state, &lines, 10);
-        // Should show wrap warning
-        assert_eq!(state.wrap_warning_pending, Some("next".to_string()));
-        assert_eq!(state.cursor_line, 2); // cursor should not move
-
-        // Second press should wrap and find "find" at line 2, col 0
+        // find_next should wrap immediately and find "find" at line 2, col 0
         find_next_occurrence(&mut state, &lines, 10);
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 2);
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(
-            state.find_error,
-            Some("Search wrapped to beginning".to_string())
-        );
+        assert_eq!(state.find_error, None); // No error message
     }
 
     #[test]
@@ -1113,5 +1143,224 @@ mod tests {
         assert_eq!(state.find_scope, Some(((1, 5), (3, 10))));
 
         // The rendering code should now only highlight matches within this scope
+    }
+
+    #[test]
+    fn test_calculate_search_hits() {
+        let lines = vec![
+            "This is a test file".to_string(),
+            "The word test appears here".to_string(),
+            "Here is another test".to_string(),
+            "And yet another test word".to_string(),
+            "No match on this line".to_string(),
+            "But this has test again".to_string(),
+        ];
+
+        // Test 1: Count all hits for "test"
+        let (current, total) = calculate_search_hits(&lines, (0, 0), "test", None);
+        assert_eq!(total, 5); // Should find 5 occurrences
+        assert_eq!(current, 0); // Cursor not on a match at (0, 0)
+
+        // Test 2: Cursor at first occurrence
+        let (current, total) = calculate_search_hits(&lines, (0, 10), "test", None);
+        assert_eq!(total, 5);
+        assert_eq!(current, 1); // First hit
+
+        // Test 3: Cursor at third occurrence
+        let (current, total) = calculate_search_hits(&lines, (2, 16), "test", None);
+        assert_eq!(total, 5);
+        assert_eq!(current, 3); // Third hit
+
+        // Test 4: With scope - only count hits in range
+        let scope = Some(((1, 0), (3, 25)));
+        let (current, total) = calculate_search_hits(&lines, (2, 16), "test", scope);
+        assert_eq!(total, 3); // Only 3 hits in lines 1-3
+        assert_eq!(current, 2); // Second hit within scope
+
+        // Test 5: Case insensitive
+        let (_current, total) = calculate_search_hits(&lines, (0, 0), "TEST", None);
+        assert_eq!(total, 5); // Should find all "test" case-insensitively
+    }
+
+    #[test]
+    fn test_calculate_search_hits_no_matches() {
+        let lines = vec![
+            "This is a test file".to_string(),
+            "The word test appears here".to_string(),
+        ];
+
+        let (current, total) = calculate_search_hits(&lines, (0, 0), "nomatch", None);
+        assert_eq!(total, 0);
+        assert_eq!(current, 0);
+    }
+
+    #[test]
+    fn test_enter_does_not_jump_to_match() {
+        // Test that pressing Enter in find mode doesn't move the cursor
+        let lines = vec![
+            "first line".to_string(),
+            "test here".to_string(),
+            "another line".to_string(),
+        ];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        // Set cursor at line 0, column 0
+        state.cursor_line = 0;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.find_active = true;
+        state.find_pattern = "test".to_string();
+
+        // Simulate pressing Enter
+        let key_event = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        let exited = handle_find_input(&mut state, &lines, key_event, 10);
+
+        // Should exit find mode
+        assert!(exited);
+        assert!(!state.find_active);
+
+        // Cursor should NOT have moved
+        assert_eq!(state.cursor_line, 0);
+        assert_eq!(state.cursor_col, 0);
+
+        // Search pattern should be active for highlighting
+        assert_eq!(state.last_search_pattern, Some("test".to_string()));
+
+        // Hit count should be updated
+        assert_eq!(state.search_hit_count, 1);
+        assert_eq!(state.search_current_hit, 0); // Not on a match
+    }
+
+    #[test]
+    fn test_wrapping_is_immediate() {
+        // Test that find_next wraps immediately without requiring second press
+        let lines = vec![
+            "first line".to_string(),
+            "test here".to_string(),
+            "last line".to_string(),
+        ];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        // Set cursor at end, after the only match
+        state.cursor_line = 2;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.last_search_pattern = Some("test".to_string());
+
+        // Call find_next once - should wrap immediately
+        find_next_occurrence(&mut state, &lines, 10);
+
+        // Should have wrapped to the match at line 1
+        assert_eq!(state.absolute_line(), 1);
+        assert_eq!(state.cursor_col, 0);
+
+        // No warning should be set
+        assert_eq!(state.wrap_warning_pending, None);
+
+        // No error message
+        assert_eq!(state.find_error, None);
+    }
+
+    #[test]
+    fn test_no_error_messages_on_no_match() {
+        // Test that searching with no results doesn't show error messages
+        let lines = vec![
+            "first line".to_string(),
+            "second line".to_string(),
+        ];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        state.cursor_line = 0;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.last_search_pattern = Some("nomatch".to_string());
+
+        // Try to find next - no matches exist
+        find_next_occurrence(&mut state, &lines, 10);
+
+        // Cursor should not move
+        assert_eq!(state.cursor_line, 0);
+        assert_eq!(state.cursor_col, 0);
+
+        // Should NOT have an error message
+        assert_eq!(state.find_error, None);
+    }
+
+    #[test]
+    fn test_hit_count_always_updated() {
+        // Test that hit count is always calculated, even with 0 matches
+        let lines = vec![
+            "first line".to_string(),
+            "second line".to_string(),
+        ];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        state.cursor_line = 0;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.find_active = true;
+        state.find_pattern = "nomatch".to_string();
+
+        // Press Enter to activate search
+        let key_event = crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::empty(),
+        );
+        handle_find_input(&mut state, &lines, key_event, 10);
+
+        // Hit count should be set to 0
+        assert_eq!(state.search_hit_count, 0);
+        assert_eq!(state.search_current_hit, 0);
+
+        // Pattern should be active
+        assert_eq!(state.last_search_pattern, Some("nomatch".to_string()));
+    }
+
+    #[test]
+    fn test_find_prev_wraps_immediately() {
+        // Test that find_prev also wraps immediately
+        let lines = vec![
+            "first line".to_string(),
+            "test here".to_string(),
+            "last line".to_string(),
+        ];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        // Set cursor at beginning, before the only match
+        state.cursor_line = 0;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.last_search_pattern = Some("test".to_string());
+
+        // Call find_prev once - should wrap immediately to end
+        find_prev_occurrence(&mut state, &lines, 10);
+
+        // Should have wrapped to the match at line 1
+        assert_eq!(state.absolute_line(), 1);
+        assert_eq!(state.cursor_col, 0);
+
+        // No warning should be set
+        assert_eq!(state.wrap_warning_pending, None);
+
+        // No error message
+        assert_eq!(state.find_error, None);
     }
 }

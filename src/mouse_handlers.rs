@@ -292,6 +292,84 @@ fn handle_scrollbar_drag(
 }
 
 /// Main entry point for all mouse event handling
+/// Handle clicks on the footer, particularly for search navigation arrows
+fn handle_footer_click(
+    state: &mut FileViewerState,
+    lines: &[String],
+    column: u16,
+    visible_lines: usize,
+) {
+    // Only handle if we have search results
+    if state.search_hit_count == 0 {
+        return;
+    }
+
+    // Calculate where the search info is displayed in the footer
+    let line_num = state.absolute_line() + 1;
+    let col_num = state.cursor_col + 1;
+    let position_info = format!("{}:{}", line_num, col_num);
+
+    let hit_display = if state.search_hit_count > 0 {
+        if state.search_current_hit > 0 {
+            format!("({}/{}) ↑↓", state.search_current_hit, state.search_hit_count)
+        } else {
+            format!("(-/{}) ↑↓", state.search_hit_count)
+        }
+    } else {
+        "(0) ↑↓".to_string()
+    };
+
+    // Format: hit_display  position_info (with double space)
+    let full_info = format!("{}  {}", hit_display, position_info);
+
+    let total_width = state.term_width as usize;
+    let digits = state.settings.appearance.line_number_digits as usize;
+    let left_len = if digits > 0 { digits + 1 } else { 0 };
+    let remaining_width = total_width.saturating_sub(left_len);
+
+    // Calculate where the arrows are displayed
+    let info_start = if full_info.len() >= remaining_width {
+        left_len // Truncated, starts at left edge
+    } else {
+        left_len + (remaining_width - full_info.len()) // Padded, right-aligned
+    };
+
+    // Find the position of the arrows
+    let arrow_text = "↑↓";
+    let arrow_start = if full_info.len() >= remaining_width {
+        // In truncated case, find where arrows would be
+        let visible_part = &full_info[full_info.len() - remaining_width..];
+        if let Some(pos) = visible_part.find(arrow_text) {
+            info_start + pos
+        } else {
+            return; // Arrows not visible
+        }
+    } else {
+        // Normal case
+        if let Some(pos) = full_info.find(arrow_text) {
+            info_start + pos
+        } else {
+            return;
+        }
+    };
+
+    let arrow_end = arrow_start + arrow_text.chars().count();
+
+    // Check if click is on the arrows
+    let click_col = column as usize;
+    if click_col >= arrow_start && click_col < arrow_end {
+        // Clicked on arrows - determine which one
+        let arrow_offset = click_col - arrow_start;
+        if arrow_offset == 0 {
+            // Clicked on up arrow (↑) - go to previous match
+            crate::find::find_prev_occurrence(state, lines, visible_lines);
+        } else if arrow_offset == 1 {
+            // Clicked on down arrow (↓) - go to next match
+            crate::find::find_next_occurrence(state, lines, visible_lines);
+        }
+    }
+}
+
 pub(crate) fn handle_mouse_event(
     state: &mut FileViewerState,
     lines: &mut Vec<String>,
@@ -309,6 +387,14 @@ pub(crate) fn handle_mouse_event(
     if row == 0 {
         return;
     }
+
+    // Check if click is on footer row (for search navigation)
+    let footer_row = (visible_lines + 1) as u16;
+    if row == footer_row && kind == MouseEventKind::Down(MouseButton::Left) {
+        handle_footer_click(state, lines, column, visible_lines);
+        return;
+    }
+
     let visual_line = (row as usize).saturating_sub(1);
     // Ignore clicks beyond visible content, but allow scrollbar events to reach the boundary
     let scrollbar_column = state.term_width - 1;

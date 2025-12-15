@@ -65,6 +65,10 @@ pub(crate) struct FileViewerState<'a> {
     /// Search scope when find mode is activated with a selection
     /// If set, find operations only search within this range (normalized start, end)
     pub(crate) find_scope: Option<(Position, Position)>,
+    /// Total number of search hits in the document
+    pub(crate) search_hit_count: usize,
+    /// Current hit index (1-based, 0 means cursor not on a hit)
+    pub(crate) search_current_hit: usize,
     /// Go to line mode active
     pub(crate) goto_line_active: bool,
     /// Input buffer for go to line
@@ -136,6 +140,8 @@ impl<'a> FileViewerState<'a> {
             search_wrapped: false,
             wrap_warning_pending: None,
             find_scope: None,
+            search_hit_count: 0,
+            search_current_hit: 0,
             goto_line_active: false,
             goto_line_input: String::new(),
             goto_line_cursor_pos: 0,

@@ -760,6 +760,15 @@ fn editing_session(
                             state.saved_search_pattern = None;
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in find mode
+                        } else if state.last_search_pattern.is_some() {
+                            // Clear search highlights (after exiting find mode with Enter)
+                            state.last_search_pattern = None;
+                            state.find_scope = None;
+                            state.find_error = None;
+                            state.search_hit_count = 0;
+                            state.search_current_hit = 0;
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in search results mode
                         } else if state.goto_line_active {
                             // Exit goto_line mode
                             state.goto_line_active = false;

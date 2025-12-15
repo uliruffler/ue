@@ -134,25 +134,44 @@ fn render_footer(
         execute!(stdout, SetBackgroundColor(color))?;
     }
 
-    // If in find mode, show the find prompt
+    // If in find mode, show the find prompt on left and hit count/position on right
     if state.find_active {
         let digits = state.settings.appearance.line_number_digits as usize;
-        let mut prompt = String::new();
+        let total_width = state.term_width as usize;
 
-        // Add line number space if needed
+        // Build the left side (find prompt + pattern)
+        let mut left_side = String::new();
         if digits > 0 {
-            prompt.push_str(&format!("{:width$} ", "", width = digits));
+            left_side.push_str(&format!("{:width$} ", "", width = digits));
         }
-
-        // Add find prompt and input field
         let find_label = "Find (regex): ";
-        prompt.push_str(find_label);
-        let pattern_start_col = prompt.len();
-        prompt.push_str(&state.find_pattern);
+        left_side.push_str(find_label);
+        let pattern_start_col = left_side.len();
+        left_side.push_str(&state.find_pattern);
 
-        // Show error in red if present, followed by the input field
+        // Build the right side (hit count + arrows + position)
+        let line_num = state.absolute_line() + 1;
+        let col_num = state.cursor_col + 1;
+        let position_info = format!("{}:{}", line_num, col_num);
+
+        // Always show hit count with arrows
+        let hit_display = if state.search_hit_count > 0 {
+            if state.search_current_hit > 0 {
+                format!("({}/{}) ↑↓", state.search_current_hit, state.search_hit_count)
+            } else {
+                format!("(-/{}) ↑↓", state.search_hit_count)
+            }
+        } else {
+            "(0) ↑↓".to_string()
+        };
+
+        let right_side = format!("{}  {}", hit_display, position_info);
+
+        // Render the footer
         write!(stdout, "\r")?;
-        if let Some(ref error) = state.find_error {
+
+        // Show error in red if present
+        let error_offset = if let Some(ref error) = state.find_error {
             use crossterm::style::SetForegroundColor;
             execute!(stdout, SetForegroundColor(crossterm::style::Color::Red))?;
             write!(stdout, "[{}] ", error)?;
@@ -162,21 +181,42 @@ fn render_footer(
             {
                 execute!(stdout, SetBackgroundColor(color))?;
             }
+            error.len() + 3 // "[error] "
+        } else {
+            0
+        };
+
+        // Write left side
+        write!(stdout, "{}", left_side)?;
+
+        // Calculate right-aligned position (same method as normal mode)
+        // In normal mode: remaining_width = total_width - left_len
+        // where left_len includes the digit area length
+        let digit_area_len = if digits > 0 { digits + 1 } else { 0 };
+        let remaining_width = total_width.saturating_sub(digit_area_len);
+
+        // Calculate how much content we've written after the digit area
+        let written_after_digits = error_offset + left_side.len() - digit_area_len;
+
+        // Right-align: pad to push right_side to right edge
+        let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.len());
+        for _ in 0..pad {
+            write!(stdout, " ")?;
         }
-        write!(stdout, "{}", prompt)?;
-        // Footer row doesn't interfere with scrollbar, but clear consistently
+
+        // Write right side (now at same position as in normal mode)
+        write!(stdout, "{}", right_side)?;
+
+        // Clear rest of line
         execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
         execute!(stdout, ResetColor)?;
 
         // Position cursor at find_cursor_pos within the search pattern
-        // Footer is at row: 1 (header) + visible_lines
-        // Account for error message length if present
         let error_offset = if let Some(ref error) = state.find_error {
             error.len() + 3 // "[" + error + "] "
         } else {
             0
         };
-        // Calculate visual column for cursor position (accounting for multi-byte chars)
         let chars: Vec<char> = state.find_pattern.chars().collect();
         let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
         let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
@@ -196,6 +236,22 @@ fn render_footer(
         format!("{}:{}", state.goto_line_input, col_num)
     } else {
         format!("{}:{}", line_num, col_num)
+    };
+
+    // Build position string with hit count first (if active search), then position
+    let position_info = if state.last_search_pattern.is_some() {
+        let hit_display = if state.search_hit_count > 0 {
+            if state.search_current_hit > 0 {
+                format!("({}/{}) ↑↓", state.search_current_hit, state.search_hit_count)
+            } else {
+                format!("(-/{}) ↑↓", state.search_hit_count)
+            }
+        } else {
+            "(0) ↑↓".to_string()
+        };
+        format!("{}  {}", hit_display, position_info)
+    } else {
+        position_info
     };
 
     let total_width = state.term_width as usize;

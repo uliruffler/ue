@@ -28,8 +28,31 @@ Press **{help}** or **ESC** to close this help.
 - Searches are **case-INSENSITIVE** by default
 - Pattern supports regex: `\d+` (digits), `\w+` (words), `.*` (any), etc.
 - Live highlighting shows matches as you type
-- Search wraps around file (shows warning before wrapping)
+- Search wraps around file automatically (no confirmation needed)
 - If text is selected, search is scoped to selection only
+- **Hit counter** shows `(X/Y) ↑↓  line:col` format
+  - Always visible when search is active (even with 0 matches)
+  - Format: `(current/total) ↑↓  line:col`
+  - Example: `(2/5) ↑↓  12:5` means at hit 2 of 5, cursor at line 12, column 5
+  - Shows `(0) ↑↓  12:5` when no matches found
+  - Shows `(-/5) ↑↓  12:5` when cursor is not on any match
+  - Click **↑** or **↓** arrows to navigate between matches
+  - Position always visible (never hidden)
+
+### Search Workflow
+
+1. **Press {find}** to enter find mode
+2. **Type pattern** - see hit count update in real-time: `(5) ↑↓  12:5`
+3. **Press Enter** - exits find mode, highlights remain, cursor stays put
+4. **Press {find_next}** or click **↓** - jump to first/next match
+5. **Press {find_previous}** or click **↑** - jump to previous match
+6. Wraps automatically (no confirmation)
+
+### Exiting Search
+
+- **ESC while typing**: Exits find mode, restores previous highlights
+- **ESC after Enter**: Clears search highlights (first press)
+- **ESC ESC (double-tap)**: Exits editor immediately
 
 ### Case-Sensitive Search
 
