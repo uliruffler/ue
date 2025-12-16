@@ -380,27 +380,12 @@ pub(crate) fn handle_key_event(
     let is_alt = modifiers.contains(KeyModifiers::ALT);
     let is_navigation = is_navigation_key(&code);
 
-    // Alt+Up/Down without Shift: Add cursor above/below (multi-cursor mode)
-    if is_alt && !is_shift && matches!(code, KeyCode::Up | KeyCode::Down) {
-        // Add current position as a cursor if this is the first multi-cursor
-        if !state.has_multi_cursors() {
-            state.add_cursor(state.current_position());
-        }
-
-        // Move cursor and add it to multi-cursors
-        let moved = handle_navigation(state, lines, code, visible_lines);
-        if moved {
-            state.add_cursor(state.current_position());
-        }
-        state.needs_redraw = true;
-        return Ok((false, false));
-    }
-
-    // Any other navigation clears multi-cursors
-    if is_navigation && !is_alt {
+    // Clear multi-cursors on any navigation (no longer used for selection)
+    if is_navigation {
         state.clear_multi_cursors();
     }
 
+    // Alt+Shift+Any Arrow: Start/expand block selection
     if is_navigation && is_shift {
         state.start_selection();
         // Enable block selection if Alt key is also pressed
@@ -1722,5 +1707,139 @@ mod tests {
         assert_eq!(state.selection_end, Some((49, lines[49].len())));
         assert_eq!(state.selection_anchor, Some(start_pos));
         assert!(state.needs_redraw);
+    }
+
+    #[test]
+    fn alt_shift_up_creates_zero_width_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+            "line three".to_string(),
+        ];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 5;
+        let settings = state.settings;
+
+        // Alt+Shift+Up should start zero-width block selection
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+        assert!(state.block_selection, "Block selection should be enabled");
+        assert!(state.selection_start.is_some(), "Selection should be started");
+        assert_eq!(state.cursor_line, 0, "Cursor should move up");
+
+        // Should be zero-width block selection (same column)
+        let (start, end) = state.selection_range().unwrap();
+        assert_eq!(start.1, end.1, "Should be zero-width (same column)");
+        assert_eq!(start.0, 0, "Should start at line 0");
+        assert_eq!(end.0, 1, "Should end at line 1");
+    }
+
+    #[test]
+    fn alt_shift_arrows_create_and_expand_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+            "line three".to_string(),
+        ];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 5;
+        let settings = state.settings;
+
+        // Alt+Shift+Up starts zero-width block selection
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+        assert!(state.block_selection, "Block selection should be enabled");
+
+        // Alt+Shift+Right should expand block selection horizontally
+        let key_event = KeyEvent::new(KeyCode::Right, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+        assert!(state.block_selection, "Block selection should still be enabled");
+
+        // Selection should now have width > 0
+        let (start, end) = state.selection_range().unwrap();
+        assert!(end.1 > start.1, "Block selection should have expanded horizontally");
+    }
+
+    #[test]
+    fn alt_up_down_without_shift_does_not_create_multi_cursors() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+            "line three".to_string(),
+        ];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 0;
+        let settings = state.settings;
+
+        // Alt+Up (without Shift) should NOT create multi-cursor
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+        assert!(!state.has_multi_cursors(), "Alt+Up without Shift should NOT create multi-cursors");
+        assert_eq!(state.cursor_line, 0, "Cursor should move up normally");
+
+        // Alt+Down (without Shift) should also NOT create multi-cursor
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+        assert!(!state.has_multi_cursors(), "Alt+Down without Shift should NOT create multi-cursors");
+        assert_eq!(state.cursor_line, 1, "Cursor should move down normally");
+    }
+
+    #[test]
+    fn alt_shift_down_expands_zero_width_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+            "line three".to_string(),
+            "line four".to_string(),
+        ];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 5;
+        let settings = state.settings;
+
+        // Alt+Shift+Up creates zero-width block selection (anchor at 1, cursor at 0)
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+        assert!(state.block_selection);
+        assert_eq!(state.cursor_line, 0, "Cursor should be at line 0");
+
+        // Alt+Shift+Down twice should expand vertically (anchor stays at 1, cursor moves to 2)
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+
+        assert!(state.block_selection, "Block selection should remain enabled");
+        assert_eq!(state.cursor_line, 2, "Cursor should be at line 2");
+
+        // Selection should span from anchor (line 1) to cursor (line 2)
+        let (start, end) = state.selection_range().unwrap();
+        assert_eq!(start.1, end.1, "Should remain zero-width");
+        // The range should cover lines 1-2
+        assert!(start.0 <= 1 && end.0 >= 2, "Should span at least lines 1-2");
     }
 }

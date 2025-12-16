@@ -347,14 +347,7 @@ impl<'a> FileViewerState<'a> {
         self.drag_target = None;
     }
 
-    /// Add a cursor at the given position (for multi-cursor mode)
-    pub(crate) fn add_cursor(&mut self, pos: Position) {
-        if !self.multi_cursors.contains(&pos) {
-            self.multi_cursors.push(pos);
-            self.multi_cursors.sort();
-            self.needs_redraw = true;
-        }
-    }
+
 
     /// Check if multi-cursor mode is active
     pub(crate) fn has_multi_cursors(&self) -> bool {
@@ -584,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn multi_cursors_can_be_added_and_cleared() {
+    fn zero_width_block_selection_shows_as_multi_line_cursors() {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(
             Settings::load().expect("Failed to load test settings"),
@@ -592,24 +585,28 @@ mod tests {
         let undo_history = UndoHistory::new();
         let mut state = FileViewerState::new(80, undo_history, settings);
 
-        // Initially no multi-cursors
-        assert!(!state.has_multi_cursors());
+        // Initially no selection
+        assert!(!state.block_selection);
+        assert!(state.selection_start.is_none());
 
-        // Add a cursor
-        state.add_cursor((1, 5));
-        assert!(state.has_multi_cursors());
-        assert_eq!(state.multi_cursors.len(), 1);
+        // Create zero-width block selection (lines 1-3, column 5)
+        state.block_selection = true;
+        state.selection_start = Some((1, 5));
+        state.selection_end = Some((3, 5));
 
-        // Add another cursor
-        state.add_cursor((3, 10));
-        assert!(state.has_multi_cursors());
-        assert_eq!(state.multi_cursors.len(), 2);
+        // Should be detected as zero-width block
+        let is_zero_width = state.block_selection
+            && if let Some((start, end)) = state.selection_range() {
+                start.1 == end.1 && start.0 != end.0
+            } else {
+                false
+            };
+        assert!(is_zero_width, "Should be detected as zero-width block selection");
 
-        // Clear multi-cursors
-        state.clear_multi_cursors();
-        assert!(!state.has_multi_cursors());
-        assert_eq!(state.multi_cursors.len(), 0);
-        assert!(state.needs_redraw);
+        // Clear selection
+        state.clear_selection();
+        assert!(!state.block_selection);
+        assert!(state.selection_start.is_none());
     }
 
     #[test]

@@ -52,17 +52,17 @@ Block selection allows you to select a rectangular region of text, useful for ed
 - Lines shorter than the selection range are partially selected or skipped
 - Block selection works in both directions (left-to-right and right-to-left)
 
-### Multi-Cursor Mode
+### Block Selection with Multi-Line Cursor Visualization
 
-Create multiple independent cursors to edit several lines at once:
+Create rectangular (block) selections that span multiple lines:
 
-- **Alt+Up/Down**: Add cursors above/below the current cursor position
-- **Typing**: Characters are inserted at all cursor positions simultaneously
-- **Backspace/Delete**: Removes characters at all cursor positions
-- **Visual feedback**: Shows blinking block cursors - the character at each cursor position alternates between normal and inverted every 500ms
-- **Exit**: Press **Esc** to clear all multi-cursors, or press any navigation key (arrows, Home, End, PageUp/PageDown)
+- **Alt+Shift+Arrow Keys**: Start or expand block selection in any direction
+- **Zero-width block selection**: When the block has the same start and end column on multiple lines, it displays as blinking block cursors on each line
+- **Visual feedback**: Zero-width blocks show blinking cursors (alternating between normal and inverted every 500ms) on all lines in the selection
+- **Expanding**: Use `Alt+Shift+Left/Right` to expand horizontally, `Alt+Shift+Up/Down` to expand vertically
+- **Exit**: Press **Esc** to clear the selection
 
-**Note**: Alt+Mouse is used for block selection, not multi-cursor. Use Alt+Up/Down for multi-cursor mode.
+**Note**: Alt+Mouse drag also creates block selection. Block selection allows rectangular copy/paste operations across multiple lines.
 
 
 ## License
