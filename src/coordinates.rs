@@ -384,4 +384,422 @@ mod tests {
         settings.appearance.line_number_digits = 5;
         assert_eq!(line_number_width(&settings), 6); // 5 digits + 1 separator
     }
+
+    // Tests for calculate_wrapped_lines_for_line function
+    #[test]
+    fn test_wrapped_lines_empty_line() {
+        let lines = vec![String::new()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+    }
+
+    #[test]
+    fn test_wrapped_lines_short_line_no_wrap() {
+        let lines = vec!["hello".to_string()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+    }
+
+    #[test]
+    fn test_wrapped_lines_exact_width() {
+        // Line is exactly the text width
+        let lines = vec!["x".repeat(80)];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+    }
+
+    #[test]
+    fn test_wrapped_lines_one_over_wraps_to_two() {
+        // Line is one character over the text width
+        let lines = vec!["x".repeat(81)];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 2);
+    }
+
+    #[test]
+    fn test_wrapped_lines_double_width() {
+        // Line is exactly double the text width
+        let lines = vec!["x".repeat(160)];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 2);
+    }
+
+    #[test]
+    fn test_wrapped_lines_triple_width() {
+        // Line needs three visual lines
+        let lines = vec!["x".repeat(200)];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 3);
+    }
+
+    #[test]
+    fn test_wrapped_lines_with_tabs() {
+        // Tab expands to 4 spaces, so "\t" has visual width 4
+        let lines = vec!["\t\t\t\t\t\t\t\t\t\t".to_string()]; // 10 tabs = 40 visual width
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+
+        // 21 tabs = 84 visual width, wraps to 2 lines
+        let lines = vec!["\t".repeat(21)];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 2);
+    }
+
+    #[test]
+    fn test_wrapped_lines_mixed_tabs_and_chars() {
+        // "hello\tworld" where tab expands from position 5
+        // "hello" = 5, tab goes to 8 (3 spaces), "world" = 5, total = 13
+        let lines = vec!["hello\tworld".to_string()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+    }
+
+    #[test]
+    fn test_wrapped_lines_zero_width_returns_one() {
+        let lines = vec!["hello".to_string()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 0, 4), 1);
+    }
+
+    #[test]
+    fn test_wrapped_lines_beyond_line_count() {
+        let lines = vec!["line1".to_string()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 5, 80, 4), 1);
+    }
+
+    // Tests for calculate_cursor_visual_line function
+    use crate::editor_state::FileViewerState;
+    use crate::settings::Settings;
+    use crate::undo::UndoHistory;
+    use super::{calculate_cursor_visual_line, calculate_visual_lines_to_cursor,
+                visual_col_to_char_index, calculate_text_width, visual_to_logical_position,
+                calculate_wrapped_lines_for_line};
+
+    fn create_test_state_for_coords(settings: &Settings) -> FileViewerState<'_> {
+        FileViewerState {
+            top_line: 0,
+            cursor_line: 0,
+            cursor_col: 0,
+            selection_start: None,
+            selection_end: None,
+            selection_anchor: None,
+            block_selection: false,
+            multi_cursors: Vec::new(),
+            cursor_blink_state: false,
+            last_blink_time: None,
+            needs_redraw: false,
+            modified: false,
+            term_width: 80,
+            undo_history: UndoHistory::new(),
+            settings,
+            mouse_dragging: false,
+            saved_absolute_cursor: None,
+            saved_scroll_state: None,
+            drag_source_start: None,
+            drag_source_end: None,
+            drag_text: None,
+            dragging_selection_active: false,
+            drag_target: None,
+            last_save_time: None,
+            find_active: false,
+            find_pattern: String::new(),
+            find_cursor_pos: 0,
+            find_error: None,
+            find_history: Vec::new(),
+            find_history_index: None,
+            last_search_pattern: None,
+            saved_search_pattern: None,
+            search_wrapped: false,
+            wrap_warning_pending: None,
+            find_scope: None,
+            search_hit_count: 0,
+            search_current_hit: 0,
+            goto_line_active: false,
+            goto_line_input: String::new(),
+            goto_line_cursor_pos: 0,
+            goto_line_typing_started: false,
+            scrollbar_dragging: false,
+            scrollbar_drag_start_top_line: 0,
+            scrollbar_drag_start_y: 0,
+            scrollbar_drag_bar_offset: 0,
+            help_active: false,
+            help_context: crate::help::HelpContext::Editor,
+            help_scroll_offset: 0,
+            horizontal_scroll_offset: 0,
+            last_click_time: None,
+            last_click_pos: None,
+            click_count: 0,
+        }
+    }
+
+    #[test]
+    fn test_cursor_visual_line_at_top_no_wrap() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec!["line1".to_string(), "line2".to_string()];
+
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 0;
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 0);
+    }
+
+    #[test]
+    fn test_cursor_visual_line_second_line_no_wrap() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec!["line1".to_string(), "line2".to_string()];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 0;
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 1);
+    }
+
+    #[test]
+    fn test_cursor_visual_line_with_wrapped_previous_line() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        // First line wraps to 2 visual lines, cursor on second logical line
+        let lines = vec!["x".repeat(100), "line2".to_string()];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 0;
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 2); // First line takes 2 visual lines
+    }
+
+    #[test]
+    fn test_cursor_visual_line_within_wrapped_line_first_wrap() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec!["x".repeat(100)];
+
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 50; // Within first 80 characters
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 0); // Still on first visual line
+    }
+
+    #[test]
+    fn test_cursor_visual_line_within_wrapped_line_second_wrap() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec!["x".repeat(100)];
+
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 85; // Beyond first 80 characters
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 1); // On second visual line
+    }
+
+    #[test]
+    fn test_cursor_visual_line_after_scrolling() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec![
+            "line1".to_string(),
+            "line2".to_string(),
+            "line3".to_string(),
+        ];
+
+        state.top_line = 1; // Scrolled down by 1
+        state.cursor_line = 1; // Relative cursor at line 1
+        // Absolute cursor is at line 2 (top_line + cursor_line)
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 1); // One line visible above cursor
+    }
+
+    #[test]
+    fn test_cursor_visual_line_after_scrolling_with_wrapped_lines() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec![
+            "x".repeat(150), // Wraps to 2 visual lines
+            "y".repeat(150), // Wraps to 2 visual lines
+            "line3".to_string(),
+        ];
+
+        state.top_line = 1;
+        state.cursor_line = 1; // Absolute line 2
+        state.cursor_col = 0;
+
+        let visual_line = calculate_cursor_visual_line(&lines, &state, 80);
+        assert_eq!(visual_line, 2); // Line 1 takes 2 visual lines
+    }
+
+    // Tests for calculate_visual_lines_to_cursor function
+    #[test]
+    fn test_visual_lines_to_cursor_at_top() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec!["line1".to_string(), "line2".to_string()];
+
+        state.top_line = 0;
+        state.cursor_line = 0;
+
+        let visual_lines = calculate_visual_lines_to_cursor(&lines, &state, 80);
+        assert_eq!(visual_lines, 1); // Includes the cursor line itself
+    }
+
+    #[test]
+    fn test_visual_lines_to_cursor_second_line() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec!["line1".to_string(), "line2".to_string()];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+
+        let visual_lines = calculate_visual_lines_to_cursor(&lines, &state, 80);
+        assert_eq!(visual_lines, 2); // Line 0 + Line 1
+    }
+
+    #[test]
+    fn test_visual_lines_to_cursor_with_wrapped_lines() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        let lines = vec![
+            "x".repeat(100), // Takes 2 visual lines
+            "line2".to_string(),
+        ];
+
+        state.top_line = 0;
+        state.cursor_line = 1;
+
+        let visual_lines = calculate_visual_lines_to_cursor(&lines, &state, 80);
+        assert_eq!(visual_lines, 3); // 2 for first line + 1 for second
+    }
+
+    // Tests for visual_col_to_char_index function
+    #[test]
+    fn test_visual_col_to_char_no_tabs() {
+        let line = "hello world";
+        assert_eq!(visual_col_to_char_index(line, 0, 4), 0);
+        assert_eq!(visual_col_to_char_index(line, 5, 4), 5);
+        assert_eq!(visual_col_to_char_index(line, 11, 4), 11);
+    }
+
+    #[test]
+    fn test_visual_col_to_char_with_tab() {
+        let line = "a\tb"; // 'a' at 0, tab to 4, 'b' at 4
+        assert_eq!(visual_col_to_char_index(line, 0, 4), 0); // 'a'
+        assert_eq!(visual_col_to_char_index(line, 1, 4), 1); // tab
+        assert_eq!(visual_col_to_char_index(line, 4, 4), 2); // 'b'
+    }
+
+    #[test]
+    fn test_visual_col_to_char_beyond_end() {
+        let line = "hello";
+        assert_eq!(visual_col_to_char_index(line, 100, 4), 5);
+    }
+
+    // Tests for calculate_text_width function
+    #[test]
+    fn test_calculate_text_width_no_scrollbar() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        let lines = vec!["line1".to_string()]; // Only 1 line, fits in 20 visible
+
+        let width = calculate_text_width(&state, &lines, 20);
+        // 80 - line_number_width (default 4) = 76
+        assert_eq!(width, 76);
+    }
+
+    #[test]
+    fn test_calculate_text_width_with_scrollbar() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        let lines = (0..30).map(|i| format!("line{}", i)).collect::<Vec<_>>();
+
+        let width = calculate_text_width(&state, &lines, 20);
+        // 80 - line_number_width (4) - scrollbar (1) = 75
+        assert_eq!(width, 75);
+    }
+
+    #[test]
+    fn test_calculate_text_width_no_line_numbers() {
+        let mut settings = Settings::default();
+        settings.appearance.line_number_digits = 0;
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        let lines = vec!["line1".to_string()];
+
+        let width = calculate_text_width(&state, &lines, 20);
+        // 80 - 0 (no line numbers) = 80
+        assert_eq!(width, 80);
+    }
+
+    // Tests for visual_to_logical_position function
+    #[test]
+    fn test_visual_to_logical_simple() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        state.top_line = 0;
+        let lines = vec!["hello".to_string(), "world".to_string()];
+
+        // Click on first line, column 10 (5 for line number gutter + 5 for text)
+        let result = visual_to_logical_position(&state, &lines, 0, 10, 20);
+        assert_eq!(result, Some((0, 5)));
+    }
+
+    #[test]
+    fn test_visual_to_logical_second_line() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        state.top_line = 0;
+        let lines = vec!["hello".to_string(), "world".to_string()];
+
+        // Click on second visual line
+        let result = visual_to_logical_position(&state, &lines, 1, 10, 20);
+        assert_eq!(result, Some((1, 5)));
+    }
+
+    #[test]
+    fn test_visual_to_logical_wrapped_line_second_wrap() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        state.top_line = 0;
+        let lines = vec!["x".repeat(100)];
+
+        // Click on second visual line (which is still first logical line)
+        // With line_number_width=4, text_width=76
+        // Second visual line starts at character 76, click at column 10
+        let result = visual_to_logical_position(&state, &lines, 1, 10, 20);
+        // Character index should be 76 + (10 - 4) = 82
+        assert!(result.is_some());
+        let (line, col) = result.unwrap();
+        assert_eq!(line, 0); // Still first logical line
+        assert!(col >= 76); // Should be in the second wrap segment
+    }
+
+    #[test]
+    fn test_visual_to_logical_click_on_line_number_returns_none() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        let lines = vec!["hello".to_string()];
+
+        // Click on line number area (column 0-3)
+        let result = visual_to_logical_position(&state, &lines, 0, 2, 20);
+        assert_eq!(result, None);
+    }
+
+    #[test]
+    fn test_visual_to_logical_click_on_scrollbar_returns_none() {
+        let settings = Settings::default();
+        let mut state = create_test_state_for_coords(&settings);
+        state.term_width = 80;
+        let lines = (0..30).map(|i| format!("line{}", i)).collect::<Vec<_>>();
+
+        // Click on scrollbar (last column)
+        let result = visual_to_logical_position(&state, &lines, 0, 79, 20);
+        assert_eq!(result, None);
+    }
 }

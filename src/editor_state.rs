@@ -91,6 +91,10 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) help_context: crate::help::HelpContext,
     /// Help scroll offset
     pub(crate) help_scroll_offset: usize,
+    /// Horizontal scroll offset (character offset from line start)
+    /// Only used when line_wrapping is false
+    #[allow(dead_code)]
+    pub(crate) horizontal_scroll_offset: usize,
     /// Last mouse click time for detecting double/triple clicks
     #[allow(dead_code)]
     pub(crate) last_click_time: Option<Instant>,
@@ -153,6 +157,7 @@ impl<'a> FileViewerState<'a> {
             help_active: false,
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
+            horizontal_scroll_offset: 0,
             last_click_time: None,
             last_click_pos: None,
             click_count: 0,

@@ -3,6 +3,8 @@ tab_width = 4
 keyboard_scroll_lines = 3
 double_tap_speed_ms = 300
 mouse_scroll_lines = 3
+# Enable line wrapping (true) or horizontal scrolling (false)
+line_wrapping = true
 
 
 # Appearance settings

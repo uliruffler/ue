@@ -62,7 +62,10 @@ Create rectangular (block) selections that span multiple lines:
 - **Expanding**: Use `Alt+Shift+Left/Right` to expand horizontally, `Alt+Shift+Up/Down` to expand vertically
 - **Exit**: Press **Esc** to clear the selection
 
-**Note**: Alt+Mouse drag also creates block selection. Block selection allows rectangular copy/paste operations across multiple lines.
+**Notes**: 
+- Alt+Mouse drag also creates block selection
+- Block selection allows rectangular copy/paste operations across multiple lines
+- Block selection works best on unwrapped lines; with wrapped lines, keyboard navigation moves through visual line segments which may not align with logical block boundaries (use mouse drag for wrapped lines)
 
 
 ## License

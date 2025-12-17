@@ -56,6 +56,8 @@ pub(crate) struct Settings {
     pub(crate) keyboard_scroll_lines: usize,
     #[serde(default = "default_mouse_scroll_lines")]
     pub(crate) mouse_scroll_lines: usize,
+    #[serde(default = "default_line_wrapping")]
+    pub(crate) line_wrapping: bool,
     #[serde(default = "default_appearance")]
     pub(crate) appearance: AppearanceSettings,
 }
@@ -74,6 +76,9 @@ fn default_keyboard_scroll_lines() -> usize {
 }
 fn default_mouse_scroll_lines() -> usize {
     3
+}
+fn default_line_wrapping() -> bool {
+    true
 }
 fn default_line_number_digits() -> u8 {
     3

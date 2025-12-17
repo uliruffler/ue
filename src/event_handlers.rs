@@ -385,10 +385,14 @@ pub(crate) fn handle_key_event(
         state.clear_multi_cursors();
     }
 
-    // Alt+Shift+Any Arrow: Start/expand block selection
+    // Handle selection with navigation keys:
+    // - Alt+Shift+Arrow: Block selection (rectangular/column-based selection)
+    // - Shift+Arrow: Normal line-wise selection
+    // Note: Block selection works on logical lines. For wrapped lines, navigation
+    // moves through visual line segments, which may not align with block boundaries.
     if is_navigation && is_shift {
         state.start_selection();
-        // Enable block selection if Alt key is also pressed
+        // Enable block selection mode if Alt is also pressed
         if is_alt {
             state.block_selection = true;
         }
@@ -1842,4 +1846,269 @@ mod tests {
         // The range should cover lines 1-2
         assert!(start.0 <= 1 && end.0 >= 2, "Should span at least lines 1-2");
     }
+
+    // Tests for vertical scrolling and navigation with wrapped lines
+    #[test]
+    fn page_down_scrolls_viewport() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(100);
+        state.top_line = 0;
+        state.cursor_line = 0;
+        let visible_lines = 20;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::PageDown, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, visible_lines, "top_line should advance by visible_lines");
+    }
+
+    #[test]
+    fn page_up_scrolls_viewport_up() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(100);
+        state.top_line = 40;
+        state.cursor_line = 5;
+        let visible_lines = 20;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::PageUp, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, 20, "top_line should decrease by visible_lines");
+    }
+
+    #[test]
+    fn page_up_at_top_stays_at_zero() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(100);
+        state.top_line = 5;
+        state.cursor_line = 0;
+        let visible_lines = 20;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::PageUp, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, 0, "top_line should not go below 0");
+    }
+
+    #[test]
+    fn arrow_down_on_short_line_moves_to_next_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "short".to_string(),
+            "another line".to_string(),
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor_line, 1, "cursor should move to next line");
+        assert_eq!(state.cursor_col, 3, "cursor column should be preserved");
+    }
+
+    #[test]
+    fn arrow_up_on_line_moves_to_previous_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+        ];
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor_line, 0, "cursor should move to previous line");
+        assert_eq!(state.cursor_col, 3, "cursor column should be preserved");
+    }
+
+    #[test]
+    fn arrow_up_at_top_scrolls_if_not_at_file_start() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 10;
+        state.cursor_line = 0; // At top of viewport
+        state.cursor_col = 0;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, 9, "should scroll up by one line");
+        assert_eq!(state.cursor_line, 0, "cursor should stay at viewport top");
+    }
+
+    #[test]
+    fn arrow_down_at_bottom_scrolls_if_not_at_file_end() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        let visible_lines = 20;
+        state.top_line = 10;
+        state.cursor_line = visible_lines - 1; // At bottom of viewport
+        state.cursor_col = 0;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        assert!(result.is_ok());
+        // Should scroll down
+        assert!(state.top_line > 10, "should scroll down");
+    }
+
+    #[test]
+    fn home_moves_to_line_start() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world".to_string()];
+        state.cursor_line = 0;
+        state.cursor_col = 6;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Home, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor_col, 0, "cursor should move to start of line");
+    }
+
+    #[test]
+    fn end_moves_to_line_end() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world".to_string()];
+        state.cursor_line = 0;
+        state.cursor_col = 0;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::End, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor_col, 11, "cursor should move to end of line");
+    }
+
+    #[test]
+    fn ctrl_home_jumps_to_file_start() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(100);
+        state.top_line = 50;
+        state.cursor_line = 10;
+        state.cursor_col = 5;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.top_line, 0, "should scroll to file start");
+        assert_eq!(state.cursor_line, 0, "cursor should be at first line");
+        assert_eq!(state.cursor_col, 0, "cursor should be at column 0");
+    }
+
+    #[test]
+    fn ctrl_end_jumps_to_file_end() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(100);
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 0;
+        let visible_lines = 20;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        assert!(result.is_ok());
+        let expected_absolute = lines.len() - 1;
+        assert_eq!(state.absolute_line(), expected_absolute, "cursor should be at last line");
+    }
+
+    #[test]
+    fn wrapped_line_navigation_down_within_same_logical_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        state.term_width = 40; // Small width to force wrapping
+        let mut lines = vec![
+            "x".repeat(100), // This will wrap across multiple visual lines
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 10; // Near the start
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        // Cursor should move down within the same wrapped logical line
+        assert_eq!(state.cursor_line, 0, "should stay on same logical line");
+        // Cursor column should advance by roughly text_width
+        assert!(state.cursor_col > 10, "cursor should advance within wrapped line");
+    }
+
+    #[test]
+    fn wrapped_line_navigation_up_within_same_logical_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        state.term_width = 40; // Small width to force wrapping
+        let mut lines = vec![
+            "x".repeat(100), // This will wrap across multiple visual lines
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 50; // In the middle of wrapped line
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        // Cursor should move up within the same wrapped logical line
+        assert_eq!(state.cursor_line, 0, "should stay on same logical line");
+        // Cursor column should decrease
+        assert!(state.cursor_col < 50, "cursor should move back within wrapped line");
+    }
+
+    #[test]
+    fn scrolling_with_wrapped_lines_maintains_cursor_visibility() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        state.term_width = 40;
+        let mut lines = vec![
+            "x".repeat(100), // Wraps to ~3 visual lines
+            "y".repeat(100),
+            "z".repeat(100),
+            "short line".to_string(),
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 0;
+        let visible_lines = 5; // Small viewport
+        let settings = state.settings;
+
+        // Navigate down multiple times
+        for _ in 0..10 {
+            let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+            let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        }
+
+        // Cursor should still be within valid range
+        let absolute_line = state.absolute_line();
+        assert!(absolute_line < lines.len(), "cursor should be within file bounds");
+        assert!(state.cursor_col <= lines[absolute_line].len(), "cursor column should be valid");
+    }
+
+
 }
