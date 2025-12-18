@@ -113,6 +113,26 @@ pub(crate) fn handle_key_event(
             } else {
                 state.clear_selection();
             }
+
+            // Adjust horizontal scroll if wrapping is disabled (same logic as in handle_navigation)
+            if !state.is_line_wrapping_enabled() {
+                let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+                let absolute_line = state.absolute_line();
+                if let Some(line) = lines.get(absolute_line) {
+                    use crate::coordinates::visual_width_up_to;
+                    let visual_col = visual_width_up_to(line, state.cursor_col, state.settings.tab_width);
+
+                    // Adjust horizontal scroll to keep cursor visible
+                    if visual_col < state.horizontal_scroll_offset {
+                        // Cursor moved left of visible area
+                        state.horizontal_scroll_offset = visual_col;
+                    } else if visual_col >= state.horizontal_scroll_offset + text_width {
+                        // Cursor moved right of visible area
+                        state.horizontal_scroll_offset = visual_col.saturating_sub(text_width - 1);
+                    }
+                }
+            }
+
             state.needs_redraw = true;
             return Ok((false, false));
         }
@@ -376,6 +396,14 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
+    // Handle toggle line wrap (Alt+w by default)
+    if settings.keybindings.toggle_line_wrap_matches(&code, &modifiers) {
+        // Toggle line wrapping at runtime (not persisted to config file)
+        state.toggle_line_wrapping();
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+
     let is_shift = modifiers.contains(KeyModifiers::SHIFT);
     let is_alt = modifiers.contains(KeyModifiers::ALT);
     let is_navigation = is_navigation_key(&code);
@@ -471,6 +499,16 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         return;
     }
 
+    // If wrapping is disabled, just move to previous logical line
+    if !state.is_line_wrapping_enabled() {
+        if state.cursor_line > 0 {
+            state.cursor_line -= 1;
+        } else if state.top_line > 0 {
+            state.top_line -= 1;
+        }
+        return;
+    }
+
     let line = &lines[absolute_line];
     let visual_col = visual_width_up_to(line, state.cursor_col, tab_width);
     let current_wrap_line = visual_col / text_width;
@@ -542,6 +580,19 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
     let tab_width = state.settings.tab_width;
 
     if text_width == 0 {
+        return;
+    }
+
+    // If wrapping is disabled, just move to next logical line
+    if !state.is_line_wrapping_enabled() {
+        if absolute_line + 1 < lines.len() {
+            state.cursor_line += 1;
+            // Check if we need to scroll
+            if state.cursor_line >= visible_lines {
+                state.top_line += 1;
+                state.cursor_line = visible_lines - 1;
+            }
+        }
         return;
     }
 
@@ -640,7 +691,7 @@ fn handle_navigation(
                 state.cursor_col -= 1;
                 true
             } else {
-                // At beginning of line - wrap to end of previous line
+                // At beginning of line - move to end of previous line
                 let current_absolute = state.top_line + state.cursor_line;
                 if current_absolute > 0 {
                     // Move to previous line
@@ -666,7 +717,7 @@ fn handle_navigation(
                     state.cursor_col += 1;
                     true
                 } else {
-                    // At end of line - wrap to beginning of next line
+                    // At end of line - move to beginning of next line
                     let current_absolute = state.top_line + state.cursor_line;
                     if current_absolute + 1 < lines.len() {
                         // Move to next line
@@ -689,44 +740,19 @@ fn handle_navigation(
         }
         KeyCode::Home => {
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
-                let _line_num_width = line_number_width(state.settings);
-                let text_width =
-                    crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
-                let tab_width = state.settings.tab_width;
+                // Find first non-blank character
+                let first_non_blank = first_non_blank_char(line);
 
-                // Calculate various positions
-                let vis_line_start =
-                    visual_line_start(line, state.cursor_col, text_width, tab_width);
-                let vis_line_first_non_blank =
-                    visual_line_first_non_blank(line, state.cursor_col, text_width, tab_width);
-                let logical_first_non_blank = first_non_blank_char(line);
-
-                // Cycle through positions based on current location
-                let new_pos = if state.cursor_col == vis_line_first_non_blank
-                    && vis_line_first_non_blank == vis_line_start
-                {
-                    // At visual line start which is also first non-blank → go to logical first non-blank
-                    if vis_line_start != logical_first_non_blank {
-                        logical_first_non_blank
-                    } else {
-                        // Visual line start IS the logical first non-blank → go to position 0
-                        0
-                    }
-                } else if state.cursor_col == vis_line_first_non_blank {
-                    // At visual line first non-blank (but not at start) → go to vis_line_start
-                    vis_line_start
-                } else if state.cursor_col == vis_line_start {
-                    // At visual line start → go to logical first non-blank
-                    logical_first_non_blank
-                } else if state.cursor_col == logical_first_non_blank {
-                    // At logical first non-blank → go to logical start (0)
+                // Toggle between first non-blank and column 0
+                let new_pos = if state.cursor_col == first_non_blank && first_non_blank != 0 {
+                    // Already at first non-blank (and it's not column 0) → go to column 0
                     0
-                } else if state.cursor_col == 0 {
-                    // At logical start → go to visual line first non-blank
-                    vis_line_first_non_blank
+                } else if state.cursor_col == 0 && first_non_blank != 0 {
+                    // At column 0 (and first non-blank is elsewhere) → go to first non-blank
+                    first_non_blank
                 } else {
-                    // Anywhere else → go to visual line first non-blank
-                    vis_line_first_non_blank
+                    // Anywhere else → go to first non-blank
+                    first_non_blank
                 };
 
                 state.cursor_col = new_pos;
@@ -738,24 +764,8 @@ fn handle_navigation(
         }
         KeyCode::End => {
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
-                let _line_num_width = line_number_width(state.settings);
-                let text_width =
-                    crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
-                let tab_width = state.settings.tab_width;
-
-                // Calculate positions
-                let vis_line_end = visual_line_end(line, state.cursor_col, text_width, tab_width);
-                let logical_end = line.len();
-
-                // If already at visual line end and visual end is less than logical end, go to logical end
-                // Otherwise go to visual line end
-                let new_pos = if state.cursor_col == vis_line_end && vis_line_end < logical_end {
-                    logical_end
-                } else {
-                    vis_line_end
-                };
-
-                state.cursor_col = new_pos;
+                // Always go to end of line
+                state.cursor_col = line.len();
                 true
             } else {
                 true
@@ -780,6 +790,27 @@ fn handle_navigation(
     // Clear wrap warning on any cursor movement
     if moved {
         state.wrap_warning_pending = None;
+
+        // Adjust horizontal scroll if wrapping is disabled
+        if !state.is_line_wrapping_enabled() {
+            let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+
+            // Get current line and calculate visual position
+            let absolute_line = state.absolute_line();
+            if let Some(line) = lines.get(absolute_line) {
+                use crate::coordinates::visual_width_up_to;
+                let visual_col = visual_width_up_to(line, state.cursor_col, state.settings.tab_width);
+
+                // Adjust horizontal scroll to keep cursor visible
+                if visual_col < state.horizontal_scroll_offset {
+                    // Cursor moved left of visible area
+                    state.horizontal_scroll_offset = visual_col;
+                } else if visual_col >= state.horizontal_scroll_offset + text_width {
+                    // Cursor moved right of visible area
+                    state.horizontal_scroll_offset = visual_col.saturating_sub(text_width - 1);
+                }
+            }
+        }
     }
 
     moved
@@ -1031,6 +1062,7 @@ fn first_non_blank_char(line: &str) -> usize {
 
 /// Calculate the end position of the current visual line within a wrapped logical line
 /// Returns the character index of the last character on the current visual line
+#[allow(dead_code)]
 fn visual_line_end(line: &str, cursor_col: usize, text_width: usize, tab_width: usize) -> usize {
     use crate::coordinates::visual_width_up_to;
 
@@ -1071,6 +1103,7 @@ fn visual_line_end(line: &str, cursor_col: usize, text_width: usize, tab_width: 
 
 /// Calculate the start position of the current visual line within a wrapped logical line
 /// Returns the character index of the first character on the current visual line
+#[allow(dead_code)]
 fn visual_line_start(line: &str, cursor_col: usize, text_width: usize, tab_width: usize) -> usize {
     use crate::coordinates::visual_width_up_to;
 
@@ -1104,6 +1137,7 @@ fn visual_line_start(line: &str, cursor_col: usize, text_width: usize, tab_width
 }
 
 /// Get the first non-blank character position in the current visual line
+#[allow(dead_code)]
 fn visual_line_first_non_blank(
     line: &str,
     cursor_col: usize,

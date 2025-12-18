@@ -370,6 +370,69 @@ fn handle_footer_click(
     }
 }
 
+/// Handle continuous horizontal auto-scroll when mouse is held at edge during drag
+/// Returns true if scrolling occurred
+pub(crate) fn handle_continuous_auto_scroll(
+    state: &mut FileViewerState,
+    lines: &[String],
+    visible_lines: usize,
+) -> bool {
+    // Only auto-scroll if actively dragging and in horizontal scroll mode
+    if !state.mouse_dragging || state.is_line_wrapping_enabled() {
+        return false;
+    }
+
+    // Check if we have a stored drag position
+    let Some((visual_line, column)) = state.last_drag_position else {
+        return false;
+    };
+
+    let line_num_width = crate::coordinates::line_number_width(state.settings);
+    let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let text_end = state.term_width.saturating_sub(scrollbar_width);
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+
+    let mut scrolled = false;
+
+    // Check if mouse is at or beyond the right text boundary
+    if column >= text_end {
+        // Mouse beyond visible text area - scroll and extend selection to end of line
+        let absolute_line = state.top_line + visual_line.min(visible_lines.saturating_sub(1));
+        if absolute_line < lines.len() {
+            let line = &lines[absolute_line];
+            use crate::coordinates::visual_width;
+            let line_visual_width = visual_width(line, state.settings.tab_width);
+
+            // Only scroll if the end of the line is not yet visible
+            let end_visible = state.horizontal_scroll_offset + text_width >= line_visual_width;
+
+            if !end_visible && state.horizontal_scroll_offset < line_visual_width {
+                let scroll_speed = state.settings.horizontal_auto_scroll_speed;
+                state.horizontal_scroll_offset = (state.horizontal_scroll_offset + scroll_speed).min(line_visual_width);
+                state.needs_redraw = true;
+                scrolled = true;
+            }
+
+            // Always extend selection to end of line when mouse is beyond text boundary
+            state.cursor_line = absolute_line.saturating_sub(state.top_line);
+            state.cursor_col = line.len(); // Set to end of line
+            state.update_selection();
+        }
+    }
+    // Check if mouse is at the left edge (on line numbers)
+    else if column <= line_num_width {
+        if state.horizontal_scroll_offset > 0 {
+            let scroll_speed = state.settings.horizontal_auto_scroll_speed;
+            state.horizontal_scroll_offset = state.horizontal_scroll_offset.saturating_sub(scroll_speed);
+            state.needs_redraw = true;
+            scrolled = true;
+        }
+    }
+
+
+    scrolled
+}
+
 pub(crate) fn handle_mouse_event(
     state: &mut FileViewerState,
     lines: &mut Vec<String>,
@@ -487,6 +550,7 @@ pub(crate) fn handle_mouse_event(
                 finalize_drag(state, lines, modifiers.contains(KeyModifiers::CONTROL));
             }
             state.mouse_dragging = false;
+            state.last_drag_position = None; // Clear drag position
         }
         MouseEventKind::ScrollDown => {
             let scroll_amount = state.settings.mouse_scroll_lines;
@@ -514,6 +578,16 @@ fn handle_mouse_click(
         restore_cursor_to_screen(state);
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = col.min(lines[logical_line].len());
+
+        // Reset horizontal scroll if clicking on empty/short line in horizontal scroll mode
+        if !state.is_line_wrapping_enabled() {
+            let line_len = lines[logical_line].len();
+            // If line is shorter than current scroll offset, reset scroll to show the line
+            if line_len <= state.horizontal_scroll_offset {
+                state.horizontal_scroll_offset = 0;
+            }
+        }
+
         state.clear_selection();
         state.mouse_dragging = true;
         state.needs_redraw = true;
@@ -531,6 +605,10 @@ fn handle_mouse_drag(
     if !state.mouse_dragging {
         return;
     }
+
+    // Store current drag position for continuous auto-scroll
+    state.last_drag_position = Some((visual_line, column));
+
     // Initialize selection on first drag
     if state.selection_anchor.is_none() {
         let pos = state.current_position();
@@ -540,13 +618,58 @@ fn handle_mouse_drag(
         // Enable block selection if Alt key is pressed
         state.block_selection = modifiers.contains(KeyModifiers::ALT);
     }
+
+    // Handle horizontal auto-scroll and selection when dragging in horizontal scroll mode
+    if !state.is_line_wrapping_enabled() {
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+        let text_end = state.term_width.saturating_sub(scrollbar_width);
+        let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+
+        // Check if mouse is at or beyond text boundary (scroll zone)
+        if column >= text_end {
+            // Mouse is beyond visible text area - scroll and extend selection to end of line
+            let absolute_line = state.top_line + visual_line.min(visible_lines.saturating_sub(1));
+            if absolute_line < lines.len() {
+                let line = &lines[absolute_line];
+                use crate::coordinates::visual_width;
+                let line_visual_width = visual_width(line, state.settings.tab_width);
+
+                // Only scroll if the end of the line is not yet visible
+                let end_visible = state.horizontal_scroll_offset + text_width >= line_visual_width;
+
+                if !end_visible && state.horizontal_scroll_offset < line_visual_width {
+                    let scroll_speed = state.settings.horizontal_auto_scroll_speed;
+                    state.horizontal_scroll_offset = (state.horizontal_scroll_offset + scroll_speed).min(line_visual_width);
+                    state.needs_redraw = true;
+                }
+
+                // Always extend selection to end of line when mouse is beyond text boundary
+                restore_cursor_to_screen(state);
+                state.cursor_line = absolute_line.saturating_sub(state.top_line);
+                state.cursor_col = line.len(); // Set to end of line
+                state.update_selection();
+                state.needs_redraw = true;
+            }
+            return; // Handled, don't process further
+        } else if column <= line_num_width {
+            // Mouse on line numbers - scroll left
+            if state.horizontal_scroll_offset > 0 {
+                let scroll_speed = state.settings.horizontal_auto_scroll_speed;
+                state.horizontal_scroll_offset = state.horizontal_scroll_offset.saturating_sub(scroll_speed);
+                state.needs_redraw = true;
+            }
+        }
+    }
+
+    // Normal mouse position handling (within visible text area)
     if let Some((logical_line, col)) =
         visual_to_logical_position(state, lines, visual_line, column, visible_lines)
         && logical_line < lines.len()
     {
         restore_cursor_to_screen(state);
         state.cursor_line = logical_line.saturating_sub(state.top_line);
-        state.cursor_col = col;
+        state.cursor_col = col.min(lines[logical_line].len()); // Clamp to line length
         state.update_selection();
         state.needs_redraw = true;
     }

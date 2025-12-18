@@ -3,7 +3,7 @@ use crate::settings::Settings;
 
 /// Calculate the visual width of a string, considering tabs
 /// Tabs are expanded to the next multiple of tab_width
-pub(crate) fn visual_width(s: &str, tab_width: usize) -> usize {
+pub fn visual_width(s: &str, tab_width: usize) -> usize {
     let mut width = 0;
     for ch in s.chars() {
         if ch == '\t' {
@@ -50,7 +50,22 @@ pub(crate) fn calculate_wrapped_lines_for_line(
     text_width: u16,
     tab_width: usize,
 ) -> u16 {
+    calculate_wrapped_lines_for_line_with_wrapping(lines, line_index, text_width, tab_width, true)
+}
+
+pub(crate) fn calculate_wrapped_lines_for_line_with_wrapping(
+    lines: &[String],
+    line_index: usize,
+    text_width: u16,
+    tab_width: usize,
+    wrapping_enabled: bool,
+) -> u16 {
     if line_index >= lines.len() {
+        return 1;
+    }
+
+    // If wrapping is disabled, each logical line is exactly 1 visual line
+    if !wrapping_enabled {
         return 1;
     }
 
@@ -143,13 +158,25 @@ pub(crate) fn visual_to_logical_position(
     let mut logical_line = state.top_line;
 
     while logical_line < lines.len() {
-        let wrapped_lines =
-            calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width) as usize;
+        let wrapping_enabled = state.is_line_wrapping_enabled();
+        let wrapped_lines = if wrapping_enabled {
+            calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width) as usize
+        } else {
+            1  // No wrapping - each line is exactly 1 visual line
+        };
 
         if current_visual_line + wrapped_lines > visual_line {
             // This is the logical line we're looking for
             let line_offset = visual_line - current_visual_line;
-            let visual_col_in_line = line_offset * (text_width as usize) + text_col;
+
+            // Calculate visual column in line, accounting for horizontal scroll
+            let visual_col_in_line = if wrapping_enabled {
+                // Wrapped mode: calculate based on which wrapped segment we're on
+                line_offset * (text_width as usize) + text_col
+            } else {
+                // Horizontal scroll mode: add scroll offset to screen column
+                state.horizontal_scroll_offset + text_col
+            };
 
             // Convert visual column to character index considering tabs
             let line = &lines[logical_line];
@@ -165,7 +192,7 @@ pub(crate) fn visual_to_logical_position(
 }
 
 /// Convert a visual column position to a character index, considering tabs
-pub(crate) fn visual_col_to_char_index(line: &str, visual_col: usize, tab_width: usize) -> usize {
+pub fn visual_col_to_char_index(line: &str, visual_col: usize, tab_width: usize) -> usize {
     let mut current_visual = 0;
     for (char_idx, ch) in line.chars().enumerate() {
         if current_visual >= visual_col {
@@ -516,9 +543,11 @@ mod tests {
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
             horizontal_scroll_offset: 0,
+            line_wrapping_override: None,
             last_click_time: None,
             last_click_pos: None,
             click_count: 0,
+            last_drag_position: None,
         }
     }
 

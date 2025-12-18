@@ -5,7 +5,7 @@ use std::time::Instant;
 /// Type alias for cursor/selection position (line, column)
 pub(crate) type Position = (usize, usize);
 
-pub(crate) struct FileViewerState<'a> {
+pub struct FileViewerState<'a> {
     pub(crate) top_line: usize,
     pub(crate) cursor_line: usize,
     pub(crate) cursor_col: usize,
@@ -93,8 +93,10 @@ pub(crate) struct FileViewerState<'a> {
     pub(crate) help_scroll_offset: usize,
     /// Horizontal scroll offset (character offset from line start)
     /// Only used when line_wrapping is false
-    #[allow(dead_code)]
     pub(crate) horizontal_scroll_offset: usize,
+    /// Runtime line wrapping toggle (overrides settings.line_wrapping)
+    /// None means use settings.line_wrapping, Some means user toggled at runtime
+    pub(crate) line_wrapping_override: Option<bool>,
     /// Last mouse click time for detecting double/triple clicks
     #[allow(dead_code)]
     pub(crate) last_click_time: Option<Instant>,
@@ -104,6 +106,8 @@ pub(crate) struct FileViewerState<'a> {
     /// Number of consecutive clicks at the same position
     #[allow(dead_code)]
     pub(crate) click_count: usize,
+    /// Last mouse drag position (visual_line, column) for continuous auto-scroll
+    pub(crate) last_drag_position: Option<(usize, u16)>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -158,9 +162,11 @@ impl<'a> FileViewerState<'a> {
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
             horizontal_scroll_offset: 0,
+            line_wrapping_override: None,
             last_click_time: None,
             last_click_pos: None,
             click_count: 0,
+            last_drag_position: None,
         }
     }
 
@@ -375,6 +381,22 @@ impl<'a> FileViewerState<'a> {
         positions.dedup();
         positions
     }
+
+    /// Check if line wrapping is currently enabled (considers runtime override)
+    pub(crate) fn is_line_wrapping_enabled(&self) -> bool {
+        self.line_wrapping_override.unwrap_or(self.settings.line_wrapping)
+    }
+
+    /// Toggle line wrapping at runtime
+    pub(crate) fn toggle_line_wrapping(&mut self) {
+        let current = self.is_line_wrapping_enabled();
+        self.line_wrapping_override = Some(!current);
+        // Reset horizontal scroll when enabling wrapping
+        if !current {
+            self.horizontal_scroll_offset = 0;
+        }
+    }
+
 
     /// Update cursor blink state (toggles every 500ms)
     /// Returns true if blink state changed and redraw is needed
@@ -717,3 +739,49 @@ mod tests {
         assert_eq!(state.selection_end, Some((3, 5)));
     }
 }
+
+// Public test helper methods (only exposed for integration tests via lib.rs)
+impl<'a> FileViewerState<'a> {
+    /// Create new state (for testing)
+    #[allow(dead_code)]
+    pub fn new_for_test(term_width: u16, undo_history: UndoHistory, settings: &'a Settings) -> Self {
+        Self::new(term_width, undo_history, settings)
+    }
+
+    /// Toggle line wrapping (for testing)
+    #[allow(dead_code)]
+    pub fn toggle_line_wrapping_for_test(&mut self) {
+        self.toggle_line_wrapping();
+    }
+
+    /// Check if line wrapping is enabled (for testing) - public wrapper
+    #[allow(dead_code)]
+    pub fn is_line_wrapping_enabled_for_test(&self) -> bool {
+        self.is_line_wrapping_enabled()
+    }
+
+    /// Get horizontal scroll offset (for testing)
+    #[allow(dead_code)]
+    pub fn get_horizontal_scroll_offset(&self) -> usize {
+        self.horizontal_scroll_offset
+    }
+
+    /// Set horizontal scroll offset (for testing)
+    #[allow(dead_code)]
+    pub fn set_horizontal_scroll_offset(&mut self, offset: usize) {
+        self.horizontal_scroll_offset = offset;
+    }
+
+    /// Get cursor column (for testing)
+    #[allow(dead_code)]
+    pub fn get_cursor_col(&self) -> usize {
+        self.cursor_col
+    }
+
+    /// Set cursor column (for testing)
+    #[allow(dead_code)]
+    pub fn set_cursor_col(&mut self, col: usize) {
+        self.cursor_col = col;
+    }
+}
+

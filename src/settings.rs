@@ -21,6 +21,8 @@ pub(crate) struct KeyBindings {
     pub(crate) help: String,
     #[serde(default = "default_save_and_quit")]
     pub(crate) save_and_quit: String,
+    #[serde(default = "default_toggle_line_wrap")]
+    pub(crate) toggle_line_wrap: String,
 }
 
 fn default_save_and_quit() -> String {
@@ -29,6 +31,10 @@ fn default_save_and_quit() -> String {
 
 fn default_help() -> String {
     "F1".into()
+}
+
+fn default_toggle_line_wrap() -> String {
+    "Alt+w".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -46,7 +52,7 @@ pub(crate) struct AppearanceSettings {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub(crate) struct Settings {
+pub struct Settings {
     pub(crate) keybindings: KeyBindings,
     #[serde(default = "default_tab_width")]
     pub(crate) tab_width: usize,
@@ -58,6 +64,8 @@ pub(crate) struct Settings {
     pub(crate) mouse_scroll_lines: usize,
     #[serde(default = "default_line_wrapping")]
     pub(crate) line_wrapping: bool,
+    #[serde(default = "default_horizontal_auto_scroll_speed")]
+    pub(crate) horizontal_auto_scroll_speed: usize,
     #[serde(default = "default_appearance")]
     pub(crate) appearance: AppearanceSettings,
 }
@@ -79,6 +87,9 @@ fn default_mouse_scroll_lines() -> usize {
 }
 fn default_line_wrapping() -> bool {
     true
+}
+fn default_horizontal_auto_scroll_speed() -> usize {
+    1 // Scroll 1 character per event loop iteration
 }
 fn default_line_number_digits() -> u8 {
     3
@@ -144,6 +155,20 @@ impl Default for Settings {
     }
 }
 
+impl Settings {
+    /// Get tab width (for testing)
+    #[allow(dead_code)]
+    pub fn get_tab_width(&self) -> usize {
+        self.tab_width
+    }
+
+    /// Get horizontal auto scroll speed (for testing)
+    #[allow(dead_code)]
+    pub fn get_horizontal_auto_scroll_speed(&self) -> usize {
+        self.horizontal_auto_scroll_speed
+    }
+}
+
 impl KeyBindings {
     pub fn quit_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.quit, code, modifiers)
@@ -183,6 +208,9 @@ impl KeyBindings {
     }
     pub fn save_and_quit_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.save_and_quit, code, modifiers)
+    }
+    pub fn toggle_line_wrap_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.toggle_line_wrap, code, modifiers)
     }
 
     #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
@@ -295,6 +323,7 @@ mod tests {
             goto_line: "Ctrl+g".into(),
             help: "F1".into(),
             save_and_quit: "Ctrl+q".into(),
+            toggle_line_wrap: "Alt+w".into(),
         }
     }
 

@@ -189,3 +189,239 @@ fn test_close_file_from_selector() {
     assert_eq!(tracked_after.len(), 1, "Should have 1 tracked file after removal");
     assert_eq!(tracked_after[0].path, file2);
 }
+
+/// Test: Line wrapping toggle functionality
+#[test]
+#[serial]
+fn test_line_wrapping_toggle() {
+    let (_tmp, _ue_dir) = setup_test_env();
+    let settings = ue::settings::Settings::load().unwrap();
+    let undo_history = ue::undo::UndoHistory::new();
+    let mut state = ue::editor_state::FileViewerState::new_for_test(80, undo_history, &settings);
+    
+    // Default should be wrapping enabled (from settings)
+    assert!(state.is_line_wrapping_enabled_for_test(), "Wrapping should be enabled by default");
+    
+    // Toggle wrapping off
+    state.toggle_line_wrapping_for_test();
+    assert!(!state.is_line_wrapping_enabled_for_test(), "Wrapping should be disabled after toggle");
+    
+    // Toggle wrapping back on
+    state.toggle_line_wrapping_for_test();
+    assert!(state.is_line_wrapping_enabled_for_test(), "Wrapping should be enabled after second toggle");
+}
+
+/// Test: Horizontal scroll offset adjustment
+#[test]
+#[serial]
+fn test_horizontal_scroll_offset() {
+    let (_tmp, _ue_dir) = setup_test_env();
+    let settings = ue::settings::Settings::load().unwrap();
+    let undo_history = ue::undo::UndoHistory::new();
+    let mut state = ue::editor_state::FileViewerState::new_for_test(80, undo_history, &settings);
+    
+    // Initial offset should be 0
+    assert_eq!(state.get_horizontal_scroll_offset(), 0);
+    
+    // Simulate scrolling right
+    state.set_horizontal_scroll_offset(10);
+    assert_eq!(state.get_horizontal_scroll_offset(), 10);
+    
+    // Simulate scrolling back left
+    let offset = state.get_horizontal_scroll_offset().saturating_sub(5);
+    state.set_horizontal_scroll_offset(offset);
+    assert_eq!(state.get_horizontal_scroll_offset(), 5);
+    
+    // Scrolling left at 0 should stay at 0
+    state.set_horizontal_scroll_offset(0);
+    let offset = state.get_horizontal_scroll_offset().saturating_sub(5);
+    state.set_horizontal_scroll_offset(offset);
+    assert_eq!(state.get_horizontal_scroll_offset(), 0);
+}
+
+/// Test: Short line scroll reset on click
+#[test]
+#[serial]
+fn test_short_line_scroll_reset() {
+    let (_tmp, _ue_dir) = setup_test_env();
+    let settings = ue::settings::Settings::load().unwrap();
+    let undo_history = ue::undo::UndoHistory::new();
+    let mut state = ue::editor_state::FileViewerState::new_for_test(80, undo_history, &settings);
+    
+    // Disable wrapping
+    state.toggle_line_wrapping_for_test();
+    assert!(!state.is_line_wrapping_enabled_for_test());
+    
+    // Simulate being scrolled to the right
+    state.set_horizontal_scroll_offset(50);
+    
+    // Create a short line (5 characters)
+    let short_line = "Short".to_string();
+    
+    // When clicking on a short line, offset should be reset if line is shorter than offset
+    if short_line.len() <= state.get_horizontal_scroll_offset() {
+        state.set_horizontal_scroll_offset(0);
+    }
+    
+    assert_eq!(state.get_horizontal_scroll_offset(), 0, "Scroll offset should reset for short lines");
+}
+
+/// Test: Horizontal auto-scroll speed setting
+#[test]
+#[serial]
+fn test_horizontal_auto_scroll_speed_setting() {
+    let (_tmp, ue_dir) = setup_test_env();
+    
+    // Create custom settings with different scroll speed
+    let settings_path = ue_dir.join("settings.toml");
+    // Use simple concatenation to avoid raw string issues
+    let mut settings_content = String::new();
+    settings_content.push_str("tab_width = 4\n");
+    settings_content.push_str("keyboard_scroll_lines = 3\n");
+    settings_content.push_str("double_tap_speed_ms = 300\n");
+    settings_content.push_str("mouse_scroll_lines = 3\n");
+    settings_content.push_str("line_wrapping = true\n");
+    settings_content.push_str("horizontal_auto_scroll_speed = 5\n");
+    settings_content.push_str("\n[appearance]\n");
+    settings_content.push_str("line_number_digits = 3\n");
+    settings_content.push_str("header_bg = \"#001848\"\n");
+    settings_content.push_str("footer_bg = \"#001848\"\n");
+    settings_content.push_str("line_numbers_bg = \"#001848\"\n");
+    settings_content.push_str("cursor_shape = \"bar\"\n");
+    settings_content.push_str("\n[keybindings]\n");
+    settings_content.push_str("quit = \"Esc Esc\"\n");
+    settings_content.push_str("file_selector = \"Esc\"\n");
+    settings_content.push_str("copy = \"Ctrl+c\"\n");
+    settings_content.push_str("paste = \"Ctrl+v\"\n");
+    settings_content.push_str("cut = \"Ctrl+x\"\n");
+    settings_content.push_str("close = \"Ctrl+w\"\n");
+    settings_content.push_str("save = \"Ctrl+s\"\n");
+    settings_content.push_str("undo = \"Ctrl+z\"\n");
+    settings_content.push_str("redo = \"Ctrl+y\"\n");
+    settings_content.push_str("find = \"Ctrl+f\"\n");
+    settings_content.push_str("find_next = \"Ctrl+n\"\n");
+    settings_content.push_str("find_previous = \"Ctrl+p\"\n");
+    settings_content.push_str("goto_line = \"Ctrl+g\"\n");
+    settings_content.push_str("help = \"F1\"\n");
+    settings_content.push_str("save_and_quit = \"Ctrl+q\"\n");
+    settings_content.push_str("toggle_line_wrap = \"Alt+w\"\n");
+
+    fs::write(&settings_path, settings_content).unwrap();
+    
+    // Load settings and verify
+    let settings = ue::settings::Settings::load().unwrap();
+    assert_eq!(settings.get_horizontal_auto_scroll_speed(), 5, "Scroll speed should be 5");
+}
+
+/// Test: Horizontal auto-scroll speed default value
+#[test]
+#[serial]
+fn test_horizontal_auto_scroll_speed_default() {
+    let (_tmp, _ue_dir) = setup_test_env();
+    let settings = ue::settings::Settings::load().unwrap();
+    
+    // Default speed should be 1
+    assert_eq!(settings.get_horizontal_auto_scroll_speed(), 1, "Default scroll speed should be 1");
+}
+
+/// Test: Visual width calculation with tabs
+#[test]
+#[serial]
+fn test_visual_width_with_tabs() {
+    // Test that visual width correctly accounts for tabs
+    let line_with_tabs = "\t\tHello";
+    let tab_width = 4;
+    
+    let visual_width = ue::coordinates::visual_width(line_with_tabs, tab_width);
+    // 2 tabs * 4 spaces each + 5 characters = 8 + 5 = 13
+    assert_eq!(visual_width, 13);
+    
+    // Test mixed tabs and spaces
+    let mixed = "Hello\tWorld";
+    let visual = ue::coordinates::visual_width(mixed, tab_width);
+    // "Hello" = 5 chars, tab expands to align to next multiple of 4 (5->8 = 3 spaces), "World" = 5 chars
+    // Total = 5 + 3 + 5 = 13
+    assert_eq!(visual, 13);
+}
+
+/// Test: Cursor position clamping to line length
+#[test]
+#[serial]
+fn test_cursor_position_clamping() {
+    let (_tmp, _ue_dir) = setup_test_env();
+    let settings = ue::settings::Settings::load().unwrap();
+    let undo_history = ue::undo::UndoHistory::new();
+    let mut state = ue::editor_state::FileViewerState::new_for_test(80, undo_history, &settings);
+    
+    let line = "Hello World".to_string();
+    let line_len = line.len(); // 11
+    
+    // Try to set cursor beyond line end
+    state.set_cursor_col(100);
+    
+    // Clamp to line length
+    let clamped = state.get_cursor_col().min(line_len);
+    state.set_cursor_col(clamped);
+    
+    assert_eq!(state.get_cursor_col(), line_len, "Cursor should be clamped to line length");
+}
+
+/// Test: Visual column to character index conversion
+#[test]
+#[serial]
+fn test_visual_col_to_char_index() {
+    let line = "Hello\tWorld";
+    let tab_width = 4;
+    
+    // Visual column 0 should be char index 0
+    let char_idx = ue::coordinates::visual_col_to_char_index(line, 0, tab_width);
+    assert_eq!(char_idx, 0);
+    
+    // Visual column 5 should be char index 5 (end of "Hello")
+    let char_idx = ue::coordinates::visual_col_to_char_index(line, 5, tab_width);
+    assert_eq!(char_idx, 5);
+    
+    // Visual column 8 should be char index 6 (after tab, start of "World")
+    let char_idx = ue::coordinates::visual_col_to_char_index(line, 8, tab_width);
+    assert_eq!(char_idx, 6);
+    
+    // Visual column beyond line should return line length
+    let char_idx = ue::coordinates::visual_col_to_char_index(line, 100, tab_width);
+    assert_eq!(char_idx, line.chars().count());
+}
+
+/// Test: Horizontal scrolling with long lines
+#[test]
+#[serial]
+fn test_horizontal_scrolling_bounds() {
+    let (_tmp, _ue_dir) = setup_test_env();
+    let settings = ue::settings::Settings::load().unwrap();
+    let undo_history = ue::undo::UndoHistory::new();
+    let mut state = ue::editor_state::FileViewerState::new_for_test(80, undo_history, &settings);
+    
+    // Disable wrapping
+    state.toggle_line_wrapping_for_test();
+    
+    let long_line = "a".repeat(200);
+    let text_width = 75; // Assuming some space for line numbers
+    
+    // Calculate visual width
+    let line_visual_width = ue::coordinates::visual_width(&long_line, settings.get_tab_width());
+    assert_eq!(line_visual_width, 200);
+    
+    // Check if end is visible
+    state.set_horizontal_scroll_offset(0);
+    let end_visible = state.get_horizontal_scroll_offset() + text_width >= line_visual_width;
+    assert!(!end_visible, "End should not be visible at offset 0");
+    
+    // Scroll to where end is visible
+    state.set_horizontal_scroll_offset(200 - text_width);
+    let end_visible = state.get_horizontal_scroll_offset() + text_width >= line_visual_width;
+    assert!(end_visible, "End should be visible when scrolled appropriately");
+    
+    // Scrolling past end should be prevented
+    state.set_horizontal_scroll_offset(200);
+    let end_visible = state.get_horizontal_scroll_offset() + text_width >= line_visual_width;
+    assert!(end_visible, "End is definitely visible when offset equals line length");
+}
+

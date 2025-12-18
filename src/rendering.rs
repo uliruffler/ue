@@ -263,10 +263,13 @@ fn render_footer(
         let mut remaining = visible_lines;
         let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
         let tab_width = state.settings.tab_width;
+        let wrapping_enabled = state.is_line_wrapping_enabled();
         while remaining > 0 && last_visible_line < lines.len() {
-            let wrapped =
-                calculate_wrapped_lines_for_line(lines, last_visible_line, text_width, tab_width)
-                    as usize;
+            let wrapped = if wrapping_enabled {
+                calculate_wrapped_lines_for_line(lines, last_visible_line, text_width, tab_width) as usize
+            } else {
+                1  // No wrapping - each line is exactly 1 visual line
+            };
             if wrapped <= remaining {
                 remaining -= wrapped;
                 last_visible_line += 1;
@@ -425,12 +428,19 @@ fn render_line(
     let expanded_line = expand_tabs(line, tab_width);
     let chars: Vec<char> = expanded_line.chars().collect();
 
-    let num_wrapped_lines = calculate_wrapped_lines_for_line(
-        ctx.lines,
-        logical_line_index,
-        crate::coordinates::calculate_text_width(ctx.state, ctx.lines, ctx.visible_lines),
-        tab_width,
-    );
+    // Check if wrapping is enabled
+    let wrapping_enabled = ctx.state.is_line_wrapping_enabled();
+
+    let num_wrapped_lines = if wrapping_enabled {
+        calculate_wrapped_lines_for_line(
+            ctx.lines,
+            logical_line_index,
+            crate::coordinates::calculate_text_width(ctx.state, ctx.lines, ctx.visible_lines),
+            tab_width,
+        )
+    } else {
+        1 // No wrapping - each logical line is exactly 1 visual line
+    };
 
     let lines_to_render = (num_wrapped_lines as usize).min(remaining_visible_lines);
 
@@ -474,10 +484,21 @@ fn render_line(
             }
         }
 
-        let start_visual = wrap_index * available_width;
-        let end_visual = ((wrap_index + 1) * available_width).min(chars.len());
+        // Calculate visible segment based on wrapping mode
+        let (start_visual, end_visual) = if wrapping_enabled {
+            // Wrapped mode: show segment at wrap_index
+            let start = wrap_index * available_width;
+            let end = ((wrap_index + 1) * available_width).min(chars.len());
+            (start, end)
+        } else {
+            // Horizontal scroll mode: apply horizontal offset to entire document
+            let start = ctx.state.horizontal_scroll_offset;
+            let end = (start + available_width).min(chars.len());
+            (start, end)
+        };
 
-        if start_visual < chars.len() {
+        // Render content if there's any visible part of the line
+        let content_width = if start_visual < chars.len() {
             let segment = SegmentInfo {
                 line_index: logical_line_index,
                 start_visual,
@@ -494,15 +515,19 @@ fn render_line(
             } else {
                 render_line_segment_expanded(stdout, &chars, line, ctx, &segment)?;
             }
-        }
+            (end_visual - start_visual) as u16
+        } else {
+            // Line is shorter than horizontal scroll offset - render as empty
+            // (but still takes up a visual row)
+            0
+        };
 
         // Calculate current column position after rendering content
         let current_col = if ctx.state.settings.appearance.line_number_digits > 0 {
             let line_num_width = ctx.state.settings.appearance.line_number_digits as u16 + 1;
-            let content_width = (end_visual - start_visual) as u16;
             line_num_width + content_width
         } else {
-            (end_visual - start_visual) as u16
+            content_width
         };
         clear_to_scrollbar(stdout, ctx.state, ctx.lines, ctx.visible_lines, current_col)?;
     }
@@ -681,17 +706,33 @@ fn position_cursor(
         let tab_width = state.settings.tab_width;
         if target_line < lines.len() {
             let mut cursor_y = 1u16;
+            let wrapping_enabled = state.is_line_wrapping_enabled();
             for logical in state.top_line..target_line {
-                cursor_y += calculate_wrapped_lines_for_line(lines, logical, text_width, tab_width);
+                let wrapped_lines = if wrapping_enabled {
+                    calculate_wrapped_lines_for_line(lines, logical, text_width, tab_width)
+                } else {
+                    1  // No wrapping - each line is exactly 1 visual line
+                };
+                cursor_y += wrapped_lines;
             }
             let visual_col = visual_width_up_to(
                 &lines[target_line],
                 target_col.min(lines[target_line].len()),
                 tab_width,
             );
-            let wrapped_line = visual_col / (text_width as usize);
-            cursor_y += wrapped_line as u16;
-            let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+
+            // Calculate position based on wrapping mode
+            let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
+                let wrapped_line = visual_col / (text_width as usize);
+                let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+                (cursor_x, wrapped_line as u16)
+            } else {
+                // Horizontal scroll mode: apply horizontal offset
+                let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
+                (cursor_x, 0)
+            };
+
+            cursor_y += wrapped_offset;
             execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
             apply_cursor_shape(stdout, state.settings)?;
             execute!(stdout, cursor::Show)?;
@@ -737,17 +778,33 @@ fn position_cursor(
 
             // Calculate Y position for this cursor
             let mut cursor_y = 1u16;
+            let wrapping_enabled = state.is_line_wrapping_enabled();
             for i in state.top_line..cursor_line_abs {
-                cursor_y += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width);
+                let wrapped_lines = if wrapping_enabled {
+                    calculate_wrapped_lines_for_line(lines, i, text_width, tab_width)
+                } else {
+                    1  // No wrapping - each line is exactly 1 visual line
+                };
+                cursor_y += wrapped_lines;
             }
 
             // Calculate X position
             let line_len = lines[cursor_line_abs].chars().count();
             let actual_col = cursor_col.min(line_len);
             let visual_col = visual_width_up_to(&lines[cursor_line_abs], actual_col, tab_width);
-            let cursor_wrapped_line = visual_col / (text_width as usize);
-            cursor_y += cursor_wrapped_line as u16;
-            let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+
+            // Calculate position based on wrapping mode
+            let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
+                let cursor_wrapped_line = visual_col / (text_width as usize);
+                let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+                (cursor_x, cursor_wrapped_line as u16)
+            } else {
+                // Horizontal scroll mode: apply horizontal offset
+                let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
+                (cursor_x, 0)
+            };
+
+            cursor_y += wrapped_offset;
 
             // Get the character at this position (or space if at end of line)
             let char_at_cursor = if cursor_col < line_len {
@@ -776,9 +833,16 @@ fn position_cursor(
 
     let tab_width = state.settings.tab_width;
     let mut cursor_y = 1u16;
+
+    // Calculate Y position based on wrapping mode
+    let wrapping_enabled = state.is_line_wrapping_enabled();
     for i in 0..state.cursor_line {
-        cursor_y +=
-            calculate_wrapped_lines_for_line(lines, state.top_line + i, text_width, tab_width);
+        let wrapped_lines = if wrapping_enabled {
+            calculate_wrapped_lines_for_line(lines, state.top_line + i, text_width, tab_width)
+        } else {
+            1  // No wrapping - each line is exactly 1 visual line
+        };
+        cursor_y += wrapped_lines;
     }
     let cursor_line_idx = state.absolute_line();
     let visual_col = if cursor_line_idx < lines.len() {
@@ -786,9 +850,21 @@ fn position_cursor(
     } else {
         0
     };
-    let cursor_wrapped_line = visual_col / (text_width as usize);
-    cursor_y += cursor_wrapped_line as u16;
-    let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+
+    // Calculate cursor position based on wrapping mode
+    let (cursor_x, cursor_y_offset) = if state.is_line_wrapping_enabled() {
+        // Wrapped mode: cursor can be on any wrapped line segment
+        let cursor_wrapped_line = visual_col / (text_width as usize);
+        let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+        (cursor_x, cursor_wrapped_line as u16)
+    } else {
+        // Horizontal scroll mode: cursor is always on the first (only) visual line
+        // Apply horizontal scroll offset
+        let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
+        (cursor_x, 0)
+    };
+
+    cursor_y += cursor_y_offset;
     execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
     apply_cursor_shape(stdout, state.settings)?;
     execute!(stdout, cursor::Show)?;

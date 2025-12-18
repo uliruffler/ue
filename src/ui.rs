@@ -700,6 +700,12 @@ fn editing_session(
         };
 
         if !event::poll(timeout)? {
+            // Handle continuous horizontal auto-scroll during mouse drag
+            if crate::mouse_handlers::handle_continuous_auto_scroll(&mut state, &lines, visible_lines) {
+                // Scrolling occurred, continue to next iteration to render
+                continue;
+            }
+            
             // Update cursor blink state for multi-cursors
             if state.update_cursor_blink() {
                 state.needs_redraw = true;
