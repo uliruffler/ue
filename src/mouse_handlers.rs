@@ -576,8 +576,8 @@ pub(crate) fn handle_mouse_event(
         }
         MouseEventKind::ScrollDown => {
             if modifiers.contains(KeyModifiers::SHIFT) {
-                // Shift+ScrollDown = horizontal scroll left
-                handle_horizontal_scroll_left(state, lines, visible_lines);
+                // Shift+ScrollDown = horizontal scroll right
+                handle_horizontal_scroll_right(state, lines, visible_lines);
             } else {
                 // Normal scroll = vertical scroll down
                 let scroll_amount = state.settings.mouse_scroll_lines;
@@ -586,8 +586,8 @@ pub(crate) fn handle_mouse_event(
         }
         MouseEventKind::ScrollUp => {
             if modifiers.contains(KeyModifiers::SHIFT) {
-                // Shift+ScrollUp = horizontal scroll right
-                handle_horizontal_scroll_right(state, lines, visible_lines);
+                // Shift+ScrollUp = horizontal scroll left
+                handle_horizontal_scroll_left(state, lines, visible_lines);
             } else {
                 // Normal scroll = vertical scroll up
                 let scroll_amount = state.settings.mouse_scroll_lines;
