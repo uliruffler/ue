@@ -451,10 +451,26 @@ pub(crate) fn handle_mouse_event(
         return;
     }
 
-    // Check if click is on footer row (for search navigation)
+    // Check if click is on h-scrollbar row (last content line when h-scrollbar is shown)
+    let h_scrollbar_row = visible_lines as u16;
     let footer_row = (visible_lines + 1) as u16;
-    if row == footer_row && kind == MouseEventKind::Down(MouseButton::Left) {
-        handle_footer_click(state, lines, column, visible_lines);
+
+    if row == h_scrollbar_row {
+        if kind == MouseEventKind::Down(MouseButton::Left) {
+            // Check if it's on horizontal scrollbar
+            if is_horizontal_scrollbar_click(state, lines, column, visible_lines) {
+                handle_horizontal_scrollbar_click(state, lines, column, visible_lines);
+                return;
+            }
+        }
+        // If not on h-scrollbar, treat as regular content click (fall through)
+    }
+
+    // Check if click is on footer row
+    if row == footer_row {
+        if kind == MouseEventKind::Down(MouseButton::Left) {
+            handle_footer_click(state, lines, column, visible_lines);
+        }
         return;
     }
 
@@ -522,8 +538,11 @@ pub(crate) fn handle_mouse_event(
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if state.scrollbar_dragging {
-                // Handle scrollbar dragging
+                // Handle vertical scrollbar dragging
                 handle_scrollbar_drag(state, lines, row, visible_lines);
+            } else if state.h_scrollbar_dragging {
+                // Handle horizontal scrollbar dragging
+                handle_horizontal_scrollbar_drag(state, lines, column, visible_lines);
             } else if state.dragging_selection_active {
                 if let Some((logical_line, col)) =
                     visual_to_logical_position(state, lines, visual_line, column, visible_lines)
@@ -545,6 +564,9 @@ pub(crate) fn handle_mouse_event(
         MouseEventKind::Up(MouseButton::Left) => {
             if state.scrollbar_dragging {
                 state.scrollbar_dragging = false;
+                state.needs_redraw = true;
+            } else if state.h_scrollbar_dragging {
+                state.h_scrollbar_dragging = false;
                 state.needs_redraw = true;
             } else if state.dragging_selection_active {
                 finalize_drag(state, lines, modifiers.contains(KeyModifiers::CONTROL));
@@ -2119,3 +2141,143 @@ mod tests {
 
     // ...existing tests...
 }
+
+/// Check if a mouse click is on the horizontal scrollbar
+fn is_horizontal_scrollbar_click(
+    state: &FileViewerState,
+    lines: &[String],
+    column: u16,
+    visible_lines: usize,
+) -> bool {
+    // Only when line wrapping is disabled
+    if state.is_line_wrapping_enabled() {
+        return false;
+    }
+
+    // Check if any line exceeds visible width
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+    let tab_width = state.settings.tab_width;
+    let max_line_width = lines.iter()
+        .map(|line| crate::coordinates::visual_width(line, tab_width))
+        .max()
+        .unwrap_or(0);
+
+    if max_line_width <= text_width {
+        return false;
+    }
+
+    // Check if click is within horizontal scrollbar area
+    let line_num_width = crate::coordinates::line_number_width(state.settings);
+    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let h_scrollbar_start = line_num_width;
+    let h_scrollbar_end = state.term_width.saturating_sub(v_scrollbar_width);
+
+    column >= h_scrollbar_start && column < h_scrollbar_end
+}
+
+/// Handle mouse click on horizontal scrollbar
+fn handle_horizontal_scrollbar_click(
+    state: &mut FileViewerState,
+    lines: &[String],
+    column: u16,
+    visible_lines: usize,
+) {
+    // Calculate scrollbar dimensions
+    let tab_width = state.settings.tab_width;
+    let max_line_width = lines.iter()
+        .map(|line| crate::coordinates::visual_width(line, tab_width))
+        .max()
+        .unwrap_or(0);
+
+    let line_num_width = crate::coordinates::line_number_width(state.settings) as usize;
+    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let available_width = (state.term_width as usize)
+        .saturating_sub(line_num_width)
+        .saturating_sub(v_scrollbar_width);
+
+    if available_width == 0 {
+        return;
+    }
+
+    let scrollbar_width = available_width;
+    let bar_width = ((available_width * available_width) / max_line_width).max(1);
+
+    // Calculate current bar position
+    let max_scroll = max_line_width.saturating_sub(available_width);
+    let scroll_progress = if max_scroll == 0 {
+        0.0
+    } else {
+        (state.horizontal_scroll_offset as f64 / max_scroll as f64).min(1.0)
+    };
+    let bar_position = ((scrollbar_width - bar_width) as f64 * scroll_progress) as usize;
+
+    // Convert click position to scrollbar-relative position
+    let click_x = (column as usize).saturating_sub(line_num_width);
+
+    // Check if click is on the bar itself
+    if click_x >= bar_position && click_x < bar_position + bar_width {
+        // Start dragging
+        state.h_scrollbar_dragging = true;
+        state.h_scrollbar_drag_start_offset = state.horizontal_scroll_offset;
+        state.h_scrollbar_drag_start_x = column;
+        state.h_scrollbar_drag_bar_offset = click_x - bar_position;
+    } else {
+        // Click in background - jump to that position
+        let target_scroll_progress = click_x as f64 / scrollbar_width as f64;
+        let target_offset = (max_scroll as f64 * target_scroll_progress) as usize;
+        state.horizontal_scroll_offset = target_offset.min(max_scroll);
+        state.needs_redraw = true;
+    }
+}
+
+/// Handle horizontal scrollbar dragging
+fn handle_horizontal_scrollbar_drag(
+    state: &mut FileViewerState,
+    lines: &[String],
+    column: u16,
+    visible_lines: usize,
+) {
+    if !state.h_scrollbar_dragging {
+        return;
+    }
+
+    // Calculate scrollbar dimensions
+    let tab_width = state.settings.tab_width;
+    let max_line_width = lines.iter()
+        .map(|line| crate::coordinates::visual_width(line, tab_width))
+        .max()
+        .unwrap_or(0);
+
+    let line_num_width = crate::coordinates::line_number_width(state.settings) as usize;
+    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let available_width = (state.term_width as usize)
+        .saturating_sub(line_num_width)
+        .saturating_sub(v_scrollbar_width);
+
+    if available_width == 0 {
+        return;
+    }
+
+    let scrollbar_width = available_width;
+    let bar_width = ((available_width * available_width) / max_line_width).max(1);
+    let max_scroll = max_line_width.saturating_sub(available_width);
+
+    // Calculate where the bar should be based on mouse position
+    let mouse_x = (column as usize).saturating_sub(line_num_width);
+    let target_bar_left = mouse_x.saturating_sub(state.h_scrollbar_drag_bar_offset);
+
+    // Calculate available scroll space
+    let available_scroll_space = scrollbar_width.saturating_sub(bar_width);
+
+    if available_scroll_space == 0 {
+        return;
+    }
+
+    // Calculate target offset
+    let scroll_progress = (target_bar_left as f64 / available_scroll_space as f64).min(1.0).max(0.0);
+    let target_offset = (max_scroll as f64 * scroll_progress) as usize;
+
+    state.horizontal_scroll_offset = target_offset.min(max_scroll);
+    state.needs_redraw = true;
+}
+

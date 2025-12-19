@@ -570,6 +570,7 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         calculate_visual_lines_to_cursor, calculate_wrapped_lines_for_line, visual_width_up_to,
     };
 
+    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
     let absolute_line = state.absolute_line();
     if absolute_line >= lines.len() {
         return;
@@ -588,9 +589,9 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         if absolute_line + 1 < lines.len() {
             state.cursor_line += 1;
             // Check if we need to scroll
-            if state.cursor_line >= visible_lines {
+            if state.cursor_line >= effective_visible_lines {
                 state.top_line += 1;
-                state.cursor_line = visible_lines - 1;
+                state.cursor_line = effective_visible_lines - 1;
             }
         }
         return;
@@ -611,8 +612,26 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
     } else {
         // We're on the last wrapped line, move to next logical line
         if absolute_line + 1 < lines.len() {
-            // Try moving to next logical line
-            state.cursor_line += 1;
+            // Check if we would go off-screen by moving cursor_line down
+            // Calculate visual lines from top_line to cursor_line + 1
+            let would_be_cursor_line = state.cursor_line + 1;
+            let saved_cursor_line = state.cursor_line;
+            state.cursor_line = would_be_cursor_line;
+
+            let visual_lines_consumed =
+                calculate_visual_lines_to_cursor(lines, state, text_width as u16);
+
+            let would_be_offscreen = visual_lines_consumed > effective_visible_lines;
+            state.cursor_line = saved_cursor_line; // Restore for now
+
+            if would_be_offscreen {
+                // Need to scroll instead of moving cursor
+                state.top_line += 1;
+                // cursor_line stays the same (we scroll the content, not the cursor position)
+            } else {
+                // Can move cursor without scrolling
+                state.cursor_line += 1;
+            }
 
             // Move to the first wrapped line of the next logical line
             let next_absolute = state.absolute_line();
@@ -621,25 +640,6 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                 let target_visual_col = visual_col % text_width;
                 state.cursor_col =
                     visual_col_to_char_index(next_line, target_visual_col, tab_width);
-            }
-
-            // Check if cursor is now beyond visible area (accounting for wrapped lines)
-            let visual_lines_consumed =
-                calculate_visual_lines_to_cursor(lines, state, text_width as u16);
-
-            if visual_lines_consumed > visible_lines {
-                // Cursor would be off-screen, scroll instead
-                state.cursor_line -= 1;
-                state.top_line += 1;
-
-                // Recalculate position after scroll
-                let current_absolute = state.absolute_line();
-                if current_absolute < lines.len() {
-                    let current_line = &lines[current_absolute];
-                    let target_visual_col = visual_col % text_width;
-                    state.cursor_col =
-                        visual_col_to_char_index(current_line, target_visual_col, tab_width);
-                }
             }
         }
     }
@@ -652,6 +652,9 @@ fn handle_navigation(
     code: KeyCode,
     visible_lines: usize,
 ) -> bool {
+    // Calculate effective visible lines (reduced if h-scrollbar is shown)
+    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
+
     // If cursor is saved (off-screen), restore it to the original viewport position
     if let Some(saved_absolute) = state.saved_absolute_cursor {
         // Clear the saved position
@@ -663,7 +666,7 @@ fn handle_navigation(
             state.cursor_line = saved_cursor_line;
         } else {
             // Fallback: center cursor in viewport if no saved state
-            let desired_cursor_line = visible_lines / 2;
+            let desired_cursor_line = effective_visible_lines / 2;
             state.top_line = saved_absolute.saturating_sub(desired_cursor_line);
             state.cursor_line = saved_absolute.saturating_sub(state.top_line);
         }
@@ -725,9 +728,9 @@ fn handle_navigation(
                         state.cursor_col = 0;
 
                         // Check if we need to scroll
-                        if state.cursor_line >= visible_lines {
+                        if state.cursor_line >= effective_visible_lines {
                             state.top_line += 1;
-                            state.cursor_line = visible_lines - 1;
+                            state.cursor_line = effective_visible_lines - 1;
                         }
                         true
                     } else {
@@ -1019,6 +1022,7 @@ fn paragraph_up(state: &mut FileViewerState, lines: &[String]) -> bool {
 }
 
 fn paragraph_down(state: &mut FileViewerState, lines: &[String], visible_lines: usize) -> bool {
+    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
     let mut current_line = state.absolute_line();
     if current_line >= lines.len() {
         return false;
@@ -1044,9 +1048,9 @@ fn paragraph_down(state: &mut FileViewerState, lines: &[String], visible_lines: 
 
     // Position at the start of the next paragraph or end of file
     let target_line = current_line.min(lines.len().saturating_sub(1));
-    if target_line >= state.top_line + visible_lines {
+    if target_line >= state.top_line + effective_visible_lines {
         // Need to scroll down
-        state.top_line = target_line.saturating_sub(visible_lines / 2);
+        state.top_line = target_line.saturating_sub(effective_visible_lines / 2);
         state.cursor_line = target_line.saturating_sub(state.top_line);
     } else {
         state.cursor_line = target_line.saturating_sub(state.top_line);
@@ -1165,6 +1169,7 @@ fn scroll_without_cursor(
     visible_lines: usize,
     delta: isize,
 ) -> bool {
+    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
     if delta == 0 {
         return false;
     }
@@ -1176,7 +1181,7 @@ fn scroll_without_cursor(
     } else {
         state.top_line = state.top_line.saturating_sub((-delta) as usize);
     }
-    if absolute_cursor < state.top_line || absolute_cursor >= state.top_line + visible_lines {
+    if absolute_cursor < state.top_line || absolute_cursor >= state.top_line + effective_visible_lines {
         if state.saved_scroll_state.is_none() {
             state.saved_scroll_state = Some((old_top, state.cursor_line));
         }

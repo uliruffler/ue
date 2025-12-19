@@ -811,7 +811,7 @@ pub(crate) fn apply_undo(
 
         if result {
             // Ensure cursor is visible after undo operation
-            state.ensure_cursor_visible(visible_lines);
+            state.ensure_cursor_visible(visible_lines, lines);
 
             // Persist content changes (but not scroll/cursor separately) using update_state
             let absolute_line = state.absolute_line();
@@ -921,7 +921,7 @@ pub(crate) fn apply_redo(
 
         if result {
             // Ensure cursor is visible after redo operation
-            state.ensure_cursor_visible(visible_lines);
+            state.ensure_cursor_visible(visible_lines, lines);
 
             let absolute_line = state.absolute_line();
             state.undo_history.update_state(

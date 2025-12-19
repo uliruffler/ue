@@ -6,8 +6,8 @@ use crossterm::{
 use std::io::Write;
 
 use crate::coordinates::{
-    calculate_cursor_visual_line, calculate_wrapped_lines_for_line, line_number_width,
-    visual_width_up_to,
+    calculate_cursor_visual_line, calculate_wrapped_lines_for_line,
+    line_number_width, visual_width, visual_width_up_to,
 };
 use crate::editor_state::{FileViewerState, Position};
 
@@ -42,6 +42,8 @@ pub(crate) fn render_screen(
     render_visible_lines(stdout, file, lines, state, visible_lines)?;
     render_scrollbar(stdout, lines, state, visible_lines)?;
     render_footer(stdout, state, lines, visible_lines)?;
+    // Render h-scrollbar over the last content line (row visible_lines)
+    render_horizontal_scrollbar(stdout, lines, state, visible_lines)?;
     position_cursor(stdout, lines, state, visible_lines)?;
 
     stdout.flush()?;
@@ -128,6 +130,15 @@ fn render_footer(
     lines: &[String],
     visible_lines: usize,
 ) -> Result<(), std::io::Error> {
+    use crossterm::cursor::MoveTo;
+
+    // Footer is always at row visible_lines + 1
+    // (H-scrollbar will overlay the left portion if visible)
+    let footer_row = (visible_lines + 1) as u16;
+
+    // Position cursor at footer row
+    execute!(stdout, MoveTo(0, footer_row))?;
+
     if let Some(color) =
         crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
     {
@@ -220,8 +231,7 @@ fn render_footer(
         let chars: Vec<char> = state.find_pattern.chars().collect();
         let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
         let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
-        let cursor_y = (visible_lines + 1) as u16;
-        execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+        execute!(stdout, cursor::MoveTo(cursor_x, footer_row))?;
         apply_cursor_shape(stdout, state.settings)?;
         execute!(stdout, cursor::Show)?;
         return Ok(());
@@ -337,6 +347,14 @@ fn render_visible_lines(
     state: &FileViewerState,
     visible_lines: usize,
 ) -> Result<(), std::io::Error> {
+    // When h-scrollbar is shown, reserve the last line for it
+    let h_scrollbar_shown = should_show_horizontal_scrollbar(state, lines, visible_lines);
+    let content_lines = if h_scrollbar_shown {
+        visible_lines.saturating_sub(1)
+    } else {
+        visible_lines
+    };
+
     let mut visual_lines_rendered = 0;
     let mut logical_line_index = state.top_line;
     let text_width_u16 = crate::coordinates::calculate_text_width(state, lines, visible_lines);
@@ -351,22 +369,22 @@ fn render_visible_lines(
         visible_lines,
     };
 
-    while visual_lines_rendered < visible_lines && logical_line_index < lines.len() {
+    while visual_lines_rendered < content_lines && logical_line_index < lines.len() {
         let lines_for_this_logical = render_line(
             stdout,
             &ctx,
             logical_line_index,
             cursor_visual_line,
             visual_lines_rendered,
-            visible_lines - visual_lines_rendered,
+            content_lines - visual_lines_rendered,
         )?;
 
         visual_lines_rendered += lines_for_this_logical;
         logical_line_index += 1;
     }
 
-    // Fill remaining visible lines with empty lines
-    while visual_lines_rendered < visible_lines {
+    // Fill remaining content lines with empty lines
+    while visual_lines_rendered < content_lines {
         if state.settings.appearance.line_number_digits > 0 {
             if let Some(color) =
                 crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg)
@@ -389,6 +407,21 @@ fn render_visible_lines(
         clear_to_scrollbar(stdout, state, lines, visible_lines, current_col)?;
         write!(stdout, "\r\n")?;
         visual_lines_rendered += 1;
+    }
+
+    // If h-scrollbar will be shown, render one more blank line for it to overlay
+    if h_scrollbar_shown {
+        // Don't render line number for the h-scrollbar line
+        let line_num_width = if state.settings.appearance.line_number_digits > 0 {
+            state.settings.appearance.line_number_digits as usize + 1
+        } else {
+            0
+        };
+        for _ in 0..line_num_width {
+            write!(stdout, " ")?;
+        }
+        clear_to_scrollbar(stdout, state, lines, visible_lines, line_num_width as u16)?;
+        write!(stdout, "\r\n")?;
     }
 
     Ok(())
@@ -1389,6 +1422,126 @@ fn render_scrollbar(
     execute!(stdout, ResetColor)?;
 
     // Restore cursor position to minimize visual disruption
+    execute!(stdout, RestorePosition)?;
+
+    Ok(())
+}
+
+/// Check if horizontal scrollbar should be shown
+fn should_show_horizontal_scrollbar(
+    state: &FileViewerState,
+    lines: &[String],
+    visible_lines: usize,
+) -> bool {
+    state.should_show_h_scrollbar(lines, visible_lines)
+}
+
+/// Render horizontal scrollbar at the bottom when line wrapping is disabled
+fn render_horizontal_scrollbar(
+    stdout: &mut impl Write,
+    lines: &[String],
+    state: &FileViewerState,
+    visible_lines: usize,
+) -> Result<(), std::io::Error> {
+    use crossterm::cursor::{RestorePosition, SavePosition};
+    use crossterm::style::{ResetColor, SetBackgroundColor};
+
+    if !should_show_horizontal_scrollbar(state, lines, visible_lines) {
+        return Ok(());
+    }
+
+    // Calculate maximum line width in the document
+    let tab_width = state.settings.tab_width;
+    
+    let max_line_width = lines.iter()
+        .map(|line| visual_width(line, tab_width))
+        .max()
+        .unwrap_or(0);
+
+
+    // Save current cursor position
+    execute!(stdout, SavePosition)?;
+
+    // Calculate horizontal scrollbar dimensions
+    let line_num_width = line_number_width(state.settings) as usize;
+    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+
+    // H-scrollbar extends from after line numbers to before vertical scrollbar
+    // (Footer status is on a different row, doesn't affect scrollbar width)
+    let available_width = (state.term_width as usize)
+        .saturating_sub(line_num_width)
+        .saturating_sub(v_scrollbar_width);
+
+    if available_width == 0 {
+        return Ok(());
+    }
+
+    let scrollbar_width = available_width;
+    let bar_width = ((available_width * available_width) / max_line_width).max(1);
+
+    // Calculate scroll progress
+    let max_scroll = max_line_width.saturating_sub(available_width);
+    let scroll_progress = if max_scroll == 0 {
+        0.0
+    } else {
+        (state.horizontal_scroll_offset as f64 / max_scroll as f64).min(1.0)
+    };
+
+    let bar_position = ((scrollbar_width - bar_width) as f64 * scroll_progress) as usize;
+
+    // Get colors - same as vertical scrollbar
+    let bg_color = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
+        .unwrap_or(crossterm::style::Color::DarkBlue);
+    let bar_color = crossterm::style::Color::Rgb {
+        r: 100,
+        g: 149,
+        b: 237,
+    }; // Light blue
+
+    // Position at last content line (visible_lines), overlaying it
+    let h_scrollbar_row = visible_lines as u16;
+    execute!(stdout, cursor::MoveTo(0, h_scrollbar_row))?;
+
+    // Render line number area with scrollbar background
+    if line_num_width > 0 {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+        for _ in 0..line_num_width {
+            write!(stdout, " ")?;
+        }
+    }
+
+    // Render left background segment
+    if bar_position > 0 {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+        for _ in 0..bar_position {
+            write!(stdout, " ")?;
+        }
+    }
+
+    // Render scrollbar bar segment
+    if bar_width > 0 {
+        execute!(stdout, SetBackgroundColor(bar_color))?;
+        for _ in 0..bar_width {
+            write!(stdout, " ")?;
+        }
+    }
+
+    // Render right background segment
+    let right_start = bar_position + bar_width;
+    if right_start < scrollbar_width {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+        for _ in right_start..scrollbar_width {
+            write!(stdout, " ")?;
+        }
+    }
+
+    // Fill the corner where h-scrollbar meets v-scrollbar (if v-scrollbar is present)
+    if v_scrollbar_width > 0 {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+        write!(stdout, " ")?; // Fill the corner cell with scrollbar background color
+    }
+
+    execute!(stdout, ResetColor)?;
     execute!(stdout, RestorePosition)?;
 
     Ok(())

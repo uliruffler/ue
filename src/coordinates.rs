@@ -90,18 +90,24 @@ pub(crate) fn calculate_cursor_visual_line(
     let mut visual_line = 0;
     let text_width_usize = text_width as usize;
     let tab_width = state.settings.tab_width;
+    let wrapping_enabled = state.is_line_wrapping_enabled();
 
     // Count visual lines from top_line to cursor's logical line
     for i in state.top_line..state.absolute_line() {
-        visual_line += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width) as usize;
+        if wrapping_enabled {
+            visual_line += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width) as usize;
+        } else {
+            visual_line += 1; // When wrapping is disabled, each line is exactly 1 visual line
+        }
     }
 
     // Add the visual line offset within the cursor's logical line itself
-    if text_width_usize > 0 && state.absolute_line() < lines.len() {
+    if wrapping_enabled && text_width_usize > 0 && state.absolute_line() < lines.len() {
         let line = &lines[state.absolute_line()];
         let visual_col = visual_width_up_to(line, state.cursor_col, tab_width);
         visual_line += visual_col / text_width_usize;
     }
+    // When wrapping is disabled, cursor is always on the same visual line as the logical line (no offset)
 
     visual_line
 }
@@ -115,17 +121,25 @@ pub(crate) fn calculate_visual_lines_to_cursor(
 ) -> usize {
     let tab_width = state.settings.tab_width;
     let mut visual_lines = 0;
+    let wrapping_enabled = state.is_line_wrapping_enabled();
 
     // Count visual lines from top_line up to and including cursor_line
     let end_line = (state.top_line + state.cursor_line).min(lines.len());
     for i in state.top_line..end_line {
-        visual_lines += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width) as usize;
+        if wrapping_enabled {
+            visual_lines += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width) as usize;
+        } else {
+            visual_lines += 1; // When wrapping is disabled, each line is exactly 1 visual line
+        }
     }
 
     // Add the wrapped lines for the cursor's current line
     if end_line < lines.len() {
-        visual_lines +=
-            calculate_wrapped_lines_for_line(lines, end_line, text_width, tab_width) as usize;
+        if wrapping_enabled {
+            visual_lines += calculate_wrapped_lines_for_line(lines, end_line, text_width, tab_width) as usize;
+        } else {
+            visual_lines += 1; // When wrapping is disabled, each line is exactly 1 visual line
+        }
     }
 
     visual_lines
@@ -539,6 +553,10 @@ mod tests {
             scrollbar_drag_start_top_line: 0,
             scrollbar_drag_start_y: 0,
             scrollbar_drag_bar_offset: 0,
+            h_scrollbar_dragging: false,
+            h_scrollbar_drag_start_offset: 0,
+            h_scrollbar_drag_start_x: 0,
+            h_scrollbar_drag_bar_offset: 0,
             help_active: false,
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,

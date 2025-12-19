@@ -85,6 +85,14 @@ pub struct FileViewerState<'a> {
     pub(crate) scrollbar_drag_start_y: u16,
     /// Offset within the scrollbar bar when dragging started (0 = top of bar, bar_height-1 = bottom)
     pub(crate) scrollbar_drag_bar_offset: usize,
+    /// Horizontal scrollbar dragging active
+    pub(crate) h_scrollbar_dragging: bool,
+    /// Original horizontal_scroll_offset when h_scrollbar drag started
+    pub(crate) h_scrollbar_drag_start_offset: usize,
+    /// Mouse X position when h_scrollbar drag started
+    pub(crate) h_scrollbar_drag_start_x: u16,
+    /// Offset within the h_scrollbar bar when dragging started
+    pub(crate) h_scrollbar_drag_bar_offset: usize,
     /// Help mode active
     pub(crate) help_active: bool,
     /// Help context (what help to show)
@@ -158,6 +166,10 @@ impl<'a> FileViewerState<'a> {
             scrollbar_drag_start_top_line: 0,
             scrollbar_drag_start_y: 0,
             scrollbar_drag_bar_offset: 0,
+            h_scrollbar_dragging: false,
+            h_scrollbar_drag_start_offset: 0,
+            h_scrollbar_drag_start_x: 0,
+            h_scrollbar_drag_bar_offset: 0,
             help_active: false,
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
@@ -264,26 +276,40 @@ impl<'a> FileViewerState<'a> {
             return false;
         }
 
+        // Calculate effective visible lines (reduced by 1 if h-scrollbar is shown)
+        let effective_visible_lines = if self.should_show_h_scrollbar(lines, visible_lines) {
+            visible_lines.saturating_sub(1)
+        } else {
+            visible_lines
+        };
+
         // Calculate how many visual lines are consumed from top_line through cursor_line
         let visual_lines_consumed = calculate_visual_lines_to_cursor(lines, self, text_width);
 
         // Cursor is visible if consumed lines don't exceed available space
-        visual_lines_consumed <= visible_lines
+        visual_lines_consumed <= effective_visible_lines
     }
 
     /// Ensure cursor is visible after undo/redo operations
     /// If cursor would be off-screen, move it to the first or last visible line
-    pub(crate) fn ensure_cursor_visible(&mut self, visible_lines: usize) {
+    pub(crate) fn ensure_cursor_visible(&mut self, visible_lines: usize, lines: &[String]) {
         // Get the absolute cursor position (may use saved value)
         let absolute = self.absolute_line();
+
+        // Calculate effective visible lines (reduced by 1 if h-scrollbar is shown)
+        let effective_visible_lines = if self.should_show_h_scrollbar(lines, visible_lines) {
+            visible_lines.saturating_sub(1)
+        } else {
+            visible_lines
+        };
 
         // Clear saved cursor - we're bringing it back on screen
         self.saved_absolute_cursor = None;
         self.saved_scroll_state = None;
 
         // If cursor is below visible area, move it to last visible line
-        if self.cursor_line >= visible_lines {
-            self.cursor_line = visible_lines.saturating_sub(1);
+        if self.cursor_line >= effective_visible_lines {
+            self.cursor_line = effective_visible_lines.saturating_sub(1);
             self.top_line = absolute.saturating_sub(self.cursor_line);
         }
         // If cursor is above visible area (when top_line was increased)
@@ -397,6 +423,36 @@ impl<'a> FileViewerState<'a> {
         }
     }
 
+    /// Check if horizontal scrollbar should be shown
+    pub(crate) fn should_show_h_scrollbar(&self, lines: &[String], visible_lines: usize) -> bool {
+        // Only show horizontal scrollbar when:
+        // 1. Line wrapping is disabled
+        // 2. At least one line exceeds the visible width
+        if self.is_line_wrapping_enabled() {
+            return false;
+        }
+
+        use crate::coordinates::{calculate_text_width, visual_width};
+        let text_width = calculate_text_width(self, lines, visible_lines) as usize;
+        let tab_width = self.settings.tab_width;
+
+        let max_line_width = lines.iter()
+            .map(|line| visual_width(line, tab_width))
+            .max()
+            .unwrap_or(0);
+
+        // Only show scrollbar if there's content wider than the visible area
+        max_line_width > text_width
+    }
+
+    /// Calculate effective visible lines for content (reduced by 1 if h-scrollbar is shown)
+    pub(crate) fn effective_visible_lines(&self, lines: &[String], visible_lines: usize) -> usize {
+        if self.should_show_h_scrollbar(lines, visible_lines) {
+            visible_lines.saturating_sub(1)
+        } else {
+            visible_lines
+        }
+    }
 
     /// Update cursor blink state (toggles every 500ms)
     /// Returns true if blink state changed and redraw is needed
@@ -526,11 +582,12 @@ mod tests {
         ));
         let undo_history = UndoHistory::new();
         let mut state = FileViewerState::new(80, undo_history, settings);
+        let lines: Vec<String> = vec!["test".to_string(); 30];
 
         state.top_line = 10;
         state.cursor_line = 15; // Beyond visible area of 10 lines
 
-        state.ensure_cursor_visible(10);
+        state.ensure_cursor_visible(10, &lines);
 
         // Cursor should be at bottom of visible area
         assert_eq!(state.cursor_line, 9);
@@ -546,12 +603,13 @@ mod tests {
         ));
         let undo_history = UndoHistory::new();
         let mut state = FileViewerState::new(80, undo_history, settings);
+        let lines: Vec<String> = vec!["test".to_string(); 30];
 
         state.top_line = 20;
         state.cursor_line = 0;
         state.saved_absolute_cursor = Some(15); // Cursor at line 15, but top_line is 20
 
-        state.ensure_cursor_visible(10);
+        state.ensure_cursor_visible(10, &lines);
 
         // Cursor should be at top of visible area
         assert_eq!(state.cursor_line, 0);
@@ -567,12 +625,13 @@ mod tests {
         ));
         let undo_history = UndoHistory::new();
         let mut state = FileViewerState::new(80, undo_history, settings);
+        let lines: Vec<String> = vec!["test".to_string(); 30];
 
         state.top_line = 5;
         state.cursor_line = 3;
         state.saved_absolute_cursor = Some(8);
 
-        state.ensure_cursor_visible(10);
+        state.ensure_cursor_visible(10, &lines);
 
         assert!(state.saved_absolute_cursor.is_none());
     }
@@ -782,6 +841,54 @@ impl<'a> FileViewerState<'a> {
     #[allow(dead_code)]
     pub fn set_cursor_col(&mut self, col: usize) {
         self.cursor_col = col;
+    }
+
+    /// Check if h-scrollbar should be shown (for testing)
+    #[allow(dead_code)]
+    pub fn should_show_h_scrollbar_for_test(&self, lines: &[String], visible_lines: usize) -> bool {
+        self.should_show_h_scrollbar(lines, visible_lines)
+    }
+
+    /// Get effective visible lines (for testing)
+    #[allow(dead_code)]
+    pub fn effective_visible_lines_for_test(&self, lines: &[String], visible_lines: usize) -> usize {
+        self.effective_visible_lines(lines, visible_lines)
+    }
+
+    /// Check if cursor is visible (for testing)
+    #[allow(dead_code)]
+    pub fn is_cursor_visible_for_test(&self, lines: &[String], visible_lines: usize, text_width: u16) -> bool {
+        self.is_cursor_visible(lines, visible_lines, text_width)
+    }
+
+    /// Ensure cursor visible (for testing)
+    #[allow(dead_code)]
+    pub fn ensure_cursor_visible_for_test(&mut self, visible_lines: usize, lines: &[String]) {
+        self.ensure_cursor_visible(visible_lines, lines)
+    }
+
+    /// Get cursor line (for testing)
+    #[allow(dead_code)]
+    pub fn get_cursor_line(&self) -> usize {
+        self.cursor_line
+    }
+
+    /// Set cursor line (for testing)
+    #[allow(dead_code)]
+    pub fn set_cursor_line(&mut self, line: usize) {
+        self.cursor_line = line;
+    }
+
+    /// Get top line (for testing)
+    #[allow(dead_code)]
+    pub fn get_top_line(&self) -> usize {
+        self.top_line
+    }
+
+    /// Set top line (for testing)
+    #[allow(dead_code)]
+    pub fn set_top_line(&mut self, line: usize) {
+        self.top_line = line;
     }
 }
 

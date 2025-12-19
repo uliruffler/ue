@@ -480,7 +480,7 @@ fn try_reload_undo_from_external_change(
             }
 
             // Ensure cursor is visible after reload (similar to undo/redo)
-            state.ensure_cursor_visible(visible_lines);
+            state.ensure_cursor_visible(visible_lines, &lines);
         } else if undo_changed {
             // Only undo history changed, not content - update history but keep cursor position
             // This handles the case where another instance did undo/redo
