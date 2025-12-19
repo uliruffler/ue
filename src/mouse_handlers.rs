@@ -575,12 +575,32 @@ pub(crate) fn handle_mouse_event(
             state.last_drag_position = None; // Clear drag position
         }
         MouseEventKind::ScrollDown => {
-            let scroll_amount = state.settings.mouse_scroll_lines;
-            handle_mouse_scroll_down(state, lines, visible_lines, scroll_amount);
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                // Shift+ScrollDown = horizontal scroll left
+                handle_horizontal_scroll_left(state, lines, visible_lines);
+            } else {
+                // Normal scroll = vertical scroll down
+                let scroll_amount = state.settings.mouse_scroll_lines;
+                handle_mouse_scroll_down(state, lines, visible_lines, scroll_amount);
+            }
         }
         MouseEventKind::ScrollUp => {
-            let scroll_amount = state.settings.mouse_scroll_lines;
-            handle_mouse_scroll_up(state, lines, visible_lines, scroll_amount);
+            if modifiers.contains(KeyModifiers::SHIFT) {
+                // Shift+ScrollUp = horizontal scroll right
+                handle_horizontal_scroll_right(state, lines, visible_lines);
+            } else {
+                // Normal scroll = vertical scroll up
+                let scroll_amount = state.settings.mouse_scroll_lines;
+                handle_mouse_scroll_up(state, lines, visible_lines, scroll_amount);
+            }
+        }
+        MouseEventKind::ScrollLeft => {
+            // Touchpad horizontal scroll left
+            handle_horizontal_scroll_left(state, lines, visible_lines);
+        }
+        MouseEventKind::ScrollRight => {
+            // Touchpad horizontal scroll right
+            handle_horizontal_scroll_right(state, lines, visible_lines);
         }
         _ => {}
     }
@@ -889,6 +909,62 @@ fn restore_cursor_to_screen(state: &mut FileViewerState) {
     state.saved_absolute_cursor = None;
     state.saved_scroll_state = None;
 }
+/// Handle horizontal scroll right (Shift+ScrollDown or similar)
+fn handle_horizontal_scroll_right(
+    state: &mut FileViewerState,
+    lines: &[String],
+    visible_lines: usize,
+) {
+    // Only scroll horizontally when line wrapping is disabled
+    if state.is_line_wrapping_enabled() {
+        return;
+    }
+
+    // Calculate maximum scroll offset
+    let tab_width = state.settings.tab_width;
+    let max_line_width = lines.iter()
+        .map(|line| crate::coordinates::visual_width(line, tab_width))
+        .max()
+        .unwrap_or(0);
+
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+    let max_scroll = max_line_width.saturating_sub(text_width);
+
+    if max_scroll == 0 {
+        return;
+    }
+
+    // Scroll right by the configured amount
+    let scroll_amount = state.settings.horizontal_scroll_speed;
+    let old_offset = state.horizontal_scroll_offset;
+    state.horizontal_scroll_offset = (state.horizontal_scroll_offset + scroll_amount).min(max_scroll);
+
+    if state.horizontal_scroll_offset != old_offset {
+        state.needs_redraw = true;
+    }
+}
+
+/// Handle horizontal scroll left (Shift+ScrollUp or similar)
+fn handle_horizontal_scroll_left(
+    state: &mut FileViewerState,
+    _lines: &[String],
+    _visible_lines: usize,
+) {
+    // Only scroll horizontally when line wrapping is disabled
+    if state.is_line_wrapping_enabled() {
+        return;
+    }
+
+    // Scroll left by the configured amount
+    let scroll_amount = state.settings.horizontal_scroll_speed;
+    let old_offset = state.horizontal_scroll_offset;
+    state.horizontal_scroll_offset = state.horizontal_scroll_offset.saturating_sub(scroll_amount);
+
+    if state.horizontal_scroll_offset != old_offset {
+        state.needs_redraw = true;
+    }
+}
+
 /// Finalize a drag operation: move or copy selected text to drag_target
 fn finalize_drag(state: &mut FileViewerState, lines: &mut Vec<String>, copy: bool) {
     use crate::editing::apply_drag;

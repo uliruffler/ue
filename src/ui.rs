@@ -53,7 +53,7 @@ fn run_file_selector_overlay(
     current_file: &str,
     visible_lines: &mut usize,
     settings: &Settings,
-) -> crossterm::Result<SelectorResult> {
+) -> std::io::Result<SelectorResult> {
     use crossterm::event::{Event, KeyCode, KeyModifiers};
     let mut stdout = io::stdout();
     let mut tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
@@ -182,7 +182,7 @@ fn run_file_selector_overlay(
     }
 }
 
-pub fn show(files: &[String]) -> crossterm::Result<()> {
+pub fn show(files: &[String]) -> std::io::Result<()> {
     let settings = Settings::load().expect("Failed to load settings");
     let mut stdout = io::stdout();
     terminal::enable_raw_mode()?;
@@ -385,7 +385,7 @@ pub fn show(files: &[String]) -> crossterm::Result<()> {
 fn show_file_selector_and_return(
     file: &str,
     settings: &Settings,
-) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
+) -> std::io::Result<(bool, Option<String>, bool, bool)> {
     let mut visible_lines = DEFAULT_VISIBLE_LINES;
     match run_file_selector_overlay(file, &mut visible_lines, settings)? {
         SelectorResult::Selected(selected_file) => Ok((false, Some(selected_file), false, false)),
@@ -538,7 +538,7 @@ fn handle_file_selector_in_loop(
     state: &mut FileViewerState,
     visible_lines: &mut usize,
     settings: &Settings,
-) -> crossterm::Result<FileSelectorResult> {
+) -> std::io::Result<FileSelectorResult> {
     // Persist state before showing selector
     state
         .undo_history
@@ -569,7 +569,7 @@ fn editing_session(
     file: &str,
     content: String,
     settings: &Settings,
-) -> crossterm::Result<(bool, Option<String>, bool, bool)> {
+) -> std::io::Result<(bool, Option<String>, bool, bool)> {
     // Set the current file for syntax highlighting
     crate::syntax::set_current_file(file);
 

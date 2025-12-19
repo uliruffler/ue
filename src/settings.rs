@@ -66,6 +66,8 @@ pub struct Settings {
     pub(crate) line_wrapping: bool,
     #[serde(default = "default_horizontal_auto_scroll_speed")]
     pub(crate) horizontal_auto_scroll_speed: usize,
+    #[serde(default = "default_horizontal_scroll_speed")]
+    pub(crate) horizontal_scroll_speed: usize,
     #[serde(default = "default_appearance")]
     pub(crate) appearance: AppearanceSettings,
 }
@@ -89,8 +91,12 @@ fn default_line_wrapping() -> bool {
     true
 }
 fn default_horizontal_auto_scroll_speed() -> usize {
-    1 // Scroll 1 character per event loop iteration
+    3
 }
+fn default_horizontal_scroll_speed() -> usize {
+    5
+}
+
 fn default_line_number_digits() -> u8 {
     3
 }

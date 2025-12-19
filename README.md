@@ -1,5 +1,5 @@
 # ue – Simple Terminal File Viewer
-A terminal-based file editor with configurable key bindings that strives to be as convenient as modern UI-based editors. The name `u`e is an abbreviation for Uli's Editor (referring to the author's name, Uli Ruffler).
+A terminal-based file editor with configurable key bindings that strives to be as convenient as modern UI-based editors. The name `ue` is an abbreviation for Uli's Editor (referring to the author's name, Uli Ruffler).
 
 One of the main reasons for creating this editor was to explore how to work with Copilot. Thus, the code is heavily AI-based, and almost everything is generated.
 

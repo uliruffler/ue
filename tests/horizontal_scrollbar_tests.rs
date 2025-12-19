@@ -412,3 +412,89 @@ fn cursor_visibility_multiple_long_lines_scattered() {
                 "Line {} should be visible with multiple long lines scattered", line);
     }
 }
+
+/// Test that cursor is hidden when scrolled off horizontally
+#[test]
+#[serial]
+fn cursor_hidden_when_scrolled_off_horizontally() {
+    let (_tmp, _home) = setup_test_env();
+    let settings = Settings::load().unwrap();
+    let undo_history = UndoHistory::new();
+    let mut state = FileViewerState::new_for_test(80, undo_history, &settings);
+
+    // Create a long line
+    let lines: Vec<String> = vec!["a".repeat(200)];
+
+    // Disable line wrapping
+    state.toggle_line_wrapping_for_test();
+
+    let visible_lines = 20;
+    let text_width = 70;
+
+    state.set_top_line(0);
+    state.set_cursor_line(0);
+
+    // Cursor at beginning (column 0) with no scroll - should be visible
+    state.set_cursor_col(0);
+    state.set_horizontal_scroll_offset(0);
+    assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor at column 0 with no scroll should be visible");
+
+    // Cursor at column 10 with scroll offset 20 - scrolled off to the left
+    state.set_cursor_col(10);
+    state.set_horizontal_scroll_offset(20);
+    assert!(!state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor at column 10 with scroll offset 20 should be hidden (off to left)");
+
+    // Cursor at column 50 with scroll offset 20 - should be visible (within 20-90 range)
+    state.set_cursor_col(50);
+    state.set_horizontal_scroll_offset(20);
+    assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor at column 50 with scroll offset 20 should be visible");
+
+    // Cursor at column 100 with scroll offset 20 - scrolled off to the right
+    // (visible range is 20 to 20+70=90, cursor at 100 is beyond)
+    state.set_cursor_col(100);
+    state.set_horizontal_scroll_offset(20);
+    assert!(!state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor at column 100 with scroll offset 20 should be hidden (off to right)");
+
+    // Cursor at column 89 with scroll offset 20 - at right edge, should be visible
+    state.set_cursor_col(89);
+    state.set_horizontal_scroll_offset(20);
+    assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor at column 89 (right edge of visible range) should be visible");
+
+    // Cursor at column 90 with scroll offset 20 - just beyond right edge
+    state.set_cursor_col(90);
+    state.set_horizontal_scroll_offset(20);
+    assert!(!state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor at column 90 (just beyond right edge) should be hidden");
+}
+
+/// Test cursor visibility with horizontal scroll and line wrapping enabled
+#[test]
+#[serial]
+fn cursor_visibility_not_affected_by_horizontal_scroll_when_wrapping_on() {
+    let (_tmp, _home) = setup_test_env();
+    let settings = Settings::load().unwrap();
+    let undo_history = UndoHistory::new();
+    let mut state = FileViewerState::new_for_test(80, undo_history, &settings);
+
+    let lines: Vec<String> = vec!["a".repeat(200)];
+
+    // Line wrapping is on by default
+    assert!(state.is_line_wrapping_enabled_for_test());
+
+    let visible_lines = 20;
+    let text_width = 70;
+
+    state.set_top_line(0);
+    state.set_cursor_line(0);
+    state.set_cursor_col(50);
+
+    // Even if horizontal_scroll_offset is set, it shouldn't affect visibility when wrapping is on
+    state.set_horizontal_scroll_offset(100);
+    assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
+            "Cursor should be visible when wrapping is on, regardless of horizontal scroll offset");
+}

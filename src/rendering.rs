@@ -409,20 +409,9 @@ fn render_visible_lines(
         visual_lines_rendered += 1;
     }
 
-    // If h-scrollbar will be shown, render one more blank line for it to overlay
-    if h_scrollbar_shown {
-        // Don't render line number for the h-scrollbar line
-        let line_num_width = if state.settings.appearance.line_number_digits > 0 {
-            state.settings.appearance.line_number_digits as usize + 1
-        } else {
-            0
-        };
-        for _ in 0..line_num_width {
-            write!(stdout, " ")?;
-        }
-        clear_to_scrollbar(stdout, state, lines, visible_lines, line_num_width as u16)?;
-        write!(stdout, "\r\n")?;
-    }
+    // Note: If h-scrollbar will be shown, DO NOT render the h-scrollbar line here
+    // Let render_horizontal_scrollbar() handle it entirely to prevent flickering
+    // The h-scrollbar line (row visible_lines) is rendered separately
 
     Ok(())
 }
@@ -832,7 +821,15 @@ fn position_cursor(
                 let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
                 (cursor_x, cursor_wrapped_line as u16)
             } else {
-                // Horizontal scroll mode: apply horizontal offset
+                // Horizontal scroll mode: check if cursor is horizontally visible
+                // Skip this cursor if it's scrolled off screen horizontally
+                if visual_col < state.horizontal_scroll_offset {
+                    continue; // Scrolled off to the left
+                }
+                if visual_col >= state.horizontal_scroll_offset + (text_width as usize) {
+                    continue; // Scrolled off to the right
+                }
+                // Apply horizontal offset
                 let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
                 (cursor_x, 0)
             };

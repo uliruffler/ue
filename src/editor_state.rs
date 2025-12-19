@@ -286,8 +286,36 @@ impl<'a> FileViewerState<'a> {
         // Calculate how many visual lines are consumed from top_line through cursor_line
         let visual_lines_consumed = calculate_visual_lines_to_cursor(lines, self, text_width);
 
-        // Cursor is visible if consumed lines don't exceed available space
-        visual_lines_consumed <= effective_visible_lines
+        // Check vertical visibility
+        if visual_lines_consumed > effective_visible_lines {
+            return false;
+        }
+
+        // Check horizontal visibility when line wrapping is disabled
+        if !self.is_line_wrapping_enabled() {
+            use crate::coordinates::visual_width_up_to;
+            let cursor_line_idx = self.absolute_line();
+            if cursor_line_idx < lines.len() {
+                let visual_col = visual_width_up_to(
+                    &lines[cursor_line_idx],
+                    self.cursor_col,
+                    self.settings.tab_width,
+                );
+
+                // Check if cursor is scrolled off to the left
+                if visual_col < self.horizontal_scroll_offset {
+                    return false;
+                }
+
+                // Check if cursor is scrolled off to the right
+                let visible_width = text_width as usize;
+                if visual_col >= self.horizontal_scroll_offset + visible_width {
+                    return false;
+                }
+            }
+        }
+
+        true
     }
 
     /// Ensure cursor is visible after undo/redo operations

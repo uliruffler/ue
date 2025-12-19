@@ -29,7 +29,7 @@ struct Cli {
     files: Vec<String>,
 }
 
-fn main() -> crossterm::Result<()> {
+fn main() -> std::io::Result<()> {
     // Deploy default syntax files if they don't exist
     let _ = default_syntax::deploy_default_syntax_files();
 

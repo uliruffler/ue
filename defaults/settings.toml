@@ -8,6 +8,9 @@ line_wrapping = true
 # Horizontal auto-scroll speed when dragging selection (characters per scroll step)
 # Controls how many characters to scroll each time auto-scrolling occurs
 horizontal_auto_scroll_speed = 1
+# Horizontal scroll speed for Shift+ScrollWheel (characters per scroll step)
+# Controls how many characters to scroll when using Shift+Mouse Wheel
+horizontal_scroll_speed = 2
 
 
 # Appearance settings
@@ -37,4 +40,3 @@ goto_line = "Ctrl+g"
 help = "F1"
 save_and_quit = "Ctrl+q"
 toggle_line_wrap = "Alt+w"
-
