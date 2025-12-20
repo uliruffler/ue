@@ -39,11 +39,19 @@ pub(crate) fn render_screen(
     execute!(stdout, cursor::MoveTo(0, 0))?;
 
     render_header(stdout, file, state, lines.len())?;
+
+    // Render content first (normal rendering)
     render_visible_lines(stdout, file, lines, state, visible_lines)?;
     render_scrollbar(stdout, lines, state, visible_lines)?;
     render_footer(stdout, state, lines, visible_lines)?;
     // Render h-scrollbar over the last content line (row visible_lines)
     render_horizontal_scrollbar(stdout, lines, state, visible_lines)?;
+
+    // Then render dropdown menu OVER the content if active
+    if state.menu_bar.active && state.menu_bar.dropdown_open {
+        crate::menu::render_dropdown_menu(stdout, &state.menu_bar, state)?;
+    }
+
     position_cursor(stdout, lines, state, visible_lines)?;
 
     stdout.flush()?;
@@ -56,21 +64,20 @@ fn render_header(
     state: &FileViewerState,
     _total_lines: usize,
 ) -> Result<(), std::io::Error> {
-    let modified_char = if state.modified { '*' } else { ' ' };
-    let path = std::path::Path::new(file);
-    let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
-    let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
-    // If parent is "." (current directory), show empty string instead
-    let parent_display = if parent == "." { "" } else { parent };
-    if let Some(color) =
-        crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
-    {
+    use crossterm::{cursor::MoveTo, style::{Color, SetForegroundColor}};
+
+    // Position at top of screen
+    execute!(stdout, MoveTo(0, 0))?;
+
+    // Set header background color
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
         execute!(stdout, SetBackgroundColor(color))?;
     }
+
+    // Render line number area (if enabled)
     if state.settings.appearance.line_number_digits > 0 {
         let modulus = 10usize.pow(state.settings.appearance.line_number_digits as u32);
         let top_number = (state.top_line / modulus) * modulus;
-        // Add trailing space explicitly after the block number
         write!(
             stdout,
             "{:width$} ",
@@ -78,15 +85,50 @@ fn render_header(
             width = state.settings.appearance.line_number_digits as usize
         )?;
     }
-    write!(
-        stdout,
-        "{} {} ({})",
-        modified_char, filename, parent_display
-    )?;
-    // Header row doesn't interfere with scrollbar, but clear consistently
+
+    // Always render burger icon
+    write!(stdout, "≡ ")?;
+
+
+    if state.menu_bar.active {
+        // When menu is active, show menu labels instead of filename
+        for (idx, menu) in state.menu_bar.menus.iter().enumerate() {
+            if idx == state.menu_bar.selected_menu_index {
+                // Highlight selected menu with light blue (matching scrollbar style)
+                execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }))?;
+                execute!(stdout, SetForegroundColor(Color::White))?;
+            }
+
+            write!(stdout, "{}", menu.label)?;
+            execute!(stdout, ResetColor)?;
+
+            // Restore header background
+            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
+                execute!(stdout, SetBackgroundColor(color))?;
+            }
+
+            write!(stdout, "  ")?;
+        }
+    } else {
+        // When menu is not active, show filename as usual
+        let modified_char = if state.modified { '*' } else { ' ' };
+        let path = std::path::Path::new(file);
+        let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
+        let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
+        let parent_display = if parent == "." { "" } else { parent };
+
+        write!(
+            stdout,
+            "{} {} ({})",
+            modified_char, filename, parent_display
+        )?;
+    }
+
+    // Clear rest of line (applies to both menu and filename modes)
     execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
     execute!(stdout, ResetColor)?;
     write!(stdout, "\r\n")?;
+
     Ok(())
 }
 
@@ -409,6 +451,7 @@ fn render_visible_lines(
         visual_lines_rendered += 1;
     }
 
+
     // Note: If h-scrollbar will be shown, DO NOT render the h-scrollbar line here
     // Let render_horizontal_scrollbar() handle it entirely to prevent flickering
     // The h-scrollbar line (row visible_lines) is rendered separately
@@ -674,6 +717,11 @@ fn position_cursor(
     state: &FileViewerState,
     visible_lines: usize,
 ) -> Result<(), std::io::Error> {
+    // If menu is active, keep cursor hidden
+    if state.menu_bar.active {
+        return Ok(());
+    }
+
     // If in find mode, cursor is already positioned in the search field by render_footer
     if state.find_active {
         return Ok(());

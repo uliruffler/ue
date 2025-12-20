@@ -11,6 +11,7 @@ pub mod event_handlers;
 pub mod file_selector;
 pub mod find;
 pub mod help;
+pub mod menu;
 pub mod mouse_handlers;
 pub mod recent;
 pub mod rendering;

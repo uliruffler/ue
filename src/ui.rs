@@ -1,5 +1,5 @@
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use crossterm::{
@@ -661,6 +661,12 @@ fn editing_session(
                 render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
             }
             state.needs_redraw = false;
+        } else if state.menu_bar.active && state.menu_bar.dropdown_open {
+
+            // Menu is open but no full redraw needed - just update the menu overlay
+            // Render only the dropdown menu without redrawing content
+            crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state)?;
+            stdout.flush()?;
         }
 
         // Check for external undo file changes (multi-instance editing)
@@ -706,8 +712,8 @@ fn editing_session(
                 continue;
             }
             
-            // Update cursor blink state for multi-cursors
-            if state.update_cursor_blink() {
+            // Update cursor blink state for multi-cursors (but not when menu is active)
+            if !state.menu_bar.active && state.update_cursor_blink() {
                 state.needs_redraw = true;
             }
 
@@ -747,7 +753,28 @@ fn editing_session(
                     // which will return early for help mode
                 }
 
-                // Always process Esc through double-Esc detector (except when in help mode, handled above)
+                // Special handling for menu mode - single Esc closes menu
+                if state.menu_bar.active && matches!(key_event.code, KeyCode::Esc) {
+                    // Let the menu handler process Esc (it will close the menu)
+                    // Don't go through double-Esc detector
+                    let (should_quit, should_close) = handle_key_event(
+                        &mut state,
+                        &mut lines,
+                        key_event,
+                        settings,
+                        visible_lines,
+                        file,
+                    )?;
+                    if should_quit {
+                        return Ok((state.modified, None, true, false));
+                    }
+                    if should_close {
+                        return Ok((state.modified, None, false, true));
+                    }
+                    continue;
+                }
+
+                // Always process Esc through double-Esc detector (except when in help mode or menu mode, handled above)
                 match last_esc.process_key(&key_event) {
                     EscResult::Double => {
                         // Double-Esc always exits the editor, regardless of mode

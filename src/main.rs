@@ -13,6 +13,7 @@ mod event_handlers;
 mod file_selector;
 mod find;
 mod help;
+mod menu;
 mod mouse_handlers;
 mod recent;
 mod rendering;

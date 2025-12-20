@@ -446,10 +446,21 @@ pub(crate) fn handle_mouse_event(
         modifiers,
         ..
     } = mouse_event;
-    // Ignore clicks on header row
+
+    // Handle menu clicks (row 0 is menu bar, replaces old header)
     if row == 0 {
+        let line_num_width = crate::coordinates::line_number_width(state.settings);
+        let (action, needs_full_redraw) = crate::menu::handle_menu_mouse(&mut state.menu_bar, mouse_event, line_num_width);
+        if let Some(action) = action {
+            state.pending_menu_action = Some(action);
+        }
+        if needs_full_redraw {
+            state.needs_redraw = true;
+        }
+        // Always return here to prevent clicks on menu from affecting editor
         return;
     }
+
 
     // Check if click is on h-scrollbar row (last content line when h-scrollbar is shown)
     let h_scrollbar_row = visible_lines as u16;

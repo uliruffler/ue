@@ -116,6 +116,10 @@ pub struct FileViewerState<'a> {
     pub(crate) click_count: usize,
     /// Last mouse drag position (visual_line, column) for continuous auto-scroll
     pub(crate) last_drag_position: Option<(usize, u16)>,
+    /// Menu bar state
+    pub(crate) menu_bar: crate::menu::MenuBar,
+    /// Pending menu action to execute
+    pub(crate) pending_menu_action: Option<crate::menu::MenuAction>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -179,6 +183,8 @@ impl<'a> FileViewerState<'a> {
             last_click_pos: None,
             click_count: 0,
             last_drag_position: None,
+            menu_bar: crate::menu::MenuBar::new(),
+            pending_menu_action: None,
         }
     }
 

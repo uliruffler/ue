@@ -24,6 +24,170 @@ pub(crate) fn handle_key_event(
         code, modifiers, ..
     } = key_event;
 
+    // Update menu checkable states before rendering
+    state.menu_bar.update_checkable(
+        crate::menu::MenuAction::ViewLineWrap,
+        state.is_line_wrapping_enabled()
+    );
+
+    // Handle menu interactions (Alt+letter to open, navigation when active)
+    let (menu_action, needs_full_redraw) = crate::menu::handle_menu_key(&mut state.menu_bar, key_event);
+
+    if let Some(action) = menu_action {
+        // An action was selected - always need redraw for this
+        state.needs_redraw = true;
+
+        // Execute menu action
+        match action {
+            crate::menu::MenuAction::FileNew => {
+                // Create new file - for now, just open file selector
+                // TODO: Implement new file dialog
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::FileOpen => {
+                // Open file selector (same as Esc in editor)
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::FileSave => {
+                save_file(filename, lines)?;
+                state.modified = false;
+                state.undo_history.clear_unsaved_state();
+                let abs = state.absolute_line();
+                state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                state.undo_history.find_history = state.find_history.clone();
+                let _ = state.undo_history.save(filename);
+                state.last_save_time = Some(Instant::now());
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::FileClose => {
+                // Close current file (same as Ctrl+w)
+                if state.modified {
+                    // Show confirmation dialog
+                    let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
+                    let confirmed = show_close_confirmation(filename)?;
+                    if confirmed {
+                        let _ = delete_file_history(filename);
+                        return Ok((false, true));
+                    } else {
+                        state.needs_redraw = true;
+                        return Ok((false, false));
+                    }
+                } else {
+                    let _ = delete_file_history(filename);
+                    return Ok((false, true));
+                }
+            }
+            crate::menu::MenuAction::FileQuit => {
+                // Quit editor
+                return Ok((true, false));
+            }
+            crate::menu::MenuAction::EditUndo => {
+                if apply_undo(state, lines, filename, visible_lines) {
+                    state.needs_redraw = true;
+                }
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::EditRedo => {
+                if apply_redo(state, lines, filename, visible_lines) {
+                    state.needs_redraw = true;
+                }
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::EditCopy => {
+                handle_copy(state, lines)?;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::EditCut => {
+                if handle_cut(state, lines, filename) {
+                    state.needs_redraw = true;
+                }
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::EditPaste => {
+                if handle_paste(state, lines, filename) {
+                    state.needs_redraw = true;
+                }
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::EditFind => {
+                // Enter find mode (same as Ctrl+F)
+                // Save current search pattern to restore on Esc
+                state.saved_search_pattern = state.last_search_pattern.clone();
+
+                // If there's a selection, use it as the search scope
+                if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                    // Normalize selection to ensure start < end
+                    let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                        (start, end)
+                    } else {
+                        (end, start)
+                    };
+                    state.find_scope = Some(normalized);
+                } else {
+                    state.find_scope = None;
+                }
+
+                state.find_active = true;
+                state.find_pattern.clear();
+                state.find_cursor_pos = 0;
+                state.find_error = None;
+                state.needs_redraw = true;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::ViewFileSelector => {
+                // Open file selector (handled by ui.rs)
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::ViewLineWrap => {
+                // Toggle line wrapping
+                state.toggle_line_wrapping();
+                state.needs_redraw = true;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::HelpEditor => {
+                state.help_active = true;
+                state.help_context = crate::help::HelpContext::Editor;
+                state.help_scroll_offset = 0;
+                state.needs_redraw = true;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::HelpFind => {
+                state.help_active = true;
+                state.help_context = crate::help::HelpContext::Find;
+                state.help_scroll_offset = 0;
+                state.needs_redraw = true;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::HelpFileSelector => {
+                // Show file selector help - for now just show editor help
+                state.help_active = true;
+                state.help_context = crate::help::HelpContext::Editor;
+                state.help_scroll_offset = 0;
+                state.needs_redraw = true;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::HelpAbout => {
+                // Show about dialog - for now just show editor help
+                state.help_active = true;
+                state.help_context = crate::help::HelpContext::Editor;
+                state.help_scroll_offset = 0;
+                state.needs_redraw = true;
+                return Ok((false, false));
+            }
+        }
+    } else if needs_full_redraw {
+        // Menu state changed (opened/closed dropdown), need full redraw
+        state.needs_redraw = true;
+    }
+
+    // If menu is active, it consumes most keypresses (except Alt+letter which is handled above)
+    // But we don't set needs_redraw here - only when menu state changes or action occurs
+    if state.menu_bar.active {
+        // Menu is active, consume the keypress but don't trigger full redraw for navigation
+        // The menu overlay will be redrawn automatically since menu_bar.active is true
+        return Ok((false, false));
+    }
+
     // Handle Ctrl+A for select all
     if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('a')) {
         if !lines.is_empty() {
@@ -142,7 +306,7 @@ pub(crate) fn handle_key_event(
     if settings.keybindings.close_matches(&code, &modifiers) {
         if state.modified {
             // Show confirmation prompt
-            if show_close_confirmation(state)? {
+            if show_close_confirmation(filename)? {
                 // User confirmed - delete file history
                 let _ = delete_file_history(filename);
                 return Ok((false, true)); // Don't quit editor, but close this file
@@ -819,15 +983,21 @@ fn handle_navigation(
     moved
 }
 
-/// Show confirmation prompt for closing file with unsaved changes
-/// Returns true if user confirms (Enter), false if cancelled (Esc)
-fn show_close_confirmation(_state: &mut FileViewerState) -> Result<bool, std::io::Error> {
+/// Show confirmation prompt when closing a file with unsaved changes
+/// Returns true if user confirms closing (Enter), false if user cancels (Esc)
+pub(crate) fn show_close_confirmation(
+    filename: &str,
+) -> Result<bool, std::io::Error> {
     use crossterm::event;
     use crossterm::terminal;
 
     let mut stdout = std::io::stdout();
     let (_, term_height) = terminal::size()?;
     let footer_row = term_height - 1;
+
+    // Extract just the filename from the path
+    let path = std::path::Path::new(filename);
+    let display_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(filename);
 
     // Display warning message in footer
     execute!(
@@ -836,7 +1006,11 @@ fn show_close_confirmation(_state: &mut FileViewerState) -> Result<bool, std::io
         crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
         crossterm::style::SetForegroundColor(crossterm::style::Color::Yellow)
     )?;
-    write!(stdout, "Discard changes? [Enter=Yes, Esc=Cancel]")?;
+    write!(
+        &mut stdout,
+        "Close '{}' without saving? [Enter=Yes, Esc=No]",
+        display_name
+    )?;
     execute!(stdout, crossterm::style::ResetColor)?;
     stdout.flush()?;
 
@@ -845,10 +1019,10 @@ fn show_close_confirmation(_state: &mut FileViewerState) -> Result<bool, std::io
         if let event::Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Enter => {
-                    return Ok(true); // User confirmed
+                    return Ok(true); // User confirmed - close file
                 }
                 KeyCode::Esc => {
-                    return Ok(false); // User cancelled
+                    return Ok(false); // User cancelled - don't close
                 }
                 _ => {
                     // Ignore other keys, wait for Enter or Esc

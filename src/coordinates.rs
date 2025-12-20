@@ -566,6 +566,8 @@ mod tests {
             last_click_pos: None,
             click_count: 0,
             last_drag_position: None,
+            menu_bar: crate::menu::MenuBar::new(),
+            pending_menu_action: None,
         }
     }
 
