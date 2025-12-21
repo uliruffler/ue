@@ -313,84 +313,77 @@ impl MenuBar {
     /// Update File menu with current tracked files
     #[allow(dead_code)] // Only used in ui.rs (binary)
     pub(crate) fn update_file_menu(&mut self, max_files: usize, current_file: &str, is_current_modified: bool) {
-        use std::path::PathBuf;
-
-        // Get tracked files from recent.rs
         let files = crate::recent::get_recent_files().unwrap_or_default();
-
-        // Determine how many files to show
         let show_more = files.len() > max_files;
-        let files_to_show = if show_more {
-            max_files
-        } else {
-            files.len()
-        };
-
-        // Canonicalize current file for comparison
-        let current_canonical = PathBuf::from(current_file)
+        let files_to_show = if show_more { max_files } else { files.len() };
+        
+        let current_canonical = std::path::PathBuf::from(current_file)
             .canonicalize()
-            .unwrap_or_else(|_| PathBuf::from(current_file));
+            .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
+        
+        let file_labels = Self::create_file_labels(
+            &files,
+            files_to_show,
+            &current_canonical,
+            is_current_modified,
+        );
+        
+        let items = Self::build_file_menu_items(file_labels, show_more);
+        self.menus[0] = Menu::new("File", 'f', items);
+    }
 
-        // Convert paths to display strings (show just filename) and check modified state
-        let mut file_labels = Vec::new();
-        for file in files.iter().take(files_to_show) {
-            let path = PathBuf::from(file);
-            let is_current = path == current_canonical;
+    /// Create labeled list of files with unsaved markers
+    fn create_file_labels(
+        files: &[std::path::PathBuf],
+        count: usize,
+        current_canonical: &std::path::Path,
+        is_current_modified: bool,
+    ) -> Vec<String> {
+        files
+            .iter()
+            .take(count)
+            .map(|file| {
+                let path = std::path::PathBuf::from(file);
+                let is_current = path == current_canonical;
+                let is_modified = if is_current {
+                    is_current_modified
+                } else {
+                    check_file_has_unsaved_changes(&path)
+                };
+                
+                let filename = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or_else(|| file.to_str().unwrap_or("???"));
+                
+                if is_modified {
+                    format!("* {}", filename)
+                } else {
+                    filename.to_string()
+                }
+            })
+            .collect()
+    }
 
-            // Check if file has unsaved changes by reading its undo history
-            let is_modified = if is_current {
-                // For current file, use the passed-in state
-                is_current_modified
-            } else {
-                // For other files, check their undo history
-                check_file_has_unsaved_changes(&path)
-            };
-
-            let filename = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or_else(|| file.to_str().unwrap_or("???"));
-
-            // Add modified marker if needed
-            let label = if is_modified {
-                format!("* {}", filename)
-            } else {
-                filename.to_string()
-            };
-
-            file_labels.push(label);
-        }
-
-        // Build menu items
+    /// Build complete File menu items including static items and recent files
+    fn build_file_menu_items(file_labels: Vec<String>, show_more: bool) -> Vec<MenuItem> {
         let mut items = vec![
-            MenuItem::Action {
-                label: "New".to_string(),
-                action: MenuAction::FileNew,
-            },
-            MenuItem::Action {
-                label: "Open".to_string(),
-                action: MenuAction::FileOpen,
-            },
-            MenuItem::Action {
-                label: "Save".to_string(),
-                action: MenuAction::FileSave,
-            },
-            MenuItem::Action {
-                label: "Close".to_string(),
-                action: MenuAction::FileClose,
-            },
+            MenuItem::Action { label: "New".to_string(), action: MenuAction::FileNew },
+            MenuItem::Action { label: "Open".to_string(), action: MenuAction::FileOpen },
+            MenuItem::Action { label: "Save".to_string(), action: MenuAction::FileSave },
+            MenuItem::Action { label: "Close".to_string(), action: MenuAction::FileClose },
         ];
 
         if !file_labels.is_empty() {
             items.push(MenuItem::Separator);
-
+            
             for (idx, label) in file_labels.iter().enumerate() {
                 items.push(MenuItem::Action {
                     label: label.clone(),
                     action: MenuAction::FileOpenRecent(idx),
                 });
             }
-
+            
             if show_more {
                 items.push(MenuItem::Action {
                     label: "...".to_string(),
@@ -400,12 +393,9 @@ impl MenuBar {
         }
 
         items.push(MenuItem::Separator);
-        items.push(MenuItem::Action {
-            label: "Quit".to_string(),
-            action: MenuAction::FileQuit,
-        });
-
-        self.menus[0] = Menu::new("File", 'f', items);
+        items.push(MenuItem::Action { label: "Quit".to_string(), action: MenuAction::FileQuit });
+        
+        items
     }
 
     /// Try to activate menu by Alt+hotkey
@@ -603,84 +593,119 @@ pub(crate) fn handle_menu_mouse(
 
     match mouse_event.kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            // Check if clicking on burger icon (≡ ) which is after line numbers
-            // Burger icon is at columns [line_number_width, line_number_width + 2)
-            let burger_start = line_number_width as usize;
-            let burger_end = burger_start + 2; // "≡ " is 2 characters wide
-
-            if row == 0 && col >= burger_start && col < burger_end {
-                // Toggle menu on burger click
-                if menu_bar.active {
-                    menu_bar.close();
-                } else {
-                    menu_bar.open();
-                }
-                return (None, true); // Menu toggled, needs full redraw
-            }
-
-            // Check if clicking on menu labels (only when menu is active)
-            if row == 0 && menu_bar.active {
-                let mut x = burger_end; // Start after burger icon
-                for (idx, menu) in menu_bar.menus.iter().enumerate() {
-                    if col >= x && col < x + menu.label.len() {
-                        // Clicked on this menu label
-                        if menu_bar.selected_menu_index == idx {
-                            // Clicking same menu toggles dropdown
-                            if menu_bar.dropdown_open {
-                                menu_bar.dropdown_open = false;
-                            } else {
-                                menu_bar.open_dropdown();
-                            }
-                        } else {
-                            // Switch to different menu and open its dropdown
-                            menu_bar.selected_menu_index = idx;
-                            menu_bar.open_dropdown();
-                        }
-                        return (None, true); // Menu changed, needs full redraw
-                    }
-                    x += menu.label.len() + 2; // +2 for spacing
-                }
-
-                // Clicked on menu bar but not on any menu -> close
-                menu_bar.close();
-                return (None, true); // Menu closed, needs full redraw
-            }
-
-            // Check if clicking on dropdown menu items
-            if menu_bar.active && menu_bar.dropdown_open && row > 0 {
-                let menu = &menu_bar.menus[menu_bar.selected_menu_index];
-
-                if row - 1 < menu.items.len() {
-                    let item_idx = row - 1;
-                    if !matches!(menu.items[item_idx], MenuItem::Separator) {
-                        menu_bar.selected_item_index = item_idx;
-                        let action = menu_bar.get_selected_action();
-                        menu_bar.close();
-                        return (action, true); // Action selected and menu closed, needs full redraw
-                    }
-                }
-            }
-
-            (None, false)
+            handle_menu_left_click(menu_bar, col, row, line_number_width)
         }
         MouseEventKind::Moved if menu_bar.active && menu_bar.dropdown_open => {
-            // Handle hover over dropdown items - update selection but don't trigger full redraw
-            if row > 0 {
-                let menu = &menu_bar.menus[menu_bar.selected_menu_index];
-                if row - 1 < menu.items.len() {
-                    let item_idx = row - 1;
-                    if !matches!(menu.items[item_idx], MenuItem::Separator) {
-                        if menu_bar.selected_item_index != item_idx {
-                            menu_bar.selected_item_index = item_idx;
-                            return (None, false); // Hover changed, only menu needs redraw
-                        }
-                    }
-                }
-            }
-            (None, false)
+            handle_dropdown_hover(menu_bar, row)
         }
         _ => (None, false),
     }
+}
+
+/// Handle left click on menu bar or dropdown items
+fn handle_menu_left_click(
+    menu_bar: &mut MenuBar,
+    col: usize,
+    row: usize,
+    line_number_width: u16,
+) -> (Option<MenuAction>, bool) {
+    let burger_start = line_number_width as usize;
+    let burger_end = burger_start + 2; // "≡ " is 2 characters wide
+
+    // Check burger icon click
+    if row == 0 && col >= burger_start && col < burger_end {
+        if menu_bar.active {
+            menu_bar.close();
+        } else {
+            menu_bar.open();
+        }
+        return (None, true);
+    }
+
+    // Check menu label clicks
+    if row == 0 && menu_bar.active {
+        return handle_menu_label_click(menu_bar, col, burger_end);
+    }
+
+    // Check dropdown item clicks
+    if menu_bar.active && menu_bar.dropdown_open && row > 0 {
+        return handle_dropdown_item_click(menu_bar, row);
+    }
+
+    (None, false)
+}
+
+/// Handle click on menu labels in the menu bar
+fn handle_menu_label_click(
+    menu_bar: &mut MenuBar,
+    col: usize,
+    start_x: usize,
+) -> (Option<MenuAction>, bool) {
+    let mut x = start_x;
+    
+    for (idx, menu) in menu_bar.menus.iter().enumerate() {
+        if col >= x && col < x + menu.label.len() {
+            if menu_bar.selected_menu_index == idx {
+                // Toggle dropdown on same menu
+                menu_bar.dropdown_open = !menu_bar.dropdown_open;
+                if !menu_bar.dropdown_open {
+                    // If closing, do nothing special
+                } else {
+                    menu_bar.open_dropdown();
+                }
+            } else {
+                // Switch to different menu and open dropdown
+                menu_bar.selected_menu_index = idx;
+                menu_bar.open_dropdown();
+            }
+            return (None, true);
+        }
+        x += menu.label.len() + 2;
+    }
+
+    // Clicked outside menu labels - close menu
+    menu_bar.close();
+    (None, true)
+}
+
+/// Handle click on dropdown menu item
+fn handle_dropdown_item_click(
+    menu_bar: &mut MenuBar,
+    row: usize,
+) -> (Option<MenuAction>, bool) {
+    let menu = &menu_bar.menus[menu_bar.selected_menu_index];
+    
+    if row - 1 < menu.items.len() {
+        let item_idx = row - 1;
+        if !matches!(menu.items[item_idx], MenuItem::Separator) {
+            menu_bar.selected_item_index = item_idx;
+            let action = menu_bar.get_selected_action();
+            menu_bar.close();
+            return (action, true);
+        }
+    }
+    
+    (None, false)
+}
+
+/// Handle mouse hover over dropdown items
+fn handle_dropdown_hover(
+    menu_bar: &mut MenuBar,
+    row: usize,
+) -> (Option<MenuAction>, bool) {
+    if row > 0 {
+        let menu = &menu_bar.menus[menu_bar.selected_menu_index];
+        if row - 1 < menu.items.len() {
+            let item_idx = row - 1;
+            if !matches!(menu.items[item_idx], MenuItem::Separator) {
+                if menu_bar.selected_item_index != item_idx {
+                    menu_bar.selected_item_index = item_idx;
+                    return (None, false); // Hover changed, only menu needs redraw
+                }
+            }
+        }
+    }
+    (None, false)
 }
 
 #[cfg(test)]
@@ -876,5 +901,91 @@ mod tests {
         assert!(file2_has_marker, "file2 should have unsaved marker (*)");
         assert!(file3_no_marker, "file3 should NOT have unsaved marker");
     }
+
+    #[test]
+    fn test_update_file_menu_shows_ellipsis_when_too_many_files() {
+        use std::fs;
+        use crate::env::set_temp_home;
+
+        let (tmp, _guard) = set_temp_home();
+        
+        // Create more files than max_files
+        for i in 1..=7 {
+            let file = tmp.path().join(format!("file{}.txt", i));
+            fs::write(&file, "content").unwrap();
+            crate::recent::update_recent_file(file.to_str().unwrap()).unwrap();
+        }
+        
+        let file1 = tmp.path().join("file1.txt");
+        let mut menu_bar = MenuBar::new();
+        menu_bar.update_file_menu(5, file1.to_str().unwrap(), false);
+        
+        let file_menu = &menu_bar.menus[0];
+        let mut found_ellipsis = false;
+        
+        for item in &file_menu.items {
+            if let MenuItem::Action { label, .. } = item {
+                if label == "..." {
+                    found_ellipsis = true;
+                    break;
+                }
+            }
+        }
+        
+        assert!(found_ellipsis, "Should show '...' when more files than max_files");
+    }
+
+    #[test]
+    fn test_down_key_opens_dropdown_when_menu_active() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        
+        let mut menu_bar = MenuBar::new();
+        menu_bar.open(); // Open menu bar but not dropdown
+        assert!(menu_bar.active);
+        assert!(!menu_bar.dropdown_open);
+        
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        let (action, needs_redraw) = handle_menu_key(&mut menu_bar, key_event);
+        
+        assert!(menu_bar.dropdown_open, "Down should open dropdown");
+        assert!(action.is_none());
+        assert!(needs_redraw);
+    }
+
+    #[test]
+    fn test_enter_key_selects_menu_item() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        
+        let mut menu_bar = MenuBar::new();
+        menu_bar.open();
+        menu_bar.open_dropdown();
+        menu_bar.selected_item_index = 0; // New action
+        
+        let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
+        let (action, needs_redraw) = handle_menu_key(&mut menu_bar, key_event);
+        
+        assert!(action.is_some(), "Enter should select an action");
+        assert_eq!(action.unwrap(), MenuAction::FileNew);
+        assert!(!menu_bar.active, "Menu should close after selection");
+        assert!(needs_redraw);
+    }
+
+    #[test]
+    fn test_up_down_navigation_skips_separators() {
+        let mut menu_bar = MenuBar::new();
+        menu_bar.open_dropdown();
+        
+        // File menu: New, Open, Save, Close, [Separator], Quit
+        menu_bar.selected_item_index = 3; // Close
+        menu_bar.next_item(); // Should skip separator and go to Quit
+        
+        let item = &menu_bar.menus[0].items[menu_bar.selected_item_index];
+        if let MenuItem::Action { label, .. } = item {
+            assert_eq!(label, "Quit", "Should skip separator");
+        } else {
+            panic!("Should be on an action item, not separator");
+        }
+    }
 }
+
 

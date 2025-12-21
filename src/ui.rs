@@ -565,6 +565,77 @@ fn handle_file_selector_in_loop(
     }
 }
 
+/// Handle first Esc press in various modes
+/// Returns true if handled (should continue waiting), false if in normal mode (should process Esc)
+fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bool) -> bool {
+    *esc_was_in_normal_mode = false;
+
+    // In help mode, ESC exits help
+    if state.help_active {
+        state.help_active = false;
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // In menu mode, ESC closes menu
+    if state.menu_bar.active {
+        state.menu_bar.close();
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // In find mode, exit find
+    if state.find_active {
+        state.find_active = false;
+        state.find_pattern.clear();
+        state.find_error = None;
+        state.find_history_index = None;
+        state.last_search_pattern = state.saved_search_pattern.clone();
+        state.saved_search_pattern = None;
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // Clear search highlights (after exiting find mode with Enter)
+    if state.last_search_pattern.is_some() {
+        state.last_search_pattern = None;
+        state.find_scope = None;
+        state.find_error = None;
+        state.search_hit_count = 0;
+        state.search_current_hit = 0;
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // Exit goto_line mode
+    if state.goto_line_active {
+        state.goto_line_active = false;
+        state.goto_line_input.clear();
+        state.goto_line_cursor_pos = 0;
+        state.goto_line_typing_started = false;
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // Clear multi-cursors
+    if state.has_multi_cursors() {
+        state.clear_multi_cursors();
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // Clear selection
+    if state.has_selection() {
+        state.clear_selection();
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // In normal mode - Esc should open menu
+    // Let it pass through to handle_key_event which will call handle_menu_key
+    false
+}
+
 fn editing_session(
     file: &str,
     content: String,
@@ -752,72 +823,11 @@ fn editing_session(
                     }
                     EscResult::First => {
                         // First Esc - handle based on current mode
-
-                        // In help mode, ESC exits help
-                        if state.help_active {
-                            state.help_active = false;
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in help mode
+                        let handled = handle_first_esc(&mut state, &mut esc_was_in_normal_mode);
+                        if handled {
                             continue; // Wait for second Esc or timeout
                         }
-
-                        // In menu mode, ESC closes menu
-                        if state.menu_bar.active {
-                            state.menu_bar.close();
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in menu mode
-                            continue; // Wait for second Esc or timeout
-                        }
-
-                        // In find mode, exit find
-                        if state.find_active {
-                            state.find_active = false;
-                            state.find_pattern.clear();
-                            state.find_error = None;
-                            state.find_history_index = None;
-                            state.last_search_pattern = state.saved_search_pattern.clone();
-                            state.saved_search_pattern = None;
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in find mode
-                            continue; // Wait for second Esc or timeout
-                        } else if state.last_search_pattern.is_some() {
-                            // Clear search highlights (after exiting find mode with Enter)
-                            state.last_search_pattern = None;
-                            state.find_scope = None;
-                            state.find_error = None;
-                            state.search_hit_count = 0;
-                            state.search_current_hit = 0;
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in search results mode
-                            continue; // Wait for second Esc or timeout
-                        } else if state.goto_line_active {
-                            // Exit goto_line mode
-                            state.goto_line_active = false;
-                            state.goto_line_input.clear();
-                            state.goto_line_cursor_pos = 0;
-                            state.goto_line_typing_started = false;
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in goto mode
-                            continue; // Wait for second Esc or timeout
-                        } else if state.has_multi_cursors() {
-                            // Clear multi-cursors
-                            state.clear_multi_cursors();
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in multi-cursor mode
-                            continue; // Wait for second Esc or timeout
-                        } else if state.has_selection() {
-                            // Clear selection
-                            state.clear_selection();
-                            state.needs_redraw = true;
-                            esc_was_in_normal_mode = false; // Was in selection mode
-                            continue; // Wait for second Esc or timeout
-                        } else {
-                            // In normal mode - Esc should open menu
-                            // Let it pass through to handle_key_event which will call handle_menu_key
-                            // This allows the first Esc to open the menu, and double-Esc still exits
-                            esc_was_in_normal_mode = false;
-                            // Don't continue here - fall through to handle_key_event
-                        }
+                        // If not handled (normal mode), fall through to handle_key_event
                     }
                     EscResult::None => {
                         // Not an Esc key - normal handling
