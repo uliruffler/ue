@@ -419,6 +419,7 @@ pub(crate) fn render_dropdown_menu(
     stdout: &mut impl Write,
     menu_bar: &MenuBar,
     state: &crate::editor_state::FileViewerState,
+    lines: &[String],
 ) -> Result<(), std::io::Error> {
     use crossterm::{cursor::MoveTo, execute, style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor}};
 
@@ -430,10 +431,10 @@ pub(crate) fn render_dropdown_menu(
 
     // Calculate menu horizontal position (after burger icon and before selected menu label)
     // Menu should align under the selected menu label in the header
-    let line_num_width = crate::coordinates::line_number_width(state.settings) as usize;
+    let line_num_width = crate::coordinates::line_number_display_width(state.settings, lines.len()) as usize;
     let mut menu_x = line_num_width + 2; // line numbers + burger icon "≡ "
     for i in 0..menu_bar.selected_menu_index {
-        menu_x += menu_bar.menus[i].label.len() + 2; // +2 for spacing
+        menu_x += menu_bar.menus[i].label.len(); // Menu label length
     }
 
     // Find longest item label for menu width
@@ -660,7 +661,7 @@ fn handle_menu_label_click(
             }
             return (None, true);
         }
-        x += menu.label.len() + 2;
+        x += menu.label.len(); // Just menu label length, no extra spacing
     }
 
     // Clicked outside menu labels - close menu
@@ -726,7 +727,7 @@ pub(crate) fn is_point_in_dropdown(
     let line_num_width = line_number_width as usize;
     let mut menu_x = line_num_width + 2; // line numbers + burger icon "≡ "
     for i in 0..menu_bar.selected_menu_index {
-        menu_x += menu_bar.menus[i].label.len() + 2; // +2 for spacing
+        menu_x += menu_bar.menus[i].label.len(); // Menu label length
     }
 
     // Find longest item label for menu width

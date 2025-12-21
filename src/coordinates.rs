@@ -44,6 +44,25 @@ pub(crate) fn line_number_width(settings: &Settings) -> u16 {
     }
 }
 
+/// Calculate the actual display width for line numbers based on document length
+/// This accounts for documents that need more digits than the setting specifies
+pub(crate) fn line_number_display_width(settings: &Settings, total_lines: usize) -> u16 {
+    if settings.appearance.line_number_digits == 0 {
+        0
+    } else {
+        // Calculate the width needed for the document
+        let actual_width = if total_lines == 0 {
+            1
+        } else {
+            ((total_lines as f64).log10().floor() as usize) + 1
+        };
+
+        // Use the larger of line_number_digits or actual_width, plus 1 for space separator
+        let display_width = actual_width.max(settings.appearance.line_number_digits as usize);
+        (display_width + 1) as u16
+    }
+}
+
 pub(crate) fn calculate_wrapped_lines_for_line(
     lines: &[String],
     line_index: usize,

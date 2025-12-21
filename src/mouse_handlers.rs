@@ -447,7 +447,7 @@ pub(crate) fn handle_mouse_event(
         ..
     } = mouse_event;
 
-    let line_num_width = crate::coordinates::line_number_width(state.settings);
+    let line_num_width = crate::coordinates::line_number_display_width(state.settings, lines.len());
 
     // Handle menu clicks (row 0 is menu bar)
     if row == 0 {
@@ -466,7 +466,7 @@ pub(crate) fn handle_mouse_event(
     if state.menu_bar.active && state.menu_bar.dropdown_open {
         let col = column as usize;
         let row_usize = row as usize;
-        
+
         if crate::menu::is_point_in_dropdown(&state.menu_bar, col, row_usize, line_num_width) {
             // Event is within dropdown - handle it
             let (action, needs_full_redraw) = crate::menu::handle_menu_mouse(&mut state.menu_bar, mouse_event, line_num_width);

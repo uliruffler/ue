@@ -49,7 +49,7 @@ pub(crate) fn render_screen(
 
     // Then render dropdown menu OVER the content if active
     if state.menu_bar.active && state.menu_bar.dropdown_open {
-        crate::menu::render_dropdown_menu(stdout, &state.menu_bar, state)?;
+        crate::menu::render_dropdown_menu(stdout, &state.menu_bar, state, lines)?;
     }
 
     position_cursor(stdout, lines, state, visible_lines)?;
@@ -77,6 +77,18 @@ fn render_header(
 
     // Render line number area (if enabled)
     if state.settings.appearance.line_number_digits > 0 {
+        let total_lines = lines.len();
+
+        // Calculate the width needed for the document (number of digits in total_lines)
+        let actual_width = if total_lines == 0 {
+            1
+        } else {
+            ((total_lines as f64).log10().floor() as usize) + 1
+        };
+
+        // Use the larger of line_number_digits or actual_width
+        let display_width = actual_width.max(state.settings.appearance.line_number_digits as usize);
+
         let modulus = 10usize.pow(state.settings.appearance.line_number_digits as u32);
         let top_number = (state.top_line / modulus) * modulus;
 
@@ -88,7 +100,6 @@ fn render_header(
         };
 
         // Only show digit hint if total lines >= modulus (document exceeds digit capacity)
-        let total_lines = lines.len();
         let show_digit_hint = total_lines >= modulus;
 
         // Highlight with scrollbar color if cursor is above
@@ -97,20 +108,20 @@ fn render_header(
             execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }))?;
         }
 
-        // Write digit hint or empty space (always same width based on line_number_digits)
+        // Write digit hint or empty space (always same width based on document length)
         if show_digit_hint {
             write!(
                 stdout,
                 "{:width$}",
                 top_number,
-                width = state.settings.appearance.line_number_digits as usize
+                width = display_width
             )?;
         } else {
             write!(
                 stdout,
                 "{:width$}",
                 "",
-                width = state.settings.appearance.line_number_digits as usize
+                width = display_width
             )?;
         }
 
@@ -350,6 +361,18 @@ fn render_footer(
     let mut bottom_number_str = String::new();
     let mut highlight_digit_hint = false;
     if digits > 0 {
+        let total_lines = lines.len();
+
+        // Calculate the width needed for the document (number of digits in total_lines)
+        let actual_width = if total_lines == 0 {
+            1
+        } else {
+            ((total_lines as f64).log10().floor() as usize) + 1
+        };
+
+        // Use the larger of line_number_digits or actual_width
+        let display_width = actual_width.max(digits);
+
         let modulus = 10usize.pow(digits as u32);
         let mut last_visible_line = state.top_line;
         let mut remaining = visible_lines;
@@ -372,7 +395,7 @@ fn render_footer(
         let bottom_number = (last_visible_line / modulus) * modulus;
 
         // Only show digit hint if total lines >= modulus (document exceeds digit capacity)
-        let show_digit_hint = lines.len() >= modulus;
+        let show_digit_hint = total_lines >= modulus;
 
         // Check if cursor is below visible area to determine highlighting
         let cursor_below = match state.cursor_off_screen_direction(lines, visible_lines, text_width) {
@@ -381,11 +404,11 @@ fn render_footer(
         };
         highlight_digit_hint = cursor_below;
 
-        // Format digit hint or empty space (always same width)
+        // Format digit hint or empty space (always same width based on document length)
         if show_digit_hint {
-            bottom_number_str = format!("{:width$}", bottom_number, width = digits);
+            bottom_number_str = format!("{:width$}", bottom_number, width = display_width);
         } else {
-            bottom_number_str = format!("{:width$}", "", width = digits);
+            bottom_number_str = format!("{:width$}", "", width = display_width);
         }
     }
 

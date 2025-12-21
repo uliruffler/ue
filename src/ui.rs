@@ -753,7 +753,7 @@ fn editing_session(
 
             // Menu is open but no full redraw needed - just update the menu overlay
             // Render only the dropdown menu without redrawing content
-            crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state)?;
+            crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state, &lines)?;
             stdout.flush()?;
         }
 
