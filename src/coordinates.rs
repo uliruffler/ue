@@ -753,8 +753,8 @@ mod tests {
         let lines = vec!["line1".to_string()]; // Only 1 line, fits in 20 visible
 
         let width = calculate_text_width(&state, &lines, 20);
-        // 80 - line_number_width (default 4) = 76
-        assert_eq!(width, 76);
+        // 80 - line_number_width (default 3 for 2 digits) = 77
+        assert_eq!(width, 77);
     }
 
     #[test]
@@ -765,8 +765,8 @@ mod tests {
         let lines = (0..30).map(|i| format!("line{}", i)).collect::<Vec<_>>();
 
         let width = calculate_text_width(&state, &lines, 20);
-        // 80 - line_number_width (4) - scrollbar (1) = 75
-        assert_eq!(width, 75);
+        // 80 - line_number_width (3) - scrollbar (1) = 76
+        assert_eq!(width, 76);
     }
 
     #[test]
@@ -818,14 +818,14 @@ mod tests {
         let lines = vec!["x".repeat(100)];
 
         // Click on second visual line (which is still first logical line)
-        // With line_number_width=4, text_width=76
-        // Second visual line starts at character 76, click at column 10
+        // With line_number_width=3, text_width=77
+        // Second visual line starts at character 77, click at column 10
         let result = visual_to_logical_position(&state, &lines, 1, 10, 20);
-        // Character index should be 76 + (10 - 4) = 82
+        // Character index should be 77 + (10 - 3) = 84
         assert!(result.is_some());
         let (line, col) = result.unwrap();
         assert_eq!(line, 0); // Still first logical line
-        assert!(col >= 76); // Should be in the second wrap segment
+        assert!(col >= 77); // Should be in the second wrap segment
     }
 
     #[test]

@@ -38,7 +38,7 @@ pub(crate) fn render_screen(
     execute!(stdout, cursor::Hide)?;
     execute!(stdout, cursor::MoveTo(0, 0))?;
 
-    render_header(stdout, file, state, lines.len())?;
+    render_header(stdout, file, state, lines, visible_lines)?;
 
     // Render content first (normal rendering)
     render_visible_lines(stdout, file, lines, state, visible_lines)?;
@@ -62,7 +62,8 @@ fn render_header(
     stdout: &mut impl Write,
     file: &str,
     state: &FileViewerState,
-    _total_lines: usize,
+    lines: &[String],
+    visible_lines: usize,
 ) -> Result<(), std::io::Error> {
     use crossterm::{cursor::MoveTo, style::{Color, SetForegroundColor}};
 
@@ -78,12 +79,50 @@ fn render_header(
     if state.settings.appearance.line_number_digits > 0 {
         let modulus = 10usize.pow(state.settings.appearance.line_number_digits as u32);
         let top_number = (state.top_line / modulus) * modulus;
-        write!(
-            stdout,
-            "{:width$} ",
-            top_number,
-            width = state.settings.appearance.line_number_digits as usize
-        )?;
+
+        // Determine if cursor is above visible area
+        let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+        let cursor_above = match state.cursor_off_screen_direction(lines, visible_lines, text_width) {
+            Some(true) => true,  // Cursor is above
+            _ => false,          // Cursor is visible or below
+        };
+
+        // Only show digit hint if total lines >= modulus (document exceeds digit capacity)
+        let total_lines = lines.len();
+        let show_digit_hint = total_lines >= modulus;
+
+        // Highlight with scrollbar color if cursor is above
+        if cursor_above {
+            use crossterm::style::Color;
+            execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }))?;
+        }
+
+        // Write digit hint or empty space (always same width based on line_number_digits)
+        if show_digit_hint {
+            write!(
+                stdout,
+                "{:width$}",
+                top_number,
+                width = state.settings.appearance.line_number_digits as usize
+            )?;
+        } else {
+            write!(
+                stdout,
+                "{:width$}",
+                "",
+                width = state.settings.appearance.line_number_digits as usize
+            )?;
+        }
+
+        // Reset color and write space separator
+        if cursor_above {
+            execute!(stdout, ResetColor)?;
+            // Re-apply header background
+            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
+                execute!(stdout, SetBackgroundColor(color))?;
+            }
+        }
+        write!(stdout, " ")?;
     }
 
     // Always render burger icon
@@ -309,6 +348,7 @@ fn render_footer(
     let total_width = state.term_width as usize;
     let digits = state.settings.appearance.line_number_digits as usize;
     let mut bottom_number_str = String::new();
+    let mut highlight_digit_hint = false;
     if digits > 0 {
         let modulus = 10usize.pow(digits as u32);
         let mut last_visible_line = state.top_line;
@@ -330,11 +370,45 @@ fn render_footer(
             }
         }
         let bottom_number = (last_visible_line / modulus) * modulus;
-        bottom_number_str = format!("{:width$} ", bottom_number, width = digits);
+
+        // Only show digit hint if total lines >= modulus (document exceeds digit capacity)
+        let show_digit_hint = lines.len() >= modulus;
+
+        // Check if cursor is below visible area to determine highlighting
+        let cursor_below = match state.cursor_off_screen_direction(lines, visible_lines, text_width) {
+            Some(false) => true,  // Cursor is below
+            _ => false,           // Cursor is visible or above
+        };
+        highlight_digit_hint = cursor_below;
+
+        // Format digit hint or empty space (always same width)
+        if show_digit_hint {
+            bottom_number_str = format!("{:width$}", bottom_number, width = digits);
+        } else {
+            bottom_number_str = format!("{:width$}", "", width = digits);
+        }
     }
 
-    write!(stdout, "\r{}", bottom_number_str)?;
-    let left_len = bottom_number_str.len();
+    write!(stdout, "\r")?;
+
+    // Apply scrollbar color highlighting if needed before writing digit hint
+    if highlight_digit_hint {
+        use crossterm::style::Color;
+        execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }))?;
+    }
+    write!(stdout, "{}", bottom_number_str)?;
+    if highlight_digit_hint {
+        execute!(stdout, ResetColor)?;
+        // Re-apply footer background
+        if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+            execute!(stdout, SetBackgroundColor(color))?;
+        }
+    }
+
+    // Write space separator
+    write!(stdout, " ")?;
+
+    let left_len = bottom_number_str.len() + 1; // +1 for the space separator
     let remaining_width = total_width.saturating_sub(left_len);
 
     // Show error/info message if present, otherwise show position
@@ -521,17 +595,47 @@ fn render_line(
                 // Calculate line number to display (modulo based on digits)
                 let modulus = 10usize.pow(ctx.state.settings.appearance.line_number_digits as u32);
                 let line_num = (logical_line_index + 1) % modulus;
+
+                // Check if this line contains the cursor
+                let is_cursor_line = logical_line_index == ctx.state.absolute_line();
+
+                // Set line numbers background color
                 if let Some(color) = crate::settings::Settings::parse_color(
                     &ctx.state.settings.appearance.line_numbers_bg,
                 ) {
                     execute!(stdout, SetBackgroundColor(color))?;
                 }
+
+                // Highlight line number with scrollbar color if cursor line
+                if is_cursor_line {
+                    use crossterm::style::Color;
+                    execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }))?;
+                }
+
+                // Write line number
                 write!(
                     stdout,
-                    "{:width$} ",
+                    "{:width$}",
                     line_num,
                     width = ctx.state.settings.appearance.line_number_digits as usize
                 )?;
+
+                // Reset to line numbers background before writing indicator
+                if is_cursor_line {
+                    if let Some(color) = crate::settings::Settings::parse_color(
+                        &ctx.state.settings.appearance.line_numbers_bg,
+                    ) {
+                        execute!(stdout, SetBackgroundColor(color))?;
+                    }
+                }
+
+                // Show '>' for cursor line, space for others
+                if is_cursor_line {
+                    write!(stdout, ">")?;
+                } else {
+                    write!(stdout, " ")?;
+                }
+
                 execute!(stdout, ResetColor)?;
             } else {
                 if let Some(color) = crate::settings::Settings::parse_color(
@@ -1888,9 +1992,10 @@ mod tests {
         let undo_history = UndoHistory::new();
         let state = FileViewerState::new(80, undo_history, &settings);
         let mut output = Vec::new();
+        let lines = vec!["test".to_string(); 10];
 
         // Test with a relative file path (no directory component)
-        let result = render_header(&mut output, "test.txt", &state, 10);
+        let result = render_header(&mut output, "test.txt", &state, &lines, 10);
         assert!(result.is_ok());
 
         let output_str = String::from_utf8(output).unwrap();
@@ -1909,9 +2014,10 @@ mod tests {
         let undo_history = UndoHistory::new();
         let state = FileViewerState::new(80, undo_history, &settings);
         let mut output = Vec::new();
+        let lines = vec!["test".to_string(); 10];
 
         // Test with a file path that includes a directory
-        let result = render_header(&mut output, "/home/user/test.txt", &state, 10);
+        let result = render_header(&mut output, "/home/user/test.txt", &state, &lines, 10);
         assert!(result.is_ok());
 
         let output_str = String::from_utf8(output).unwrap();

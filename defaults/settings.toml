@@ -17,7 +17,7 @@ max_menu_files = 5
 
 # Appearance settings
 [appearance]
-line_number_digits = 3
+line_number_digits = 2
 header_bg = "#001848"
 footer_bg = "#001848"
 line_numbers_bg = "#001848"

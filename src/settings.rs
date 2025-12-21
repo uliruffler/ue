@@ -109,7 +109,7 @@ fn default_max_menu_files() -> usize {
 }
 
 fn default_line_number_digits() -> u8 {
-    3
+    2
 }
 fn default_header_bg() -> String {
     "#001848".into()
@@ -375,21 +375,21 @@ mod tests {
     fn default_settings_file_created() {
         let (_tmp, _guard) = set_temp_home();
         let settings = Settings::load().expect("load settings");
-        assert_eq!(settings.appearance.line_number_digits, 3);
+        assert_eq!(settings.appearance.line_number_digits, 2);
     }
 
     #[test]
     fn settings_default_creation_and_reload() {
         let (tmp, _guard) = set_temp_home();
         let settings_first = Settings::load().expect("first load");
-        assert_eq!(settings_first.appearance.line_number_digits, 3);
+        assert_eq!(settings_first.appearance.line_number_digits, 2);
         // Modify file to check reload
         let settings_path = tmp.path().join(".ue").join("settings.toml");
         let mut content = fs::read_to_string(&settings_path).unwrap();
-        content = content.replace("line_number_digits = 3", "line_number_digits = 2");
+        content = content.replace("line_number_digits = 2", "line_number_digits = 5");
         fs::write(&settings_path, content).unwrap();
         let settings_second = Settings::load().expect("second load");
-        assert_eq!(settings_second.appearance.line_number_digits, 2);
+        assert_eq!(settings_second.appearance.line_number_digits, 5);
     }
 
     #[test]

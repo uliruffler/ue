@@ -267,6 +267,29 @@ impl<'a> FileViewerState<'a> {
         }
     }
 
+    /// Determine cursor position relative to visible area
+    /// Returns: Some(true) if above, Some(false) if below, None if visible
+    pub(crate) fn cursor_off_screen_direction(
+        &self,
+        lines: &[String],
+        visible_lines: usize,
+        text_width: u16,
+    ) -> Option<bool> {
+        if self.is_cursor_visible(lines, visible_lines, text_width) {
+            return None; // Cursor is visible
+        }
+
+        let absolute = self.absolute_line();
+
+        // If cursor is above top_line, it's above visible area
+        if absolute < self.top_line {
+            return Some(true); // Above
+        }
+
+        // Otherwise it's below visible area
+        Some(false) // Below
+    }
+
     /// Check if cursor is currently visible within the viewport
     /// This accounts for line wrapping - wrapped lines consume multiple visual lines
     pub(crate) fn is_cursor_visible(
