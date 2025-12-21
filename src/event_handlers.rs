@@ -31,7 +31,12 @@ pub(crate) fn handle_key_event(
     );
 
     // Handle menu interactions (Alt+letter to open, navigation when active)
-    let (menu_action, needs_full_redraw) = crate::menu::handle_menu_key(&mut state.menu_bar, key_event);
+    // But not when help is active (help should handle Esc first)
+    let (menu_action, needs_full_redraw) = if !state.help_active {
+        crate::menu::handle_menu_key(&mut state.menu_bar, key_event)
+    } else {
+        (None, false)
+    };
 
     if let Some(action) = menu_action {
         // An action was selected - always need redraw for this
@@ -46,6 +51,12 @@ pub(crate) fn handle_key_event(
             }
             crate::menu::MenuAction::FileOpen => {
                 // Open file selector (same as Esc in editor)
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::FileOpenRecent(_idx) => {
+                // Open a recent file from the menu
+                // Store the action to be handled by ui.rs which has access to file switching logic
+                state.pending_menu_action = Some(action);
                 return Ok((false, false));
             }
             crate::menu::MenuAction::FileSave => {
@@ -136,6 +147,7 @@ pub(crate) fn handle_key_event(
             }
             crate::menu::MenuAction::ViewFileSelector => {
                 // Open file selector (handled by ui.rs)
+                state.pending_menu_action = Some(action);
                 return Ok((false, false));
             }
             crate::menu::MenuAction::ViewLineWrap => {
@@ -1732,12 +1744,14 @@ mod tests {
         // Activate find mode and help
         state.find_active = true;
         state.help_active = true;
+        println!("Before handle_key_event: help_active={}, menu_bar.active={}", state.help_active, state.menu_bar.active);
         // Press ESC to exit help (should NOT exit find mode)
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
         let settings = state.settings;
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        println!("After handle_key_event: help_active={}, menu_bar.active={}, result={:?}", state.help_active, state.menu_bar.active, result);
         assert!(result.is_ok());
-        assert!(!state.help_active, "Help should be closed after ESC");
+        assert!(!state.help_active, "Help should be closed after ESC, but help_active={}", state.help_active);
         // Note: find_active state depends on help_active being processed first
         // The actual protection against file selector is in ui.rs
     }

@@ -11,6 +11,8 @@ horizontal_auto_scroll_speed = 1
 # Horizontal scroll speed for Shift+ScrollWheel (characters per scroll step)
 # Controls how many characters to scroll when using Shift+Mouse Wheel
 horizontal_scroll_speed = 2
+# Maximum number of files to show in File menu before "..." entry
+max_menu_files = 5
 
 
 # Appearance settings
@@ -25,7 +27,6 @@ cursor_shape = "bar"
 # Keybindings
 [keybindings]
 quit = "Esc Esc"
-file_selector = "Esc"
 copy = "Ctrl+c"
 paste = "Ctrl+v"
 cut = "Ctrl+x"

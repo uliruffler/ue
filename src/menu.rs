@@ -1,5 +1,23 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use std::io::Write;
+use std::path::Path;
+
+/// Check if a file has unsaved changes by reading its undo history
+fn check_file_has_unsaved_changes(file_path: &Path) -> bool {
+    // Get the undo history file path for this file
+    let file_str = file_path.to_string_lossy();
+    if let Ok(undo_path) = crate::undo::UndoHistory::history_path_for(&file_str) {
+        if undo_path.exists() {
+            // Try to read and deserialize the undo history file
+            if let Ok(content) = std::fs::read_to_string(&undo_path) {
+                if let Ok(history) = serde_json::from_str::<crate::undo::UndoHistory>(&content) {
+                    return history.modified;
+                }
+            }
+        }
+    }
+    false
+}
 
 /// Menu item types
 #[derive(Debug, Clone, PartialEq)]
@@ -18,6 +36,8 @@ pub(crate) enum MenuAction {
     // File menu
     FileNew,
     FileOpen,
+    #[allow(dead_code)] // Only used in ui.rs (binary)
+    FileOpenRecent(usize), // Index into recent files list
     FileSave,
     FileClose,
     FileQuit,
@@ -199,20 +219,32 @@ impl MenuBar {
 
     /// Move to next menu
     pub(crate) fn next_menu(&mut self) {
+        let was_dropdown_open = self.dropdown_open;
         self.selected_menu_index = (self.selected_menu_index + 1) % self.menus.len();
         self.selected_item_index = 0;
-        self.dropdown_open = false; // Close dropdown when switching menus
+        // If dropdown was open, keep it open for the new menu
+        if was_dropdown_open {
+            self.dropdown_open = true;
+        } else {
+            self.dropdown_open = false;
+        }
     }
 
     /// Move to previous menu
     pub(crate) fn prev_menu(&mut self) {
+        let was_dropdown_open = self.dropdown_open;
         if self.selected_menu_index == 0 {
             self.selected_menu_index = self.menus.len() - 1;
         } else {
             self.selected_menu_index -= 1;
         }
         self.selected_item_index = 0;
-        self.dropdown_open = false; // Close dropdown when switching menus
+        // If dropdown was open, keep it open for the new menu
+        if was_dropdown_open {
+            self.dropdown_open = true;
+        } else {
+            self.dropdown_open = false;
+        }
     }
 
     /// Move to next item in current menu (skip separators)
@@ -278,6 +310,104 @@ impl MenuBar {
         }
     }
 
+    /// Update File menu with current tracked files
+    #[allow(dead_code)] // Only used in ui.rs (binary)
+    pub(crate) fn update_file_menu(&mut self, max_files: usize, current_file: &str, is_current_modified: bool) {
+        use std::path::PathBuf;
+
+        // Get tracked files from recent.rs
+        let files = crate::recent::get_recent_files().unwrap_or_default();
+
+        // Determine how many files to show
+        let show_more = files.len() > max_files;
+        let files_to_show = if show_more {
+            max_files
+        } else {
+            files.len()
+        };
+
+        // Canonicalize current file for comparison
+        let current_canonical = PathBuf::from(current_file)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(current_file));
+
+        // Convert paths to display strings (show just filename) and check modified state
+        let mut file_labels = Vec::new();
+        for file in files.iter().take(files_to_show) {
+            let path = PathBuf::from(file);
+            let is_current = path == current_canonical;
+
+            // Check if file has unsaved changes by reading its undo history
+            let is_modified = if is_current {
+                // For current file, use the passed-in state
+                is_current_modified
+            } else {
+                // For other files, check their undo history
+                check_file_has_unsaved_changes(&path)
+            };
+
+            let filename = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_else(|| file.to_str().unwrap_or("???"));
+
+            // Add modified marker if needed
+            let label = if is_modified {
+                format!("* {}", filename)
+            } else {
+                filename.to_string()
+            };
+
+            file_labels.push(label);
+        }
+
+        // Build menu items
+        let mut items = vec![
+            MenuItem::Action {
+                label: "New".to_string(),
+                action: MenuAction::FileNew,
+            },
+            MenuItem::Action {
+                label: "Open".to_string(),
+                action: MenuAction::FileOpen,
+            },
+            MenuItem::Action {
+                label: "Save".to_string(),
+                action: MenuAction::FileSave,
+            },
+            MenuItem::Action {
+                label: "Close".to_string(),
+                action: MenuAction::FileClose,
+            },
+        ];
+
+        if !file_labels.is_empty() {
+            items.push(MenuItem::Separator);
+
+            for (idx, label) in file_labels.iter().enumerate() {
+                items.push(MenuItem::Action {
+                    label: label.clone(),
+                    action: MenuAction::FileOpenRecent(idx),
+                });
+            }
+
+            if show_more {
+                items.push(MenuItem::Action {
+                    label: "...".to_string(),
+                    action: MenuAction::ViewFileSelector,
+                });
+            }
+        }
+
+        items.push(MenuItem::Separator);
+        items.push(MenuItem::Action {
+            label: "Quit".to_string(),
+            action: MenuAction::FileQuit,
+        });
+
+        self.menus[0] = Menu::new("File", 'f', items);
+    }
+
     /// Try to activate menu by Alt+hotkey
     pub(crate) fn try_activate_by_hotkey(&mut self, key: char) -> bool {
         let key_lower = key.to_lowercase().next().unwrap_or(key);
@@ -310,7 +440,8 @@ pub(crate) fn render_dropdown_menu(
 
     // Calculate menu horizontal position (after burger icon and before selected menu label)
     // Menu should align roughly under its label in the header
-    let mut menu_x = 2; // After burger icon "≡ "
+    // Add 4 character offset to move menu to the right
+    let mut menu_x = 2 + 4; // After burger icon "≡ " + 4 char offset
     for i in 0..menu_bar.selected_menu_index {
         menu_x += menu_bar.menus[i].label.len() + 2; // +2 for spacing
     }
@@ -384,7 +515,7 @@ pub(crate) fn handle_menu_key(
     let code = key_event.code;
     let modifiers = key_event.modifiers;
 
-    // Alt+letter opens specific menu
+    // Alt+letter opens specific menu (still supported)
     if modifiers.contains(KeyModifiers::ALT) {
         if let KeyCode::Char(c) = code {
             if menu_bar.try_activate_by_hotkey(c) {
@@ -395,15 +526,27 @@ pub(crate) fn handle_menu_key(
         // Those should be handled by the normal editor logic
     }
 
+    // Esc opens menu (File menu with dropdown) or closes it if already open
+    if code == KeyCode::Esc && !modifiers.contains(KeyModifiers::ALT) && !modifiers.contains(KeyModifiers::CONTROL) {
+        if menu_bar.active {
+            // Close menu if already open
+            menu_bar.close();
+            return (None, true); // Menu closed, needs full redraw
+        } else {
+            // Open menu on File menu with dropdown
+            menu_bar.active = true;
+            menu_bar.selected_menu_index = 0; // File menu
+            menu_bar.selected_item_index = 0;
+            menu_bar.dropdown_open = true; // Open dropdown immediately
+            return (None, true); // Menu opened, needs full redraw
+        }
+    }
+
     if !menu_bar.active {
         return (None, false);
     }
 
     match code {
-        KeyCode::Esc => {
-            menu_bar.close();
-            (None, true) // Menu closed, needs full redraw
-        }
         KeyCode::Left => {
             menu_bar.prev_menu();
             (None, true) // Menu switched, needs full redraw (header + dropdown area)
@@ -612,6 +755,126 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_esc_opens_menu_when_inactive() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut menu_bar = MenuBar::new();
+        assert!(!menu_bar.active);
+
+        // Press Esc - should open menu
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+        let (action, needs_redraw) = handle_menu_key(&mut menu_bar, key_event);
+
+        assert!(menu_bar.active, "Menu should be active");
+        assert!(menu_bar.dropdown_open, "Dropdown should be open");
+        assert_eq!(menu_bar.selected_menu_index, 0, "File menu should be selected");
+        assert!(action.is_none(), "No action should be returned");
+        assert!(needs_redraw, "Should need redraw");
+    }
+
+    #[test]
+    fn test_esc_closes_menu_when_active() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut menu_bar = MenuBar::new();
+        menu_bar.open();
+        menu_bar.open_dropdown();
+        assert!(menu_bar.active);
+        assert!(menu_bar.dropdown_open);
+
+        // Press Esc - should close menu
+        let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
+        let (action, needs_redraw) = handle_menu_key(&mut menu_bar, key_event);
+
+        assert!(!menu_bar.active, "Menu should be inactive");
+        assert!(!menu_bar.dropdown_open, "Dropdown should be closed");
+        assert!(action.is_none(), "No action should be returned");
+        assert!(needs_redraw, "Should need redraw");
+    }
+
+    #[test]
+    fn test_left_right_switch_menus_with_dropdown_open() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut menu_bar = MenuBar::new();
+        menu_bar.open();
+        menu_bar.open_dropdown();
+        assert_eq!(menu_bar.selected_menu_index, 0);
+        assert!(menu_bar.dropdown_open);
+
+        // Press Right - should switch to next menu with dropdown still open
+        let key_event = KeyEvent::new(KeyCode::Right, KeyModifiers::empty());
+        let (action, _) = handle_menu_key(&mut menu_bar, key_event);
+
+        assert_eq!(menu_bar.selected_menu_index, 1, "Should move to Edit menu");
+        assert!(menu_bar.dropdown_open, "Dropdown should stay open");
+        assert!(action.is_none());
+
+        // Press Left - should go back to File menu
+        let key_event = KeyEvent::new(KeyCode::Left, KeyModifiers::empty());
+        let (action, _) = handle_menu_key(&mut menu_bar, key_event);
+
+        assert_eq!(menu_bar.selected_menu_index, 0, "Should be back to File menu");
+        assert!(menu_bar.dropdown_open, "Dropdown should stay open");
+        assert!(action.is_none());
+    }
+
+    #[test]
+    fn test_update_file_menu_detects_unsaved_changes_for_all_files() {
+        use std::fs;
+        use crate::env::set_temp_home;
+        use crate::undo::UndoHistory;
+
+        let (tmp, _guard) = set_temp_home();
+
+        // Create test files
+        let file1 = tmp.path().join("file1.txt");
+        let file2 = tmp.path().join("file2.txt");
+        let file3 = tmp.path().join("file3.txt");
+
+        fs::write(&file1, "content1").unwrap();
+        fs::write(&file2, "content2").unwrap();
+        fs::write(&file3, "content3").unwrap();
+
+        // Add files to recent list
+        crate::recent::update_recent_file(file1.to_str().unwrap()).unwrap();
+        crate::recent::update_recent_file(file2.to_str().unwrap()).unwrap();
+        crate::recent::update_recent_file(file3.to_str().unwrap()).unwrap();
+
+        // Mark file2 as modified in its undo history
+        let mut history2 = UndoHistory::new();
+        history2.modified = true;
+        history2.save(file2.to_str().unwrap()).unwrap();
+
+        // Mark file3 as not modified
+        let mut history3 = UndoHistory::new();
+        history3.modified = false;
+        history3.save(file3.to_str().unwrap()).unwrap();
+
+        // Update menu (file1 is "current" and not modified)
+        let mut menu_bar = MenuBar::new();
+        menu_bar.update_file_menu(5, file1.to_str().unwrap(), false);
+
+        // Find the File menu items
+        let file_menu = &menu_bar.menus[0];
+        let mut file2_has_marker = false;
+        let mut file3_no_marker = false;
+
+        for item in &file_menu.items {
+            if let MenuItem::Action { label, .. } = item {
+                if label.contains("file2.txt") {
+                    file2_has_marker = label.starts_with('*');
+                } else if label.contains("file3.txt") {
+                    file3_no_marker = !label.starts_with('*');
+                }
+            }
+        }
+
+        assert!(file2_has_marker, "file2 should have unsaved marker (*)");
+        assert!(file3_no_marker, "file3 should NOT have unsaved marker");
     }
 }
 

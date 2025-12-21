@@ -12,6 +12,7 @@ pub(crate) struct KeyBindings {
     pub(crate) save: String,
     pub(crate) undo: String,
     pub(crate) redo: String,
+    #[serde(default = "default_file_selector")]
     pub(crate) file_selector: String,
     pub(crate) find: String,
     pub(crate) find_next: String,
@@ -35,6 +36,10 @@ fn default_help() -> String {
 
 fn default_toggle_line_wrap() -> String {
     "Alt+w".into()
+}
+
+fn default_file_selector() -> String {
+    "".into() // Empty - no longer used, Esc opens menu instead
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -70,6 +75,8 @@ pub struct Settings {
     pub(crate) horizontal_scroll_speed: usize,
     #[serde(default = "default_appearance")]
     pub(crate) appearance: AppearanceSettings,
+    #[serde(default = "default_max_menu_files")]
+    pub(crate) max_menu_files: usize,
 }
 
 fn default_tab_width() -> usize {
@@ -94,6 +101,10 @@ fn default_horizontal_auto_scroll_speed() -> usize {
     3
 }
 fn default_horizontal_scroll_speed() -> usize {
+    5
+}
+
+fn default_max_menu_files() -> usize {
     5
 }
 
@@ -346,7 +357,7 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let kb = create_test_keybindings();
         assert!(kb.quit_matches(&KeyCode::Esc, &KeyModifiers::empty()));
-        assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
+        // file_selector no longer uses Esc - Esc opens menu instead
     }
 
     #[test]
@@ -387,8 +398,8 @@ mod tests {
         let mut kb = create_test_keybindings();
         kb.quit = "Esc Esc".into();
 
-        // Esc without modifiers should open file selector
-        assert!(kb.file_selector_matches(&KeyCode::Esc, &KeyModifiers::empty()));
+        // Single Esc now opens menu (handled in UI layer), not file selector
+        // file_selector keybinding is now empty/unused
 
         // Note: Double Esc detection is handled in the UI layer, not by keybinding parser
         // The quit keybinding "Esc Esc" is a special marker that the UI interprets
@@ -483,7 +494,7 @@ mod tests {
 
         // Check that all keybindings are non-empty
         assert!(!settings.keybindings.quit.is_empty());
-        assert!(!settings.keybindings.file_selector.is_empty());
+        // file_selector is now optional/empty - Esc opens menu instead
         assert!(!settings.keybindings.copy.is_empty());
         assert!(!settings.keybindings.paste.is_empty());
         assert!(!settings.keybindings.cut.is_empty());

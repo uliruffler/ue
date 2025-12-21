@@ -367,7 +367,7 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
     terminal::disable_raw_mode()?;
     if !unsaved.is_empty() {
         println!(
-            "Warning: Unsaved changes (not saved) for: {}",
+            "Warning: Unsaved changes for: {}",
             unsaved.join(", ")
         );
     }
@@ -618,6 +618,10 @@ fn editing_session(
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
     state.find_history = undo_history.find_history.clone(); // Restore find history
+
+    // Update file menu with current recent files
+    state.menu_bar.update_file_menu(settings.max_menu_files, file, state.modified);
+
     let saved_cursor_line = undo_history.cursor_line;
     let saved_cursor_col = undo_history.cursor_col;
     if saved_cursor_line < lines.len() {
@@ -739,42 +743,7 @@ fn editing_session(
 
         match event::read()? {
             Event::Key(key_event) => {
-                // Special handling for help mode - process before double-Esc detector
-                if state.help_active {
-                    // In help mode, ESC should just exit help, not trigger file selector
-                    if matches!(key_event.code, KeyCode::Esc)
-                        || matches!(key_event.code, KeyCode::F(1))
-                    {
-                        state.help_active = false;
-                        state.needs_redraw = true;
-                        continue;
-                    }
-                    // Handle other help navigation through regular key handler
-                    // which will return early for help mode
-                }
-
-                // Special handling for menu mode - single Esc closes menu
-                if state.menu_bar.active && matches!(key_event.code, KeyCode::Esc) {
-                    // Let the menu handler process Esc (it will close the menu)
-                    // Don't go through double-Esc detector
-                    let (should_quit, should_close) = handle_key_event(
-                        &mut state,
-                        &mut lines,
-                        key_event,
-                        settings,
-                        visible_lines,
-                        file,
-                    )?;
-                    if should_quit {
-                        return Ok((state.modified, None, true, false));
-                    }
-                    if should_close {
-                        return Ok((state.modified, None, false, true));
-                    }
-                    continue;
-                }
-
-                // Always process Esc through double-Esc detector (except when in help mode or menu mode, handled above)
+                // Process all Esc keys through double-Esc detector first
                 match last_esc.process_key(&key_event) {
                     EscResult::Double => {
                         // Double-Esc always exits the editor, regardless of mode
@@ -782,9 +751,26 @@ fn editing_session(
                         return Ok((state.modified, None, true, false));
                     }
                     EscResult::First => {
-                        // First Esc: exit find/goto/selection/multi-cursor mode if active, but continue waiting for second Esc
+                        // First Esc - handle based on current mode
+
+                        // In help mode, ESC exits help
+                        if state.help_active {
+                            state.help_active = false;
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in help mode
+                            continue; // Wait for second Esc or timeout
+                        }
+
+                        // In menu mode, ESC closes menu
+                        if state.menu_bar.active {
+                            state.menu_bar.close();
+                            state.needs_redraw = true;
+                            esc_was_in_normal_mode = false; // Was in menu mode
+                            continue; // Wait for second Esc or timeout
+                        }
+
+                        // In find mode, exit find
                         if state.find_active {
-                            // Exit find mode
                             state.find_active = false;
                             state.find_pattern.clear();
                             state.find_error = None;
@@ -793,6 +779,7 @@ fn editing_session(
                             state.saved_search_pattern = None;
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in find mode
+                            continue; // Wait for second Esc or timeout
                         } else if state.last_search_pattern.is_some() {
                             // Clear search highlights (after exiting find mode with Enter)
                             state.last_search_pattern = None;
@@ -802,6 +789,7 @@ fn editing_session(
                             state.search_current_hit = 0;
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in search results mode
+                            continue; // Wait for second Esc or timeout
                         } else if state.goto_line_active {
                             // Exit goto_line mode
                             state.goto_line_active = false;
@@ -810,25 +798,37 @@ fn editing_session(
                             state.goto_line_typing_started = false;
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in goto mode
+                            continue; // Wait for second Esc or timeout
                         } else if state.has_multi_cursors() {
                             // Clear multi-cursors
                             state.clear_multi_cursors();
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in multi-cursor mode
+                            continue; // Wait for second Esc or timeout
                         } else if state.has_selection() {
                             // Clear selection
                             state.clear_selection();
                             state.needs_redraw = true;
                             esc_was_in_normal_mode = false; // Was in selection mode
+                            continue; // Wait for second Esc or timeout
                         } else {
-                            // In normal mode - mark for file selector on timeout
-                            esc_was_in_normal_mode = true;
+                            // In normal mode - Esc should open menu
+                            // Let it pass through to handle_key_event which will call handle_menu_key
+                            // This allows the first Esc to open the menu, and double-Esc still exits
+                            esc_was_in_normal_mode = false;
+                            // Don't continue here - fall through to handle_key_event
                         }
-                        continue; // Wait for second Esc or timeout
                     }
                     EscResult::None => {
                         // Not an Esc key - normal handling
                         esc_was_in_normal_mode = false; // Clear the flag
+
+                        // Special handling for F1 in help mode
+                        if state.help_active && matches!(key_event.code, KeyCode::F(1)) {
+                            state.help_active = false;
+                            state.needs_redraw = true;
+                            continue;
+                        }
                     }
                 }
 
@@ -846,6 +846,37 @@ fn editing_session(
                 }
                 if should_close {
                     return Ok((state.modified, None, false, true));
+                }
+
+                // Handle pending menu action (e.g., FileOpenRecent or ViewFileSelector)
+                if let Some(action) = state.pending_menu_action.take() {
+                    match action {
+                        crate::menu::MenuAction::FileOpenRecent(idx) => {
+                            // Get the file at the specified index from recent files
+                            let recent_files = crate::recent::get_recent_files().unwrap_or_default();
+                            if let Some(path) = recent_files.get(idx) {
+                                // Save current state before switching
+                                persist_editor_state(&mut state, file);
+                                // Return to switch to the selected file
+                                return Ok((state.modified, Some(path.to_string_lossy().to_string()), false, false));
+                            }
+                            // If index is out of bounds, just ignore
+                        }
+                        crate::menu::MenuAction::ViewFileSelector => {
+                            // Open file selector
+                            if let Some(result) = handle_file_selector_in_loop(
+                                file,
+                                &mut state,
+                                &mut visible_lines,
+                                settings,
+                            )? {
+                                return Ok(result);
+                            }
+                        }
+                        _ => {
+                            // Other actions should have been handled in event_handlers.rs
+                        }
+                    }
                 }
             }
             Event::Resize(w, h) => {
