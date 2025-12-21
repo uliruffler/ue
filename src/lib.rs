@@ -1,3 +1,19 @@
+//! # UE - Uli's Editor
+//!
+//! A terminal-based text editor written in Rust.
+//!
+//! This library provides the core functionality for the `ue` text editor,
+//! including text editing, syntax highlighting, file management, and UI rendering.
+//!
+//! ## Example
+//!
+//! The editor is typically run via the binary, but the library can be used for testing:
+//!
+//! ```
+//! // Library functions are available for integration tests
+//! assert!(true); // Basic sanity check
+//! ```
+
 // Export modules for testing purposes
 // Note: dead_code warnings are suppressed for library-only code
 pub mod coordinates;
@@ -20,5 +36,4 @@ pub mod settings;
 pub mod syntax;
 pub mod ui;
 pub mod undo;
-
 

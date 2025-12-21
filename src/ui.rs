@@ -720,6 +720,14 @@ fn editing_session(
 
     loop {
         if state.needs_redraw {
+            // Update menu checkable states if menu is active (for both help and editor modes)
+            if state.menu_bar.active {
+                state.menu_bar.update_checkable(
+                    crate::menu::MenuAction::ViewLineWrap,
+                    state.is_line_wrapping_enabled()
+                );
+            }
+
             if state.help_active {
                 // Render help screen
                 let (tw, th) = terminal::size()?;
@@ -737,6 +745,11 @@ fn editing_session(
             }
             state.needs_redraw = false;
         } else if state.menu_bar.active && state.menu_bar.dropdown_open {
+            // Update menu checkable states before rendering dropdown
+            state.menu_bar.update_checkable(
+                crate::menu::MenuAction::ViewLineWrap,
+                state.is_line_wrapping_enabled()
+            );
 
             // Menu is open but no full redraw needed - just update the menu overlay
             // Render only the dropdown menu without redrawing content
@@ -908,6 +921,151 @@ fn editing_session(
             }
             Event::Mouse(mouse_event) => {
                 handle_mouse_event(&mut state, &mut lines, mouse_event, visible_lines);
+
+                // Process pending menu actions from mouse clicks
+                if let Some(action) = state.pending_menu_action.take() {
+                    // Execute the menu action (same logic as keyboard menu actions in event_handlers.rs)
+                    use crate::menu::MenuAction;
+                    use crate::editing::{save_file, delete_file_history, handle_copy, handle_cut, handle_paste, apply_undo, apply_redo};
+                    use std::time::Instant;
+
+                    state.needs_redraw = true;
+
+                    match action {
+                        MenuAction::FileNew => {
+                            // Open file selector
+                            if let Some(result) = handle_file_selector_in_loop(
+                                file,
+                                &mut state,
+                                &mut visible_lines,
+                                settings,
+                            )? {
+                                return Ok(result);
+                            }
+                        }
+                        MenuAction::FileOpen => {
+                            // Open file selector
+                            if let Some(result) = handle_file_selector_in_loop(
+                                file,
+                                &mut state,
+                                &mut visible_lines,
+                                settings,
+                            )? {
+                                return Ok(result);
+                            }
+                        }
+                        MenuAction::FileOpenRecent(idx) => {
+                            let recent_files = crate::recent::get_recent_files().unwrap_or_default();
+                            if let Some(path) = recent_files.get(idx) {
+                                persist_editor_state(&mut state, file);
+                                return Ok((state.modified, Some(path.to_string_lossy().to_string()), false, false));
+                            }
+                        }
+                        MenuAction::FileSave => {
+                            save_file(file, &mut lines)?;
+                            state.modified = false;
+                            state.undo_history.clear_unsaved_state();
+                            let abs = state.absolute_line();
+                            state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                            state.undo_history.find_history = state.find_history.clone();
+                            let _ = state.undo_history.save(file);
+                            state.last_save_time = Some(Instant::now());
+                        }
+                        MenuAction::FileClose => {
+                            if state.modified {
+                                let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
+                                // Show simple yes/no prompt
+                                let _ = crossterm::terminal::disable_raw_mode();
+                                print!("\nClose file with unsaved changes? (y/N): ");
+                                let _ = std::io::stdout().flush();
+                                let mut input = String::new();
+                                let _ = std::io::stdin().read_line(&mut input);
+                                let _ = crossterm::terminal::enable_raw_mode();
+                                let confirmed = input.trim().eq_ignore_ascii_case("y");
+                                if confirmed {
+                                    let _ = delete_file_history(file);
+                                    return Ok((state.modified, None, false, true));
+                                }
+                            } else {
+                                let _ = delete_file_history(file);
+                                return Ok((state.modified, None, false, true));
+                            }
+                        }
+                        MenuAction::FileQuit => {
+                            return Ok((state.modified, None, true, false));
+                        }
+                        MenuAction::EditUndo => {
+                            apply_undo(&mut state, &mut lines, file, visible_lines);
+                        }
+                        MenuAction::EditRedo => {
+                            apply_redo(&mut state, &mut lines, file, visible_lines);
+                        }
+                        MenuAction::EditCopy => {
+                            let _ = handle_copy(&state, &lines);
+                        }
+                        MenuAction::EditCut => {
+                            handle_cut(&mut state, &mut lines, file);
+                        }
+                        MenuAction::EditPaste => {
+                            handle_paste(&mut state, &mut lines, file);
+                        }
+                        MenuAction::EditFind => {
+                            state.saved_search_pattern = state.last_search_pattern.clone();
+                            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                                let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                                    (start, end)
+                                } else {
+                                    (end, start)
+                                };
+                                state.find_scope = Some(normalized);
+                            } else {
+                                state.find_scope = None;
+                            }
+                            state.find_active = true;
+                            state.find_pattern.clear();
+                            state.find_cursor_pos = 0;
+                            state.find_error = None;
+                        }
+                        MenuAction::ViewFileSelector => {
+                            if let Some(result) = handle_file_selector_in_loop(
+                                file,
+                                &mut state,
+                                &mut visible_lines,
+                                settings,
+                            )? {
+                                return Ok(result);
+                            }
+                        }
+                        MenuAction::ViewLineWrap => {
+                            state.toggle_line_wrapping();
+                            // Update menu checkbox to reflect new state
+                            state.menu_bar.update_checkable(
+                                crate::menu::MenuAction::ViewLineWrap,
+                                state.is_line_wrapping_enabled()
+                            );
+                        }
+                        MenuAction::HelpEditor => {
+                            state.help_active = true;
+                            state.help_context = crate::help::HelpContext::Editor;
+                            state.help_scroll_offset = 0;
+                        }
+                        MenuAction::HelpFind => {
+                            state.help_active = true;
+                            state.help_context = crate::help::HelpContext::Find;
+                            state.help_scroll_offset = 0;
+                        }
+                        MenuAction::HelpFileSelector => {
+                            state.help_active = true;
+                            state.help_context = crate::help::HelpContext::Editor;
+                            state.help_scroll_offset = 0;
+                        }
+                        MenuAction::HelpAbout => {
+                            state.help_active = true;
+                            state.help_context = crate::help::HelpContext::Editor;
+                            state.help_scroll_offset = 0;
+                        }
+                    }
+                }
             }
             _ => {}
         }

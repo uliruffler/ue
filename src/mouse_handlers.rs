@@ -447,9 +447,10 @@ pub(crate) fn handle_mouse_event(
         ..
     } = mouse_event;
 
-    // Handle menu clicks (row 0 is menu bar, replaces old header)
+    let line_num_width = crate::coordinates::line_number_width(state.settings);
+
+    // Handle menu clicks (row 0 is menu bar)
     if row == 0 {
-        let line_num_width = crate::coordinates::line_number_width(state.settings);
         let (action, needs_full_redraw) = crate::menu::handle_menu_mouse(&mut state.menu_bar, mouse_event, line_num_width);
         if let Some(action) = action {
             state.pending_menu_action = Some(action);
@@ -459,6 +460,33 @@ pub(crate) fn handle_mouse_event(
         }
         // Always return here to prevent clicks on menu from affecting editor
         return;
+    }
+
+    // Check if event is within dropdown menu area (rows 1+) or is a hover event
+    if state.menu_bar.active && state.menu_bar.dropdown_open {
+        let col = column as usize;
+        let row_usize = row as usize;
+        
+        if crate::menu::is_point_in_dropdown(&state.menu_bar, col, row_usize, line_num_width) {
+            // Event is within dropdown - handle it
+            let (action, needs_full_redraw) = crate::menu::handle_menu_mouse(&mut state.menu_bar, mouse_event, line_num_width);
+            if let Some(action) = action {
+                state.pending_menu_action = Some(action);
+            }
+            if needs_full_redraw {
+                state.needs_redraw = true;
+            }
+            return;
+        } else if matches!(kind, MouseEventKind::Down(MouseButton::Left)) {
+            // Left click outside dropdown - close the menu
+            state.menu_bar.close();
+            state.needs_redraw = true;
+            // Don't return - let the click be handled by the editor
+        } else if matches!(kind, MouseEventKind::Moved) {
+            // Mouse moved outside dropdown - just ignore (don't close menu, don't process in editor)
+            return;
+        }
+        // For other event types (scrolling, etc.), fall through to normal handling
     }
 
 

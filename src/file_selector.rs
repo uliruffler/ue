@@ -144,7 +144,7 @@ fn format_file_display(path: &Path) -> String {
 }
 
 /// Show file selection screen and return selected file
-pub(crate) fn select_file() -> io::Result<Option<String>> {
+pub fn select_file() -> io::Result<Option<String>> {
     let files = get_tracked_files()?;
     if files.is_empty() {
         eprintln!("No tracked files found in ~/.ue/files/");

@@ -1,27 +1,7 @@
 #![deny(warnings)]
 
 use clap::Parser;
-
-mod coordinates;
-mod default_syntax;
-mod double_esc;
-mod editing;
-mod editor_state;
-#[cfg(test)]
-mod env;
-mod event_handlers;
-mod file_selector;
-mod find;
-mod help;
-mod menu;
-mod mouse_handlers;
-mod recent;
-mod rendering;
-mod session;
-mod settings;
-mod syntax;
-mod ui;
-mod undo; // only compile env helpers for tests
+use ue::*;
 
 #[derive(Parser)]
 #[clap(name = "ue", version = env!("CARGO_PKG_VERSION"), about = "Simple terminal editor")]

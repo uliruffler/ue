@@ -28,7 +28,7 @@ pub(crate) fn get_recent_files() -> io::Result<Vec<PathBuf>> {
     Ok(result)
 }
 
-pub(crate) fn update_recent_file(file_path: &str) -> io::Result<()> {
+pub fn update_recent_file(file_path: &str) -> io::Result<()> {
     let path_buf = PathBuf::from(file_path);
     // Try canonicalize but fall back to original if fails (may not exist yet)
     let canonical = path_buf.canonicalize().unwrap_or(path_buf);

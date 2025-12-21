@@ -316,18 +316,18 @@ impl MenuBar {
         let files = crate::recent::get_recent_files().unwrap_or_default();
         let show_more = files.len() > max_files;
         let files_to_show = if show_more { max_files } else { files.len() };
-        
+
         let current_canonical = std::path::PathBuf::from(current_file)
             .canonicalize()
             .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
-        
+
         let file_labels = Self::create_file_labels(
             &files,
             files_to_show,
             &current_canonical,
             is_current_modified,
         );
-        
+
         let items = Self::build_file_menu_items(file_labels, show_more);
         self.menus[0] = Menu::new("File", 'f', items);
     }
@@ -350,12 +350,12 @@ impl MenuBar {
                 } else {
                     check_file_has_unsaved_changes(&path)
                 };
-                
+
                 let filename = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_else(|| file.to_str().unwrap_or("???"));
-                
+
                 if is_modified {
                     format!("* {}", filename)
                 } else {
@@ -376,14 +376,14 @@ impl MenuBar {
 
         if !file_labels.is_empty() {
             items.push(MenuItem::Separator);
-            
+
             for (idx, label) in file_labels.iter().enumerate() {
                 items.push(MenuItem::Action {
                     label: label.clone(),
                     action: MenuAction::FileOpenRecent(idx),
                 });
             }
-            
+
             if show_more {
                 items.push(MenuItem::Action {
                     label: "...".to_string(),
@@ -394,7 +394,7 @@ impl MenuBar {
 
         items.push(MenuItem::Separator);
         items.push(MenuItem::Action { label: "Quit".to_string(), action: MenuAction::FileQuit });
-        
+
         items
     }
 
@@ -429,9 +429,9 @@ pub(crate) fn render_dropdown_menu(
     let menu = &menu_bar.menus[menu_bar.selected_menu_index];
 
     // Calculate menu horizontal position (after burger icon and before selected menu label)
-    // Menu should align roughly under its label in the header
-    // Add 4 character offset to move menu to the right
-    let mut menu_x = 2 + 4; // After burger icon "≡ " + 4 char offset
+    // Menu should align under the selected menu label in the header
+    let line_num_width = crate::coordinates::line_number_width(state.settings) as usize;
+    let mut menu_x = line_num_width + 2; // line numbers + burger icon "≡ "
     for i in 0..menu_bar.selected_menu_index {
         menu_x += menu_bar.menus[i].label.len() + 2; // +2 for spacing
     }
@@ -642,7 +642,7 @@ fn handle_menu_label_click(
     start_x: usize,
 ) -> (Option<MenuAction>, bool) {
     let mut x = start_x;
-    
+
     for (idx, menu) in menu_bar.menus.iter().enumerate() {
         if col >= x && col < x + menu.label.len() {
             if menu_bar.selected_menu_index == idx {
@@ -674,7 +674,7 @@ fn handle_dropdown_item_click(
     row: usize,
 ) -> (Option<MenuAction>, bool) {
     let menu = &menu_bar.menus[menu_bar.selected_menu_index];
-    
+
     if row - 1 < menu.items.len() {
         let item_idx = row - 1;
         if !matches!(menu.items[item_idx], MenuItem::Separator) {
@@ -684,7 +684,7 @@ fn handle_dropdown_item_click(
             return (action, true);
         }
     }
-    
+
     (None, false)
 }
 
@@ -706,6 +706,51 @@ fn handle_dropdown_hover(
         }
     }
     (None, false)
+}
+
+/// Check if a point (column, row) is within the dropdown menu bounds
+/// Returns true if the dropdown is open and the point is inside it
+pub(crate) fn is_point_in_dropdown(
+    menu_bar: &MenuBar,
+    col: usize,
+    row: usize,
+    line_number_width: u16,
+) -> bool {
+    if !menu_bar.active || !menu_bar.dropdown_open {
+        return false;
+    }
+
+    let menu = &menu_bar.menus[menu_bar.selected_menu_index];
+
+    // Calculate menu horizontal position (same logic as render_dropdown_menu)
+    let line_num_width = line_number_width as usize;
+    let mut menu_x = line_num_width + 2; // line numbers + burger icon "≡ "
+    for i in 0..menu_bar.selected_menu_index {
+        menu_x += menu_bar.menus[i].label.len() + 2; // +2 for spacing
+    }
+
+    // Find longest item label for menu width
+    let mut max_width = menu.label.len();
+    for item in &menu.items {
+        let width = match item {
+            MenuItem::Action { label, .. } | MenuItem::Checkable { label, .. } => label.len() + 4,
+            MenuItem::Separator => 3,
+        };
+        if width > max_width {
+            max_width = width;
+        }
+    }
+    max_width += 4; // Padding
+
+    // Dropdown starts at row 1 and extends for menu.items.len() rows
+    let dropdown_start_row = 1;
+    let dropdown_end_row = 1 + menu.items.len();
+
+    // Check if point is within bounds
+    row >= dropdown_start_row
+        && row < dropdown_end_row
+        && col >= menu_x
+        && col < menu_x + max_width
 }
 
 #[cfg(test)]
@@ -908,21 +953,21 @@ mod tests {
         use crate::env::set_temp_home;
 
         let (tmp, _guard) = set_temp_home();
-        
+
         // Create more files than max_files
         for i in 1..=7 {
             let file = tmp.path().join(format!("file{}.txt", i));
             fs::write(&file, "content").unwrap();
             crate::recent::update_recent_file(file.to_str().unwrap()).unwrap();
         }
-        
+
         let file1 = tmp.path().join("file1.txt");
         let mut menu_bar = MenuBar::new();
         menu_bar.update_file_menu(5, file1.to_str().unwrap(), false);
-        
+
         let file_menu = &menu_bar.menus[0];
         let mut found_ellipsis = false;
-        
+
         for item in &file_menu.items {
             if let MenuItem::Action { label, .. } = item {
                 if label == "..." {
@@ -931,22 +976,22 @@ mod tests {
                 }
             }
         }
-        
+
         assert!(found_ellipsis, "Should show '...' when more files than max_files");
     }
 
     #[test]
     fn test_down_key_opens_dropdown_when_menu_active() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        
+
         let mut menu_bar = MenuBar::new();
         menu_bar.open(); // Open menu bar but not dropdown
         assert!(menu_bar.active);
         assert!(!menu_bar.dropdown_open);
-        
+
         let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
         let (action, needs_redraw) = handle_menu_key(&mut menu_bar, key_event);
-        
+
         assert!(menu_bar.dropdown_open, "Down should open dropdown");
         assert!(action.is_none());
         assert!(needs_redraw);
@@ -955,15 +1000,15 @@ mod tests {
     #[test]
     fn test_enter_key_selects_menu_item() {
         use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-        
+
         let mut menu_bar = MenuBar::new();
         menu_bar.open();
         menu_bar.open_dropdown();
         menu_bar.selected_item_index = 0; // New action
-        
+
         let key_event = KeyEvent::new(KeyCode::Enter, KeyModifiers::empty());
         let (action, needs_redraw) = handle_menu_key(&mut menu_bar, key_event);
-        
+
         assert!(action.is_some(), "Enter should select an action");
         assert_eq!(action.unwrap(), MenuAction::FileNew);
         assert!(!menu_bar.active, "Menu should close after selection");
@@ -974,11 +1019,11 @@ mod tests {
     fn test_up_down_navigation_skips_separators() {
         let mut menu_bar = MenuBar::new();
         menu_bar.open_dropdown();
-        
+
         // File menu: New, Open, Save, Close, [Separator], Quit
         menu_bar.selected_item_index = 3; // Close
         menu_bar.next_item(); // Should skip separator and go to Quit
-        
+
         let item = &menu_bar.menus[0].items[menu_bar.selected_item_index];
         if let MenuItem::Action { label, .. } = item {
             assert_eq!(label, "Quit", "Should skip separator");
