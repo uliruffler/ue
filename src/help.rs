@@ -90,6 +90,18 @@ pub(crate) fn get_file_selector_help(
     )
 }
 
+/// Get help content for open dialog
+pub(crate) fn get_open_dialog_help(
+    settings: &crate::settings::Settings,
+    term_width: usize,
+) -> Vec<String> {
+    load_help_from_md(
+        include_str!("../defaults/help-open-dialog.md"),
+        settings,
+        term_width,
+    )
+}
+
 /// Truncate a string to a maximum display width, handling UTF-8 and ANSI escape codes
 /// Returns a string that fits within the width without breaking multi-byte characters
 fn truncate_to_width(text: &str, max_width: usize) -> String {

@@ -52,22 +52,13 @@ struct OpenDialogState {
 
 impl OpenDialogState {
     fn new(current_file: Option<&Path>, show_hidden: bool) -> io::Result<Self> {
-        eprintln!("[DEBUG] OpenDialogState::new - starting");
-        eprintln!("[DEBUG] current_file: {:?}", current_file);
-
         let start_dir = if let Some(file) = current_file {
-            let dir = file.parent()
+            file.parent()
                 .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."));
-            eprintln!("[DEBUG] start_dir from file parent: {:?}", dir);
-            dir
+                .unwrap_or_else(|| PathBuf::from("."))
         } else {
-            let dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-            eprintln!("[DEBUG] start_dir from cwd: {:?}", dir);
-            dir
+            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
         };
-
-        eprintln!("[DEBUG] Creating state with start_dir: {:?}", start_dir);
 
         let mut state = Self {
             nodes: Vec::new(),
@@ -81,20 +72,16 @@ impl OpenDialogState {
             help_scroll_offset: 0,
         };
 
-        eprintln!("[DEBUG] Calling build_tree...");
         state.build_tree(&start_dir, current_file)?;
-        eprintln!("[DEBUG] build_tree completed, nodes: {}", state.nodes.len());
         Ok(state)
     }
 
     /// Build the tree starting from root, showing the path to current file
     fn build_tree(&mut self, start_dir: &Path, current_file: Option<&Path>) -> io::Result<()> {
-        eprintln!("[DEBUG] build_tree: start_dir = {:?}", start_dir);
         self.nodes.clear();
 
         // Canonicalize the start directory
         let start_dir = start_dir.canonicalize().unwrap_or_else(|_| start_dir.to_path_buf());
-        eprintln!("[DEBUG] build_tree: canonicalized start_dir = {:?}", start_dir);
 
         // Build the ancestor path from root to start_dir
         let mut ancestors = Vec::new();
@@ -105,8 +92,6 @@ impl OpenDialogState {
         }
         ancestors.reverse(); // Now we have [/, /home, /home/user, /home/user/project]
 
-        eprintln!("[DEBUG] build_tree: ancestors = {:?}", ancestors);
-
         // Start from root
         let mut current_selected = None;
         self.build_path_tree(&PathBuf::from("/"), &ancestors, &start_dir, current_file, &mut current_selected, 0)?;
@@ -116,7 +101,108 @@ impl OpenDialogState {
             self.scroll_offset = idx.saturating_sub(10);
         }
 
-        eprintln!("[DEBUG] build_tree: done, total nodes = {}", self.nodes.len());
+        Ok(())
+    }
+
+    /// Refresh the tree while preserving expansion states and selection
+    fn refresh_tree(&mut self) -> io::Result<()> {
+        // Save current expansion states
+        let expanded_paths: std::collections::HashSet<PathBuf> = self.nodes.iter()
+            .enumerate()
+            .filter(|(idx, node)| {
+                // Check if node has children (is actually expanded)
+                node.is_directory
+                    && *idx + 1 < self.nodes.len()
+                    && self.nodes[*idx + 1].depth == node.depth + 1
+            })
+            .map(|(_, node)| node.path.clone())
+            .collect();
+
+        // Save current selection path
+        let selected_path = self.nodes.get(self.selected_index).map(|n| n.path.clone());
+
+        // Clear and rebuild from root
+        self.nodes.clear();
+        self.refresh_tree_recursive(&PathBuf::from("/"), 0, &expanded_paths)?;
+
+        // Restore selection to same path (or closest match)
+        if let Some(target_path) = selected_path {
+            if let Some(idx) = self.nodes.iter().position(|n| n.path == target_path) {
+                self.selected_index = idx;
+                // Adjust scroll to keep selection visible
+                if self.selected_index < self.scroll_offset {
+                    self.scroll_offset = self.selected_index;
+                } else if self.selected_index >= self.scroll_offset + 20 {
+                    self.scroll_offset = self.selected_index.saturating_sub(10);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Recursively rebuild tree with preserved expansion states
+    fn refresh_tree_recursive(
+        &mut self,
+        dir: &Path,
+        depth: usize,
+        expanded_paths: &std::collections::HashSet<PathBuf>,
+    ) -> io::Result<()> {
+        let entries = match fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(_) => return Ok(()),
+        };
+
+        let mut items: Vec<_> = entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                if !self.show_hidden {
+                    e.file_name()
+                        .to_str()
+                        .map(|s| !s.starts_with('.'))
+                        .unwrap_or(true)
+                } else {
+                    true
+                }
+            })
+            .collect();
+
+        // Sort: directories first, then alphabetically (case-insensitive)
+        items.sort_by(|a, b| {
+            let a_is_dir = a.path().is_dir();
+            let b_is_dir = b.path().is_dir();
+
+            match (a_is_dir, b_is_dir) {
+                (true, false) => std::cmp::Ordering::Less,
+                (false, true) => std::cmp::Ordering::Greater,
+                _ => {
+                    let a_name = a.file_name().to_string_lossy().to_lowercase();
+                    let b_name = b.file_name().to_string_lossy().to_lowercase();
+                    a_name.cmp(&b_name)
+                }
+            }
+        });
+
+        for entry in items {
+            let path = entry.path();
+            let name = entry.file_name().to_string_lossy().to_string();
+            let is_directory = path.is_dir();
+            let was_expanded = expanded_paths.contains(&path);
+
+            self.nodes.push(TreeNode {
+                path: path.clone(),
+                name,
+                is_directory,
+                is_expanded: was_expanded,
+                depth,
+            });
+
+            // Recursively expand if this directory was previously expanded
+            if is_directory && was_expanded {
+                self.refresh_tree_recursive(&path, depth + 1, expanded_paths)?;
+            }
+        }
+
         Ok(())
     }
 
@@ -130,16 +216,10 @@ impl OpenDialogState {
         current_selected: &mut Option<usize>,
         depth: usize,
     ) -> io::Result<()> {
-
-        eprintln!("[DEBUG] build_path_tree: current_dir = {:?}, depth = {}", current_dir, depth);
-
         // Read directory entries
         let entries = match fs::read_dir(current_dir) {
             Ok(entries) => entries,
-            Err(e) => {
-                eprintln!("[DEBUG] build_path_tree: failed to read dir: {}", e);
-                return Ok(());
-            }
+            Err(_) => return Ok(()),
         };
 
         let mut items: Vec<_> = entries
@@ -183,8 +263,6 @@ impl OpenDialogState {
             // Should this directory be expanded?
             let should_expand = is_on_path && path != target_dir;
 
-            eprintln!("[DEBUG] build_path_tree: adding node '{}' at depth {}, is_on_path={}, should_expand={}",
-                name, depth, is_on_path, should_expand);
 
             let node_index = self.nodes.len();
 
@@ -205,7 +283,6 @@ impl OpenDialogState {
 
             // Recursively expand only if on the path to target
             if is_on_path && is_directory {
-                eprintln!("[DEBUG] build_path_tree: recursing into {:?} (on path)", name);
                 self.build_path_tree(&path, ancestors, target_dir, current_file, current_selected, depth + 1)?;
             }
         }
@@ -225,19 +302,23 @@ impl OpenDialogState {
             return Ok(());
         }
 
-        let was_expanded = node.is_expanded;
         let path = node.path.clone();
         let depth = node.depth;
 
-        if was_expanded {
-            // Collapse: remove all children
+        // Check if children already exist (next node is a child with depth = current depth + 1)
+        let has_children = index + 1 < self.nodes.len()
+            && self.nodes[index + 1].depth == depth + 1;
+
+        if has_children {
+            // Children exist, so collapse and remove them
             self.nodes[index].is_expanded = false;
             let i = index + 1;
             while i < self.nodes.len() && self.nodes[i].depth > depth {
                 self.nodes.remove(i);
+                // Don't increment i because removal shifts elements down
             }
         } else {
-            // Expand: insert children
+            // No children exist, so expand and add them
             self.nodes[index].is_expanded = true;
             let mut new_nodes = Vec::new();
             let mut dummy_selected = None;
@@ -312,36 +393,50 @@ impl OpenDialogState {
     }
 
     /// Navigate up in the tree
-    fn move_up(&mut self) {
+    fn move_up(&mut self, _visible_lines: usize) {
         if self.selected_index > 0 {
             self.selected_index -= 1;
+            // Adjust scroll if selection goes above visible area
+            if self.selected_index < self.scroll_offset {
+                self.scroll_offset = self.selected_index;
+            }
         }
     }
 
     /// Navigate down in the tree
-    fn move_down(&mut self) {
+    fn move_down(&mut self, visible_lines: usize) {
         if self.selected_index + 1 < self.nodes.len() {
             self.selected_index += 1;
+            // Adjust scroll if selection goes below visible area (scroll before it goes off screen)
+            if self.selected_index > self.scroll_offset + visible_lines - 1 {
+                self.scroll_offset = self.selected_index - visible_lines + 1;
+            }
         }
     }
 
-    /// Navigate left: collapse or move to parent
-    fn move_left(&mut self) -> io::Result<()> {
+    /// Navigate left: move to parent
+    fn move_left(&mut self, visible_lines: usize) -> io::Result<()> {
         if self.selected_index >= self.nodes.len() {
             return Ok(());
         }
 
         let node = &self.nodes[self.selected_index];
+        let depth = node.depth;
 
-        if node.is_directory && node.is_expanded {
-            // Collapse if expanded
-            self.toggle_expand(self.selected_index)?;
-        } else if node.depth > 0 {
-            // Move to parent directory
-            let parent_depth = node.depth - 1;
+        // Move to parent (if not at root level)
+        if depth > 0 {
+            let parent_depth = depth - 1;
             for i in (0..self.selected_index).rev() {
                 if self.nodes[i].depth == parent_depth && self.nodes[i].is_directory {
                     self.selected_index = i;
+                    // Adjust scroll to keep parent visible if it's above the visible area
+                    if self.selected_index < self.scroll_offset {
+                        self.scroll_offset = self.selected_index;
+                    }
+                    // Also adjust if it would be below visible area (though less likely)
+                    else if self.selected_index > self.scroll_offset + visible_lines - 1 {
+                        self.scroll_offset = self.selected_index - visible_lines + 1;
+                    }
                     break;
                 }
             }
@@ -359,12 +454,25 @@ impl OpenDialogState {
         let node = &self.nodes[self.selected_index];
 
         if node.is_directory {
-            if !node.is_expanded {
-                // Expand the directory
+            let depth = node.depth;
+
+            // Check if directory already has children
+            let has_children = self.selected_index + 1 < self.nodes.len()
+                && self.nodes[self.selected_index + 1].depth == depth + 1;
+
+            if !has_children {
+                // Directory is closed, expand it
                 self.toggle_expand(self.selected_index)?;
-            }
-            // Move to first child if expanded
-            if self.selected_index + 1 < self.nodes.len() {
+
+                // Now check if children were added and move to first child if exists
+                if self.selected_index + 1 < self.nodes.len() {
+                    let next_node = &self.nodes[self.selected_index + 1];
+                    if next_node.depth == depth + 1 {
+                        self.selected_index += 1;
+                    }
+                }
+            } else {
+                // Directory was already open, just move to first child
                 self.selected_index += 1;
             }
         }
@@ -462,18 +570,13 @@ pub(crate) fn run_open_dialog(
     current_file: Option<&str>,
     settings: &crate::settings::Settings,
 ) -> io::Result<OpenDialogResult> {
-    eprintln!("[DEBUG] run_open_dialog: starting with current_file = {:?}", current_file);
-
     let current_path = current_file.map(PathBuf::from);
-    eprintln!("[DEBUG] run_open_dialog: current_path = {:?}", current_path);
-
-    eprintln!("[DEBUG] run_open_dialog: creating OpenDialogState...");
     let mut state = OpenDialogState::new(current_path.as_deref(), false)?;
-    eprintln!("[DEBUG] run_open_dialog: OpenDialogState created successfully");
 
     loop {
         let (term_width, term_height) = crossterm::terminal::size()?;
-        
+        let visible_lines = (term_height as usize).saturating_sub(2); // Header (1) + tree + input/help (1)
+
         if state.help_active {
             // Render help screen
             let help_content = crate::help::get_open_dialog_help(settings, term_width as usize);
@@ -526,13 +629,13 @@ pub(crate) fn run_open_dialog(
                 FocusMode::Tree => {
                     match key.code {
                         KeyCode::Up | KeyCode::Char('k') => {
-                            state.move_up();
+                            state.move_up(visible_lines);
                         }
                         KeyCode::Down | KeyCode::Char('j') => {
-                            state.move_down();
+                            state.move_down(visible_lines);
                         }
                         KeyCode::Left | KeyCode::Char('h') => {
-                            state.move_left()?;
+                            state.move_left(visible_lines)?;
                         }
                         KeyCode::Right | KeyCode::Char('l') => {
                             state.move_right()?;
@@ -561,13 +664,8 @@ pub(crate) fn run_open_dialog(
                         KeyCode::Char('.') => {
                             // Toggle hidden files
                             state.show_hidden = !state.show_hidden;
-                            let current = state.get_selected_path();
-                            state.build_tree(
-                                &current.as_deref()
-                                    .and_then(|p| p.parent())
-                                    .unwrap_or(Path::new("/")),
-                                current.as_deref(),
-                            )?;
+                            // Refresh tree while preserving expansion states and selection
+                            state.refresh_tree()?;
                         }
                         KeyCode::Esc => {
                             return Ok(OpenDialogResult::Cancelled);
@@ -603,8 +701,8 @@ fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result
 
     execute!(stdout, Clear(ClearType::All))?;
 
-    // Calculate areas
-    let tree_height = height.saturating_sub(4) as usize; // Reserve space for header, input, footer
+    // Calculate areas - header (1) + tree + input at bottom (1)
+    let tree_height = height.saturating_sub(2) as usize;
 
     // Render header
     execute!(
@@ -619,13 +717,10 @@ fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result
     // Render tree
     render_tree(state, 1, tree_height, width)?;
 
-    // Render input field
-    let input_y = (height - 3) as u16;
+    // Render input field at bottom
+    let input_y = (height - 1) as u16;
     render_input_field(state, input_y, width)?;
 
-    // Render footer with help
-    let footer_y = (height - 1) as u16;
-    render_footer(state, footer_y, width)?;
 
     stdout.flush()?;
     Ok(())
@@ -635,37 +730,21 @@ fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result
 fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, width: u16) -> io::Result<()> {
     let mut stdout = io::stdout();
 
-    // Adjust scroll offset to keep selection visible
-    let scroll_offset = if state.selected_index < state.scroll_offset {
-        state.selected_index
-    } else if state.selected_index >= state.scroll_offset + visible_lines {
-        state.selected_index - visible_lines + 1
-    } else {
-        state.scroll_offset
-    };
-
-    // Debug: print first few nodes to stderr
-    if scroll_offset == 0 {
-        eprintln!("\n[DEBUG] First 20 nodes:");
-        for (i, node) in state.nodes.iter().take(20).enumerate() {
-            eprintln!("[DEBUG]   {}: depth={} name={} dir={} exp={}",
-                i, node.depth, node.name, node.is_directory, node.is_expanded);
-        }
-    }
 
     for (i, node) in state.nodes.iter()
-        .skip(scroll_offset)
+        .skip(state.scroll_offset)
         .take(visible_lines)
         .enumerate()
     {
         let y = start_y + i as u16;
-        let abs_index = scroll_offset + i;
+        let abs_index = state.scroll_offset + i;
         let is_selected = abs_index == state.selected_index;
 
         execute!(stdout, MoveTo(0, y))?;
 
         if is_selected && state.focus == FocusMode::Tree {
-            execute!(stdout, SetBackgroundColor(Color::White), SetForegroundColor(Color::Black))?;
+            // Use same color as editor scrollbar
+            execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }), SetForegroundColor(Color::White))?;
         }
 
         // Build tree prefix with proper lines
@@ -676,7 +755,7 @@ fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, widt
             // Check if there are more siblings at depth d after the current node's subtree
             // We need to find if there's another node at depth d that comes after this entire subtree
             let mut has_more_at_depth = false;
-            
+
             for n in state.nodes.iter().skip(abs_index + 1) {
                 if n.depth < d {
                     // We've gone back to a shallower level, no more siblings at depth d
@@ -714,7 +793,10 @@ fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, widt
 
         // Add directory indicator
         let icon = if node.is_directory {
-            if node.is_expanded { "▼ " } else { "▶ " }
+            // Check if directory actually has children in the tree (is actually expanded)
+            let has_children = abs_index + 1 < state.nodes.len()
+                && state.nodes[abs_index + 1].depth == node.depth + 1;
+            if has_children { "▼ " } else { "▶ " }
         } else {
             "  "
         };
@@ -740,43 +822,6 @@ fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, widt
 fn render_input_field(state: &OpenDialogState, y: u16, width: u16) -> io::Result<()> {
     let mut stdout = io::stdout();
 
-    execute!(stdout, MoveTo(0, y))?;
-
-    if state.focus == FocusMode::Input {
-        execute!(stdout, SetBackgroundColor(Color::Rgb { r: 0, g: 24, b: 72 }))?;
-    }
-
-    let label = "Path: ";
-    execute!(stdout, Print(label))?;
-
-    let available_width = (width as usize).saturating_sub(label.len());
-    let display_text = if state.input_buffer.len() > available_width {
-        &state.input_buffer[state.input_buffer.len() - available_width..]
-    } else {
-        &state.input_buffer
-    };
-
-    execute!(stdout, Print(display_text))?;
-
-    // Pad the rest of the line
-    let remaining = available_width.saturating_sub(display_text.len());
-    execute!(stdout, Print(" ".repeat(remaining)))?;
-
-    execute!(stdout, ResetColor)?;
-
-    // Position cursor in input field if focused
-    if state.focus == FocusMode::Input {
-        let cursor_x = label.len() + state.input_cursor.min(available_width);
-        execute!(stdout, MoveTo(cursor_x as u16, y))?;
-    }
-
-    Ok(())
-}
-
-/// Render the footer with help text
-fn render_footer(state: &OpenDialogState, y: u16, width: u16) -> io::Result<()> {
-    let mut stdout = io::stdout();
-
     execute!(
         stdout,
         MoveTo(0, y),
@@ -784,16 +829,42 @@ fn render_footer(state: &OpenDialogState, y: u16, width: u16) -> io::Result<()> 
         SetForegroundColor(Color::White),
     )?;
 
-    let help_text = match state.focus {
-        FocusMode::Tree => "↑↓:Navigate  ←→:Collapse/Expand  Enter:Open  Tab:Input  .:Toggle Hidden  Esc:Cancel",
-        FocusMode::Input => "Enter:Open  Tab:Tree  Esc:Cancel",
-    };
+    match state.focus {
+        FocusMode::Tree => {
+            // Show help text when tree is focused
+            let help_text = "↑↓:Navigate  ←:Parent  →:Child  Enter:Toggle  Tab:Input  .:Hidden  Esc:Cancel";
+            let line = format!("{:width$}", help_text, width = width as usize);
+            execute!(stdout, Print(line))?;
+        }
+        FocusMode::Input => {
+            // Show input field when input is focused
+            let label = "Path: ";
+            execute!(stdout, Print(label))?;
 
-    let footer = format!("{:width$}", help_text, width = width as usize);
-    execute!(stdout, Print(footer), ResetColor)?;
+            let available_width = (width as usize).saturating_sub(label.len());
+            let display_text = if state.input_buffer.len() > available_width {
+                &state.input_buffer[state.input_buffer.len() - available_width..]
+            } else {
+                &state.input_buffer
+            };
+
+            execute!(stdout, Print(display_text))?;
+
+            // Pad the rest of the line
+            let remaining = available_width.saturating_sub(display_text.len());
+            execute!(stdout, Print(" ".repeat(remaining)))?;
+
+            // Position cursor in input field
+            let cursor_x = label.len() + state.input_cursor.min(available_width);
+            execute!(stdout, MoveTo(cursor_x as u16, y))?;
+        }
+    }
+
+    execute!(stdout, ResetColor)?;
 
     Ok(())
 }
+
 
 #[cfg(test)]
 mod tests {
