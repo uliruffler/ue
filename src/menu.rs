@@ -35,7 +35,7 @@ pub(crate) enum MenuItem {
 pub(crate) enum MenuAction {
     // File menu
     FileNew,
-    FileOpen,
+    FileOpenDialog,
     #[allow(dead_code)] // Only used in ui.rs (binary)
     FileOpenRecent(usize), // Index into recent files list
     FileSave,
@@ -98,8 +98,8 @@ impl MenuBar {
                         action: MenuAction::FileNew,
                     },
                     MenuItem::Action {
-                        label: "Open".to_string(),
-                        action: MenuAction::FileOpen,
+                        label: "Open...".to_string(),
+                        action: MenuAction::FileOpenDialog,
                     },
                     MenuItem::Action {
                         label: "Save".to_string(),
@@ -369,7 +369,7 @@ impl MenuBar {
     fn build_file_menu_items(file_labels: Vec<String>, show_more: bool) -> Vec<MenuItem> {
         let mut items = vec![
             MenuItem::Action { label: "New".to_string(), action: MenuAction::FileNew },
-            MenuItem::Action { label: "Open".to_string(), action: MenuAction::FileOpen },
+            MenuItem::Action { label: "Open...".to_string(), action: MenuAction::FileOpenDialog },
             MenuItem::Action { label: "Save".to_string(), action: MenuAction::FileSave },
             MenuItem::Action { label: "Close".to_string(), action: MenuAction::FileClose },
         ];
@@ -1021,7 +1021,7 @@ mod tests {
         let mut menu_bar = MenuBar::new();
         menu_bar.open_dropdown();
 
-        // File menu: New, Open, Save, Close, [Separator], Quit
+        // File menu: New, Open..., Save, Close, [Separator], Quit
         menu_bar.selected_item_index = 3; // Close
         menu_bar.next_item(); // Should skip separator and go to Quit
 

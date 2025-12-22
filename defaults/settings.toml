@@ -17,7 +17,7 @@ max_menu_files = 5
 
 # Appearance settings
 [appearance]
-line_number_digits = 2
+line_number_digits = 3
 header_bg = "#001848"
 footer_bg = "#001848"
 line_numbers_bg = "#001848"
@@ -34,6 +34,7 @@ close = "Ctrl+w"
 save = "Ctrl+s"
 undo = "Ctrl+z"
 redo = "Ctrl+y"
+open_dialog = "Ctrl+o"
 find = "Ctrl+f"
 find_next = "Ctrl+n"
 find_previous = "Ctrl+p"

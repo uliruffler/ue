@@ -29,6 +29,7 @@ pub mod find;
 pub mod help;
 pub mod menu;
 pub mod mouse_handlers;
+pub mod open_dialog;
 pub mod recent;
 pub mod rendering;
 pub mod session;

@@ -565,6 +565,40 @@ fn handle_file_selector_in_loop(
     }
 }
 
+/// Helper to show open dialog and handle result in event loop context
+/// Returns Some((modified, next_file, quit, close)) to exit loop, or None to continue
+fn handle_open_dialog_in_loop(
+    file: &str,
+    state: &mut FileViewerState,
+    settings: &Settings,
+) -> std::io::Result<FileSelectorResult> {
+    // Persist state before showing dialog
+    state
+        .undo_history
+        .update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    if let Err(e) = state.undo_history.save(file) {
+        eprintln!("Warning: failed to save undo history: {}", e);
+    }
+    state.last_save_time = Some(Instant::now());
+
+    match crate::open_dialog::run_open_dialog(Some(file), settings)? {
+        crate::open_dialog::OpenDialogResult::Selected(path) => {
+            let path_str = path.to_string_lossy().to_string();
+            Ok(Some((state.modified, Some(path_str), false, false)))
+        }
+        crate::open_dialog::OpenDialogResult::Quit => {
+            if let Err(e) = crate::session::save_selector_session() {
+                eprintln!("Warning: failed to save selector session: {}", e);
+            }
+            Ok(Some((state.modified, None, true, false)))
+        }
+        crate::open_dialog::OpenDialogResult::Cancelled => {
+            state.needs_redraw = true;
+            Ok(None) // Continue loop
+        }
+    }
+}
+
 /// Handle first Esc press in various modes
 /// Returns true if handled (should continue waiting), false if in normal mode (should process Esc)
 fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bool) -> bool {
@@ -896,6 +930,16 @@ fn editing_session(
                                 return Ok(result);
                             }
                         }
+                        crate::menu::MenuAction::FileOpenDialog => {
+                            // Open directory tree dialog
+                            if let Some(result) = handle_open_dialog_in_loop(
+                                file,
+                                &mut state,
+                                settings,
+                            )? {
+                                return Ok(result);
+                            }
+                        }
                         _ => {
                             // Other actions should have been handled in event_handlers.rs
                         }
@@ -943,12 +987,11 @@ fn editing_session(
                                 return Ok(result);
                             }
                         }
-                        MenuAction::FileOpen => {
-                            // Open file selector
-                            if let Some(result) = handle_file_selector_in_loop(
+                        MenuAction::FileOpenDialog => {
+                            // Open directory tree dialog
+                            if let Some(result) = handle_open_dialog_in_loop(
                                 file,
                                 &mut state,
-                                &mut visible_lines,
                                 settings,
                             )? {
                                 return Ok(result);

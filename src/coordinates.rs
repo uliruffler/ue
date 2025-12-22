@@ -772,8 +772,8 @@ mod tests {
         let lines = vec!["line1".to_string()]; // Only 1 line, fits in 20 visible
 
         let width = calculate_text_width(&state, &lines, 20);
-        // 80 - line_number_width (default 3 for 2 digits) = 77
-        assert_eq!(width, 77);
+        // 80 - line_number_width (default 4 for 3 digits + separator) = 76
+        assert_eq!(width, 76);
     }
 
     #[test]
@@ -784,8 +784,8 @@ mod tests {
         let lines = (0..30).map(|i| format!("line{}", i)).collect::<Vec<_>>();
 
         let width = calculate_text_width(&state, &lines, 20);
-        // 80 - line_number_width (3) - scrollbar (1) = 76
-        assert_eq!(width, 76);
+        // 80 - line_number_width (4) - scrollbar (1) = 75
+        assert_eq!(width, 75);
     }
 
     #[test]

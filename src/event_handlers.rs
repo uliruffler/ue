@@ -49,8 +49,9 @@ pub(crate) fn handle_key_event(
                 // TODO: Implement new file dialog
                 return Ok((false, false));
             }
-            crate::menu::MenuAction::FileOpen => {
-                // Open file selector (same as Esc in editor)
+            crate::menu::MenuAction::FileOpenDialog => {
+                // Open directory tree dialog
+                state.pending_menu_action = Some(action);
                 return Ok((false, false));
             }
             crate::menu::MenuAction::FileOpenRecent(_idx) => {
@@ -408,6 +409,12 @@ pub(crate) fn handle_key_event(
         state.find_cursor_pos = 0;
         state.find_error = None;
         state.needs_redraw = true;
+        return Ok((false, false));
+    }
+
+    // Handle open dialog (configurable keybinding, default Ctrl+O)
+    if settings.keybindings.open_dialog_matches(&code, &modifiers) {
+        state.pending_menu_action = Some(crate::menu::MenuAction::FileOpenDialog);
         return Ok((false, false));
     }
 

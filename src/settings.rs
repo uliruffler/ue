@@ -14,6 +14,8 @@ pub(crate) struct KeyBindings {
     pub(crate) redo: String,
     #[serde(default = "default_file_selector")]
     pub(crate) file_selector: String,
+    #[serde(default = "default_open_dialog")]
+    pub(crate) open_dialog: String,
     pub(crate) find: String,
     pub(crate) find_next: String,
     pub(crate) find_previous: String,
@@ -40,6 +42,10 @@ fn default_toggle_line_wrap() -> String {
 
 fn default_file_selector() -> String {
     "".into() // Empty - no longer used, Esc opens menu instead
+}
+
+fn default_open_dialog() -> String {
+    "Ctrl+o".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -230,6 +236,14 @@ impl KeyBindings {
         parse_keybinding(&self.toggle_line_wrap, code, modifiers)
     }
 
+    pub fn open_dialog_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.open_dialog, code, modifiers)
+    }
+
+    pub fn help_matches(&self, key: &crossterm::event::KeyEvent) -> bool {
+        parse_keybinding(&self.help, &key.code, &key.modifiers)
+    }
+
     #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
     pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.file_selector, code, modifiers)
@@ -334,6 +348,7 @@ mod tests {
             undo: "Ctrl+z".into(),
             redo: "Ctrl+y".into(),
             file_selector: "Esc".into(),
+            open_dialog: "Ctrl+o".into(),
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
@@ -375,18 +390,18 @@ mod tests {
     fn default_settings_file_created() {
         let (_tmp, _guard) = set_temp_home();
         let settings = Settings::load().expect("load settings");
-        assert_eq!(settings.appearance.line_number_digits, 2);
+        assert_eq!(settings.appearance.line_number_digits, 3);
     }
 
     #[test]
     fn settings_default_creation_and_reload() {
         let (tmp, _guard) = set_temp_home();
         let settings_first = Settings::load().expect("first load");
-        assert_eq!(settings_first.appearance.line_number_digits, 2);
+        assert_eq!(settings_first.appearance.line_number_digits, 3);
         // Modify file to check reload
         let settings_path = tmp.path().join(".ue").join("settings.toml");
         let mut content = fs::read_to_string(&settings_path).unwrap();
-        content = content.replace("line_number_digits = 2", "line_number_digits = 5");
+        content = content.replace("line_number_digits = 3", "line_number_digits = 5");
         fs::write(&settings_path, content).unwrap();
         let settings_second = Settings::load().expect("second load");
         assert_eq!(settings_second.appearance.line_number_digits, 5);
