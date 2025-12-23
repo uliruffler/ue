@@ -166,12 +166,21 @@ fn render_header(
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
         let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
         let parent_display = if parent == "." { "" } else { parent };
-
-        write!(
-            stdout,
-            "{} {} ({})",
-            modified_char, filename, parent_display
-        )?;
+        
+        // For untitled files, show a special indicator
+        if state.is_untitled {
+            write!(
+                stdout,
+                "{} {} (unsaved)",
+                modified_char, filename
+            )?;
+        } else {
+            write!(
+                stdout,
+                "{} {} ({})",
+                modified_char, filename, parent_display
+            )?;
+        }
     }
 
     // Clear rest of line (applies to both menu and filename modes)

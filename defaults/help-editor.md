@@ -45,13 +45,21 @@ Press **{help}** or **ESC** to close this help.
 | **{find_next}** | Find next occurrence |
 | **{find_previous}** | Find previous occurrence |
 
-## File
+## File Operations
 
 | Key | Action |
 |-----|--------|
 | **{save}** | Save file |
 | **{close}** | Close file (returns to file selector) |
 | **{quit}** | Quit editor (double-tap within {double_tap_speed_ms}ms) |
+
+**File Menu:**
+- **New**: Create a new untitled file
+- **Open...**: Browse and open files from directory tree
+- **Save**: Save current file (prompts for name if untitled)
+- **Close**: Close current file
+
+Untitled files show as "(unsaved)" in the header until you save them with a real filename.
 
 ## Other
 

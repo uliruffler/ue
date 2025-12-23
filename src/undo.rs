@@ -250,6 +250,28 @@ impl UndoHistory {
             .or_else(|_| std::env::var("HOME"))
             .or_else(|_| std::env::var("USERPROFILE"))?;
 
+        let home_path = PathBuf::from(&home);
+
+        // Check if this is an untitled file
+        // Untitled files are stored directly in ~/.ue/files/ without subdirectories
+        // They are identified by:
+        // 1. Filename starts with "untitled" (case-insensitive)
+        // 2. It's not an absolute path (no '/' on Unix or drive letter on Windows)
+        // 3. It's just a simple filename (no path separators)
+        let path_buf = PathBuf::from(file_path);
+        let filename = path_buf.file_name()
+            .and_then(|n| n.to_str())
+            .ok_or("Invalid filename")?;
+
+        let is_simple_filename = !file_path.contains('/') && !file_path.contains('\\');
+        let is_untitled = filename.to_lowercase().starts_with("untitled") && is_simple_filename;
+
+        if is_untitled {
+            // Store untitled files directly in ~/.ue/files/ (no subdirectories)
+            let ue_filename = format!("{}.ue", filename);
+            return Ok(home_path.join(".ue").join("files").join(ue_filename));
+        }
+
         // Convert to absolute path if relative
         let absolute_path = if file_path.starts_with('/') {
             PathBuf::from(file_path)
@@ -276,7 +298,6 @@ impl UndoHistory {
             .ok_or("Invalid filename")?;
 
         // Get directory path
-        let home_path = PathBuf::from(&home);
         let dir_path = home_path
             .join(".ue")
             .join("files")
@@ -286,7 +307,7 @@ impl UndoHistory {
             .unwrap_or_else(|| PathBuf::from(&home).join(".ue").join("files"));
 
         // Create the FILENAME.ue format (removed leading dot)
-        let ue_filename = format!("{}{}.ue", "", filename);
+        let ue_filename = format!("{}.ue", filename);
 
         Ok(dir_path.join(ue_filename))
     }

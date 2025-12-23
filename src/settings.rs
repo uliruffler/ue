@@ -26,6 +26,12 @@ pub(crate) struct KeyBindings {
     pub(crate) save_and_quit: String,
     #[serde(default = "default_toggle_line_wrap")]
     pub(crate) toggle_line_wrap: String,
+    #[serde(default = "default_new_file")]
+    pub(crate) new_file: String,
+}
+
+fn default_new_file() -> String {
+    "Ctrl+n".into()
 }
 
 fn default_save_and_quit() -> String {
@@ -235,6 +241,10 @@ impl KeyBindings {
     pub fn toggle_line_wrap_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.toggle_line_wrap, code, modifiers)
     }
+    
+    pub fn new_file_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.new_file, code, modifiers)
+    }
 
     pub fn open_dialog_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.open_dialog, code, modifiers)
@@ -356,6 +366,7 @@ mod tests {
             help: "F1".into(),
             save_and_quit: "Ctrl+q".into(),
             toggle_line_wrap: "Alt+w".into(),
+            new_file: "Ctrl+n".into(),
         }
     }
 

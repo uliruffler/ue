@@ -41,6 +41,37 @@ const CURSOR_CONTEXT_LINES: usize = 5;
 const UNDO_FILE_CHECK_INTERVAL_MS: u64 = 150;
 const SAVE_GRACE_PERIOD_MS: u64 = 200;
 
+/// Generate a unique untitled filename (untitled, untitled-2, untitled-3, etc.)
+fn generate_untitled_filename() -> String {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static COUNTER: AtomicUsize = AtomicUsize::new(1);
+
+    // Try to find a unique untitled-N name
+    loop {
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let filename = if n == 1 {
+            "untitled".to_string()
+        } else {
+            format!("untitled-{}", n)
+        };
+
+        // Check if this file already exists in tracked files
+        let tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
+        let filename_lower = filename.to_lowercase();
+        let exists = tracked.iter().any(|entry| {
+            entry.path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .map(|s| s.to_lowercase() == filename_lower)
+                .unwrap_or(false)
+        });
+
+        if !exists {
+            return filename;
+        }
+    }
+}
+
 /// Result of file selector overlay: Selected(path), Cancelled, or Quit
 enum SelectorResult {
     Selected(String),
@@ -581,7 +612,7 @@ fn handle_open_dialog_in_loop(
     }
     state.last_save_time = Some(Instant::now());
 
-    match crate::open_dialog::run_open_dialog(Some(file), settings)? {
+    match crate::open_dialog::run_open_dialog(Some(file), settings, crate::open_dialog::DialogMode::Open)? {
         crate::open_dialog::OpenDialogResult::Selected(path) => {
             let path_str = path.to_string_lossy().to_string();
             Ok(Some((state.modified, Some(path_str), false, false)))
@@ -723,6 +754,14 @@ fn editing_session(
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
     state.find_history = undo_history.find_history.clone(); // Restore find history
+
+    // Check if this is an untitled file (filename starts with "untitled" and doesn't exist on disk)
+    let filename_lower = std::path::Path::new(file)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    state.is_untitled = filename_lower.starts_with("untitled") && !std::path::Path::new(file).exists();
 
     // Update file menu with current recent files
     state.menu_bar.update_file_menu(settings.max_menu_files, file, state.modified);
@@ -908,6 +947,14 @@ fn editing_session(
                 // Handle pending menu action (e.g., FileOpenRecent or ViewFileSelector)
                 if let Some(action) = state.pending_menu_action.take() {
                     match action {
+                        crate::menu::MenuAction::FileNew => {
+                            // Create a new untitled file immediately
+                            let untitled_name = generate_untitled_filename();
+                            // Save current file state before switching
+                            persist_editor_state(&mut state, file);
+                            // Return to open the new untitled file
+                            return Ok((state.modified, Some(untitled_name), false, false));
+                        }
                         crate::menu::MenuAction::FileOpenRecent(idx) => {
                             // Get the file at the specified index from recent files
                             let recent_files = crate::recent::get_recent_files().unwrap_or_default();
@@ -938,6 +985,64 @@ fn editing_session(
                                 settings,
                             )? {
                                 return Ok(result);
+                            }
+                        }
+                        crate::menu::MenuAction::FileSave => {
+                            // This is an untitled file - show save-as dialog
+                            if state.is_untitled {
+                                // Exit raw mode temporarily for the dialog
+                                execute!(stdout, Show, DisableMouseCapture, LeaveAlternateScreen)?;
+                                terminal::disable_raw_mode()?;
+
+                                // Show open dialog to choose save location
+                                terminal::enable_raw_mode()?;
+                                execute!(stdout, EnterAlternateScreen, EnableMouseCapture, Hide)?;
+
+                                match crate::open_dialog::run_open_dialog(Some(file), settings, crate::open_dialog::DialogMode::SaveAs)? {
+                                    crate::open_dialog::OpenDialogResult::Selected(path) => {
+                                        let target_path = path.to_str().unwrap_or(file);
+
+                                        // Check if target file already exists and ask for confirmation
+                                        if std::path::Path::new(target_path).exists() {
+                                            use crate::event_handlers::show_overwrite_confirmation;
+                                            // Show overwrite confirmation in footer
+                                            if !show_overwrite_confirmation(target_path)? {
+                                                // User declined - redraw and continue editing
+                                                state.needs_redraw = true;
+                                                continue; // Go back to event loop
+                                            }
+                                        }
+
+                                        // User selected a path - save the file there
+                                        use crate::editing::{save_file, delete_file_history};
+
+                                        // Delete the old untitled undo file and remove from recent files
+                                        let _ = delete_file_history(file);
+                                        let _ = crate::recent::remove_recent_file(file);
+
+                                        save_file(target_path, &lines)?;
+                                        state.modified = false;
+                                        state.undo_history.clear_unsaved_state();
+                                        let abs = state.absolute_line();
+                                        state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                                        state.undo_history.find_history = state.find_history.clone();
+
+                                        // Save undo history to the NEW file location
+                                        let _ = state.undo_history.save(target_path);
+                                        state.last_save_time = Some(Instant::now());
+
+                                        // Switch to the new filename - don't persist to old file, it's deleted
+                                        return Ok((false, Some(path.to_string_lossy().to_string()), false, false));
+                                    }
+                                    crate::open_dialog::OpenDialogResult::Cancelled => {
+                                        // User cancelled - just redraw
+                                        state.needs_redraw = true;
+                                    }
+                                    crate::open_dialog::OpenDialogResult::Quit => {
+                                        // User wants to quit
+                                        return Ok((state.modified, None, true, false));
+                                    }
+                                }
                             }
                         }
                         _ => {
@@ -977,15 +1082,12 @@ fn editing_session(
 
                     match action {
                         MenuAction::FileNew => {
-                            // Open file selector
-                            if let Some(result) = handle_file_selector_in_loop(
-                                file,
-                                &mut state,
-                                &mut visible_lines,
-                                settings,
-                            )? {
-                                return Ok(result);
-                            }
+                            // Create a new untitled file immediately
+                            let untitled_name = generate_untitled_filename();
+                            // Save current file state before switching
+                            persist_editor_state(&mut state, file);
+                            // Return to open the new untitled file
+                            return Ok((state.modified, Some(untitled_name), false, false));
                         }
                         MenuAction::FileOpenDialog => {
                             // Open directory tree dialog
@@ -1005,14 +1107,72 @@ fn editing_session(
                             }
                         }
                         MenuAction::FileSave => {
-                            save_file(file, &mut lines)?;
-                            state.modified = false;
-                            state.undo_history.clear_unsaved_state();
-                            let abs = state.absolute_line();
-                            state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
-                            state.undo_history.find_history = state.find_history.clone();
-                            let _ = state.undo_history.save(file);
-                            state.last_save_time = Some(Instant::now());
+                            // If this is an untitled file, show save-as dialog
+                            if state.is_untitled {
+                                // Exit raw mode temporarily for the dialog
+                                execute!(stdout, Show, DisableMouseCapture, LeaveAlternateScreen)?;
+                                terminal::disable_raw_mode()?;
+
+                                // Show open dialog to choose save location
+                                terminal::enable_raw_mode()?;
+                                execute!(stdout, EnterAlternateScreen, EnableMouseCapture, Hide)?;
+
+                                match crate::open_dialog::run_open_dialog(Some(file), settings, crate::open_dialog::DialogMode::SaveAs)? {
+                                    crate::open_dialog::OpenDialogResult::Selected(path) => {
+                                        let target_path = path.to_str().unwrap_or(file);
+
+                                        // Check if target file already exists and ask for confirmation
+                                        if std::path::Path::new(target_path).exists() {
+                                            use crate::event_handlers::show_overwrite_confirmation;
+                                            // Show overwrite confirmation in footer
+                                            if !show_overwrite_confirmation(target_path)? {
+                                                // User declined - redraw and continue editing
+                                                state.needs_redraw = true;
+                                                continue; // Go back to event loop
+                                            }
+                                        }
+
+                                        // User selected a path - save the file there
+                                        use crate::editing::delete_file_history;
+
+                                        // Delete the old untitled undo file and remove from recent files
+                                        let _ = delete_file_history(file);
+                                        let _ = crate::recent::remove_recent_file(file);
+
+                                        save_file(target_path, &lines)?;
+                                        state.modified = false;
+                                        state.undo_history.clear_unsaved_state();
+                                        let abs = state.absolute_line();
+                                        state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                                        state.undo_history.find_history = state.find_history.clone();
+
+                                        // Save undo history to the NEW file location
+                                        let _ = state.undo_history.save(target_path);
+                                        state.last_save_time = Some(Instant::now());
+
+                                        // Switch to the new filename - don't persist to old file, it's deleted
+                                        return Ok((false, Some(path.to_string_lossy().to_string()), false, false));
+                                    }
+                                    crate::open_dialog::OpenDialogResult::Cancelled => {
+                                        // User cancelled - just redraw
+                                        state.needs_redraw = true;
+                                    }
+                                    crate::open_dialog::OpenDialogResult::Quit => {
+                                        // User wants to quit
+                                        return Ok((state.modified, None, true, false));
+                                    }
+                                }
+                            } else {
+                                // Normal file - just save
+                                save_file(file, &mut lines)?;
+                                state.modified = false;
+                                state.undo_history.clear_unsaved_state();
+                                let abs = state.absolute_line();
+                                state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                                state.undo_history.find_history = state.find_history.clone();
+                                let _ = state.undo_history.save(file);
+                                state.last_save_time = Some(Instant::now());
+                            }
                         }
                         MenuAction::FileClose => {
                             if state.modified {

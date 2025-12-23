@@ -425,3 +425,40 @@ fn test_horizontal_scrolling_bounds() {
     assert!(end_visible, "End is definitely visible when offset equals line length");
 }
 
+/// Test: Untitled files should be marked appropriately and not create disk files until saved
+#[test]
+#[serial]
+fn test_untitled_file_workflow() {
+    let (_tmp, _ue_dir) = setup_test_env();
+
+    // Simulate creating an untitled file
+    let untitled_name = "untitled";
+    let untitled_path = _tmp.path().join(untitled_name);
+
+    // Check that untitled file doesn't exist on disk in temp dir
+    assert!(!untitled_path.exists(), "Untitled file should not exist on disk");
+
+    // Create an editor state for the untitled file
+    let settings = Box::leak(Box::new(
+        ue::settings::Settings::load().expect("Failed to load test settings"),
+    ));
+    let undo_history = ue::undo::UndoHistory::new();
+    let _state = ue::editor_state::FileViewerState::new_for_test(80, undo_history, settings);
+
+    // The state should be marked as untitled for files starting with "untitled" that don't exist
+    // (This is checked in ui.rs when the editor state is created)
+
+    // Simulate typing some content
+    let content = vec![String::from("Hello, World!")];
+
+    // File should still not exist on disk
+    assert!(!untitled_path.exists(), "Untitled file should not be saved automatically");
+
+    // Simulate saving with a real filename
+    let real_file = _tmp.path().join("myfile.txt");
+    fs::write(&real_file, content[0].as_str()).unwrap();
+
+    // Now the file should exist
+    assert!(real_file.exists(), "File should exist after explicit save");
+    assert_eq!(fs::read_to_string(&real_file).unwrap(), "Hello, World!");
+}

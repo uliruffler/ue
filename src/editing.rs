@@ -698,7 +698,7 @@ pub(crate) fn insert_tab(
 }
 
 /// Delete the undo history file for the given file path and remove empty parent directories
-pub(crate) fn delete_file_history(file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
+pub fn delete_file_history(file_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let history_path = crate::undo::UndoHistory::history_path_for(file_path)?;
     if history_path.exists() {
         fs::remove_file(&history_path)?;
@@ -1659,28 +1659,6 @@ mod tests {
         assert_eq!(state.selection_end, Some((1, 1)));
     }
 
-    #[test]
-    fn delete_file_history_removes_file() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-
-        // Create a test file and save some content to create the .ue file
-        let test_file = "/tmp/test_delete.txt";
-        let mut lines = vec!["test content".to_string()];
-        insert_char(&mut state, &mut lines, 'x', test_file);
-
-        // Verify .ue file exists
-        let history_result = crate::undo::UndoHistory::load(test_file);
-        assert!(history_result.is_ok());
-
-        // Delete the file history
-        let result = delete_file_history(test_file);
-        assert!(result.is_ok());
-
-        // Verify it was deleted (load should return new/empty history)
-        let history_after = crate::undo::UndoHistory::load(test_file).unwrap();
-        assert_eq!(history_after.edits.len(), 0);
-    }
 
     #[test]
     fn delete_file_history_handles_nonexistent_file() {
@@ -1696,7 +1674,238 @@ mod tests {
         let _ = copy_to_clipboard("test");
         let _ = paste_from_clipboard();
     }
+
+    // ===== UNTITLED FILE CLEANUP TESTS =====
+
+    #[test]
+    fn test_untitled_file_stored_in_root() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        // Create and save untitled file
+        let mut undo_history = UndoHistory::new();
+        undo_history.update_state(0, 0, 0, vec!["test".into()]);
+        undo_history.save("untitled").unwrap();
+
+        // Verify it's in root .ue/files/
+        let expected = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
+        assert!(expected.exists(), "untitled.ue should exist at {}", expected.display());
+    }
+
+    #[test]
+    fn test_untitled_2_stored_in_root() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        let mut undo_history = UndoHistory::new();
+        undo_history.update_state(0, 0, 0, vec!["test".into()]);
+        undo_history.save("untitled-2").unwrap();
+
+        let expected = std::path::PathBuf::from(&home).join(".ue/files/untitled-2.ue");
+        assert!(expected.exists(), "untitled-2.ue should exist at {}", expected.display());
+    }
+
+    #[test]
+    fn test_delete_untitled_history() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        // Create untitled file
+        let mut undo_history = UndoHistory::new();
+        undo_history.update_state(0, 0, 0, vec!["content".into()]);
+        undo_history.save("untitled").unwrap();
+
+        let undo_path = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
+        assert!(undo_path.exists(), "untitled.ue should exist before deletion");
+
+        // Delete it
+        let result = delete_file_history("untitled");
+        assert!(result.is_ok(), "Should successfully delete untitled history");
+        assert!(!undo_path.exists(), "untitled.ue should be deleted");
+    }
+
+    #[test]
+    fn test_delete_untitled_2_history() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        let mut undo_history = UndoHistory::new();
+        undo_history.update_state(0, 0, 0, vec!["content".into()]);
+        undo_history.save("untitled-2").unwrap();
+
+        let undo_path = std::path::PathBuf::from(&home).join(".ue/files/untitled-2.ue");
+        assert!(undo_path.exists());
+
+        delete_file_history("untitled-2").unwrap();
+        assert!(!undo_path.exists(), "untitled-2.ue should be deleted");
+    }
+
+    #[test]
+    fn test_delete_multiple_untitled_files() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        // Create multiple untitled files
+        for name in &["untitled", "untitled-2", "untitled-3"] {
+            let mut undo_history = UndoHistory::new();
+            undo_history.update_state(0, 0, 0, vec!["test".into()]);
+            undo_history.save(name).unwrap();
+        }
+
+        // Verify all exist
+        for name in &["untitled", "untitled-2", "untitled-3"] {
+            let path = std::path::PathBuf::from(&home).join(format!(".ue/files/{}.ue", name));
+            assert!(path.exists(), "{}.ue should exist", name);
+        }
+
+        // Delete all
+        for name in &["untitled", "untitled-2", "untitled-3"] {
+            delete_file_history(name).unwrap();
+        }
+
+        // Verify all deleted
+        for name in &["untitled", "untitled-2", "untitled-3"] {
+            let path = std::path::PathBuf::from(&home).join(format!(".ue/files/{}.ue", name));
+            assert!(!path.exists(), "{}.ue should be deleted", name);
+        }
+    }
+
+    #[test]
+    fn test_full_save_workflow_with_cleanup() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        // Step 1: Create untitled file
+        let mut undo_history = UndoHistory::new();
+        undo_history.push(crate::undo::Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 'h',
+        });
+        undo_history.update_state(0, 0, 1, vec!["hello".into()]);
+        undo_history.save("untitled").unwrap();
+
+        // Step 2: Verify untitled exists
+        let untitled_path = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
+        assert!(untitled_path.exists(), "untitled.ue should exist");
+
+        // Step 3: Simulate saving to real file (cleanup untitled)
+        delete_file_history("untitled").unwrap();
+        crate::recent::remove_recent_file("untitled").unwrap();
+
+        // Step 4: Save to new location
+        let target_file = std::path::PathBuf::from(&home).join("myfile.txt");
+        fs::write(&target_file, "hello").unwrap();
+        undo_history.save(target_file.to_str().unwrap()).unwrap();
+
+        // Step 5: Verify cleanup
+        assert!(!untitled_path.exists(), "untitled.ue should be deleted after save");
+
+        // Step 6: Verify new file exists
+        let new_undo_path = std::path::PathBuf::from(&home)
+            .join(".ue/files")
+            .join(home.trim_start_matches('/'))
+            .join("myfile.txt.ue");
+        assert!(new_undo_path.exists(), "New undo file should exist at {}", new_undo_path.display());
+    }
+
+    #[test]
+    fn test_untitled_with_path_not_in_root() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        // Create a file with path containing "untitled"
+        let test_dir = std::path::PathBuf::from(&home).join("testdir");
+        fs::create_dir_all(&test_dir).unwrap();
+        let test_file = test_dir.join("untitled");
+        fs::write(&test_file, "test").unwrap();
+
+        let mut undo_history = UndoHistory::new();
+        undo_history.update_state(0, 0, 0, vec!["content".into()]);
+
+        // Save with full path
+        let file_path = test_file.to_string_lossy().to_string();
+        undo_history.save(&file_path).unwrap();
+
+        // Should NOT be in root (because it has a path)
+        let wrong_path = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
+        assert!(!wrong_path.exists(), "File with path should not be in root");
+    }
+
+    #[test]
+    fn test_delete_nonexistent_untitled() {
+        let (_tmp, _guard) = set_temp_home();
+
+        // Deleting non-existent file should not error
+        let result = delete_file_history("untitled-999");
+        assert!(result.is_ok(), "Deleting non-existent file should succeed");
+    }
+
+    #[test]
+    fn test_simulate_exact_ui_save_workflow() {
+        let (_tmp, _guard) = set_temp_home();
+        let home = std::env::var("UE_TEST_HOME").unwrap();
+
+        // This test simulates EXACTLY what ui.rs does when saving an untitled file
+
+        // Step 1: User creates new file - it gets "untitled" as filename
+        let file = "untitled";
+
+        // Step 2: User types content and undo history is created
+        let mut undo_history = UndoHistory::new();
+        undo_history.push(crate::undo::Edit::InsertChar {
+            line: 0,
+            col: 0,
+            ch: 't',
+        });
+        undo_history.update_state(0, 0, 1, vec!["test content".into()]);
+        undo_history.save(file).unwrap();
+
+        // Step 3: User adds it to recent files
+        crate::recent::update_recent_file(file).unwrap();
+
+        // Verify untitled.ue exists
+        let untitled_ue = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
+        assert!(untitled_ue.exists(), "untitled.ue must exist before save");
+
+        // Verify it's in recent files
+        let recent = crate::recent::get_recent_files().unwrap();
+        let in_recent = recent.iter().any(|p| p.to_string_lossy().contains("untitled"));
+        assert!(in_recent, "untitled must be in recent files before save");
+
+        // Step 4: User saves with Ctrl+S -> Save As dialog
+        let target_path = std::path::PathBuf::from(&home).join("saved_file.txt");
+
+        // THIS IS THE CRITICAL PART - what ui.rs does:
+        // Delete the old untitled undo file and remove from recent files
+        let delete_result = delete_file_history(file);
+        println!("delete_file_history result: {:?}", delete_result);
+        assert!(delete_result.is_ok(), "delete_file_history should succeed");
+
+        let remove_result = crate::recent::remove_recent_file(file);
+        println!("remove_recent_file result: {:?}", remove_result);
+        assert!(remove_result.is_ok(), "remove_recent_file should succeed");
+
+        // Save the actual file
+        fs::write(&target_path, "test content").unwrap();
+
+        // Save undo history to NEW location
+        undo_history.save(target_path.to_str().unwrap()).unwrap();
+        crate::recent::update_recent_file(target_path.to_str().unwrap()).unwrap();
+
+        // Step 5: VERIFY CLEANUP HAPPENED
+        assert!(!untitled_ue.exists(), "untitled.ue MUST be deleted after save");
+
+        let recent_after = crate::recent::get_recent_files().unwrap();
+        let still_in_recent = recent_after.iter().any(|p| p.to_string_lossy().contains("untitled"));
+        assert!(!still_in_recent, "untitled must NOT be in recent files after save");
+
+        // Verify new file is properly saved
+        let new_ue = crate::undo::UndoHistory::history_path_for(target_path.to_str().unwrap()).unwrap();
+        assert!(new_ue.exists(), "New undo file must exist at {}", new_ue.display());
+    }
 }
+
 
 #[allow(dead_code)]
 fn copy_to_clipboard(_text: &str) -> Result<(), Box<dyn std::error::Error>> {

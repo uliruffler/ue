@@ -120,6 +120,8 @@ pub struct FileViewerState<'a> {
     pub(crate) menu_bar: crate::menu::MenuBar,
     /// Pending menu action to execute
     pub(crate) pending_menu_action: Option<crate::menu::MenuAction>,
+    /// Whether this is an untitled file that hasn't been saved to disk yet
+    pub(crate) is_untitled: bool,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -185,6 +187,7 @@ impl<'a> FileViewerState<'a> {
             last_drag_position: None,
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
+            is_untitled: false,
         }
     }
 

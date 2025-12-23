@@ -25,6 +25,14 @@ enum FocusMode {
     Input,
 }
 
+/// Dialog mode - Open or Save As
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[allow(dead_code)] // SaveAs variant is used in ui.rs for untitled file save handling
+pub(crate) enum DialogMode {
+    Open,
+    SaveAs,
+}
+
 /// Tree node representing a file or directory
 #[derive(Debug, Clone)]
 struct TreeNode {
@@ -48,16 +56,40 @@ struct OpenDialogState {
     help_active: bool,
     #[allow(dead_code)] // Used in event loop for help scrolling
     help_scroll_offset: usize,
+    mode: DialogMode,
 }
 
 impl OpenDialogState {
-    fn new(current_file: Option<&Path>, show_hidden: bool) -> io::Result<Self> {
-        let start_dir = if let Some(file) = current_file {
-            file.parent()
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|| PathBuf::from("."))
+    fn new(current_file: Option<&Path>, show_hidden: bool, mode: DialogMode) -> io::Result<Self> {
+        // Determine the starting directory
+        let start_dir = if matches!(mode, DialogMode::SaveAs) {
+            // In SaveAs mode, always use current working directory
+            // (the current_file parameter might be "untitled" or a relative path)
+            if let Some(file) = current_file {
+                let file_path = PathBuf::from(file);
+                // If the file has a real parent directory that exists, use it
+                if let Some(parent) = file_path.parent() {
+                    if parent.exists() && parent.is_dir() {
+                        parent.to_path_buf()
+                    } else {
+                        // Parent doesn't exist (e.g., "untitled"), use current_dir
+                        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                    }
+                } else {
+                    std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                }
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            }
         } else {
-            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            // In Open mode, use the file's parent directory or current_dir
+            if let Some(file) = current_file {
+                file.parent()
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|| PathBuf::from("."))
+            } else {
+                std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+            }
         };
 
         let mut state = Self {
@@ -70,6 +102,7 @@ impl OpenDialogState {
             show_hidden,
             help_active: false,
             help_scroll_offset: 0,
+            mode,
         };
 
         state.build_tree(&start_dir, current_file)?;
@@ -92,9 +125,18 @@ impl OpenDialogState {
         }
         ancestors.reverse(); // Now we have [/, /home, /home/user, /home/user/project]
 
+        // In SaveAs mode, we want to expand the target directory and select it
+        // In Open mode, we want to select the current file
+        let expand_target = matches!(self.mode, DialogMode::SaveAs);
+        let select_target = if matches!(self.mode, DialogMode::SaveAs) {
+            Some(start_dir.as_path())
+        } else {
+            current_file
+        };
+
         // Start from root
         let mut current_selected = None;
-        self.build_path_tree(&PathBuf::from("/"), &ancestors, &start_dir, current_file, &mut current_selected, 0)?;
+        self.build_path_tree(&PathBuf::from("/"), &ancestors, &start_dir, select_target, &mut current_selected, 0, expand_target)?;
 
         if let Some(idx) = current_selected {
             self.selected_index = idx;
@@ -212,9 +254,10 @@ impl OpenDialogState {
         current_dir: &Path,
         ancestors: &[PathBuf],
         target_dir: &Path,
-        current_file: Option<&Path>,
+        select_target: Option<&Path>,
         current_selected: &mut Option<usize>,
         depth: usize,
+        expand_target: bool,
     ) -> io::Result<()> {
         // Read directory entries
         let entries = match fs::read_dir(current_dir) {
@@ -261,14 +304,18 @@ impl OpenDialogState {
             let is_on_path = ancestors.contains(&path) || path == target_dir;
 
             // Should this directory be expanded?
-            let should_expand = is_on_path && path != target_dir;
-
+            // In SaveAs mode with expand_target, expand the target directory itself
+            let should_expand = if expand_target && path == target_dir {
+                true
+            } else {
+                is_on_path && path != target_dir
+            };
 
             let node_index = self.nodes.len();
 
-            // Check if this is the current file
-            if let Some(current) = current_file {
-                if path == current {
+            // Check if this is the target to select
+            if let Some(target) = select_target {
+                if path == target {
                     *current_selected = Some(node_index);
                 }
             }
@@ -281,9 +328,9 @@ impl OpenDialogState {
                 depth,
             });
 
-            // Recursively expand only if on the path to target
-            if is_on_path && is_directory {
-                self.build_path_tree(&path, ancestors, target_dir, current_file, current_selected, depth + 1)?;
+            // Recursively expand directories on path or the target if expand_target is true
+            if is_directory && (is_on_path || (expand_target && path == target_dir)) {
+                self.build_path_tree(&path, ancestors, target_dir, select_target, current_selected, depth + 1, expand_target)?;
             }
         }
 
@@ -540,8 +587,33 @@ impl OpenDialogState {
             KeyCode::Enter => {
                 // Try to open the path from input
                 let path = PathBuf::from(&self.input_buffer);
-                if path.exists() && path.is_file() {
-                    return Ok(Some(OpenDialogResult::Selected(path)));
+                // Allow both existing files and new file paths (for save-as)
+                if !self.input_buffer.is_empty() {
+                    // If path exists and is a file, select it
+                    if path.exists() && path.is_file() {
+                        return Ok(Some(OpenDialogResult::Selected(path)));
+                    }
+                    // If path doesn't exist, allow it (for creating new files)
+                    // Make it absolute if it's relative
+                    let absolute_path = if path.is_absolute() {
+                        path
+                    } else {
+                        // Use the selected directory from the tree, not current_dir
+                        let base_dir = if let Some(selected) = self.get_selected_path() {
+                            if selected.is_dir() {
+                                selected
+                            } else {
+                                // Selected is a file, use its parent
+                                selected.parent()
+                                    .map(|p| p.to_path_buf())
+                                    .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+                            }
+                        } else {
+                            std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+                        };
+                        base_dir.join(&path)
+                    };
+                    return Ok(Some(OpenDialogResult::Selected(absolute_path)));
                 }
             }
             KeyCode::Tab => {
@@ -569,9 +641,10 @@ impl OpenDialogState {
 pub(crate) fn run_open_dialog(
     current_file: Option<&str>,
     settings: &crate::settings::Settings,
+    mode: DialogMode,
 ) -> io::Result<OpenDialogResult> {
     let current_path = current_file.map(PathBuf::from);
-    let mut state = OpenDialogState::new(current_path.as_deref(), false)?;
+    let mut state = OpenDialogState::new(current_path.as_deref(), false, mode)?;
 
     loop {
         let (term_width, term_height) = crossterm::terminal::size()?;
@@ -704,14 +777,19 @@ fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result
     // Calculate areas - header (1) + tree + input at bottom (1)
     let tree_height = height.saturating_sub(2) as usize;
 
-    // Render header
+    // Render header with appropriate title based on mode
+    let title = match state.mode {
+        DialogMode::Open => "Open File",
+        DialogMode::SaveAs => "Save As",
+    };
+
     execute!(
         stdout,
         MoveTo(0, 0),
         SetBackgroundColor(Color::Rgb { r: 0, g: 24, b: 72 }),
         SetForegroundColor(Color::White),
     )?;
-    let header = format!("{:width$}", "Open File", width = width as usize);
+    let header = format!("{:width$}", title, width = width as usize);
     execute!(stdout, Print(header), ResetColor)?;
 
     // Render tree
@@ -838,8 +916,33 @@ fn render_input_field(state: &OpenDialogState, y: u16, width: u16) -> io::Result
         }
         FocusMode::Input => {
             // Show input field when input is focused
-            let label = "Path: ";
-            execute!(stdout, Print(label))?;
+            // If user is typing a relative path (doesn't start with /), show selected directory first
+            let prefix = if !state.input_buffer.starts_with('/') && !state.input_buffer.is_empty() {
+                // Get the selected path from the tree
+                if let Some(selected) = state.get_selected_path() {
+                    let base_dir = if selected.is_dir() {
+                        selected
+                    } else {
+                        // Selected is a file, use its parent
+                        selected.parent()
+                            .map(|p| p.to_path_buf())
+                            .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")))
+                    };
+                    format!("{}/", base_dir.display())
+                } else {
+                    String::new()
+                }
+            } else {
+                String::new()
+            };
+            
+            let label = if prefix.is_empty() {
+                "Path: ".to_string()
+            } else {
+                format!("Path: {}", prefix)
+            };
+            
+            execute!(stdout, Print(&label))?;
 
             let available_width = (width as usize).saturating_sub(label.len());
             let display_text = if state.input_buffer.len() > available_width {

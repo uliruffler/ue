@@ -5,9 +5,18 @@
 
 **Key Philosophy**: Internal tool with no public APIs. Use `pub(crate)` only when needed for cross-module access.
 
-**Recent Improvements** (December 2025):
+**Recent Improvements** (December 2023):
 - Full UTF-8/Unicode support (German umlauts, emoji, multi-byte characters)
-- New file creation: Open non-existent files, track immediately, save creates file on disk
+- **New file feature (Ctrl+N)**: Creates untitled documents immediately
+  - Pressing `Ctrl+N` or File menu → New creates an untitled file (untitled, untitled-2, etc.)
+  - User can start typing immediately without choosing filename
+  - When saving (Ctrl+S), dialog prompts for filename and location
+  - Untitled undo files automatically cleaned up after save and moved to new location
+  - Multiple untitled files supported with unique naming (untitled, untitled-2, untitled-3...)
+  - Untitled files stored in `~/.ue/files/` root (not in subdirectories)
+- Non-existent file opening: Can open with non-existent filename (e.g., `ue newfile.txt`)
+  - File tracked immediately with full undo support
+  - Actual file created on disk only when saved (`Ctrl+s`)
 - File closing from file selector: `Ctrl+w` to close/untrack files
 - Session restoration: Remembers last mode (editor/selector) and file when reopening
 - Recent files ordering: Most recently opened file appears at top of file selector
@@ -54,13 +63,30 @@
 - **Cursor shapes**: bar (default), block, or underline
 
 ### File Management
+- **New file (Ctrl+N)**: Creates untitled documents for quick note-taking
+  - Press `Ctrl+N` or select File → New from menu
+  - Immediately opens an empty "untitled" buffer (no filename dialog)
+  - User can start typing right away
+  - Multiple untitled files get unique names: `untitled`, `untitled-2`, `untitled-3`, etc.
+  - Untitled files are tracked with full undo/redo support
+  - **Saving untitled files**:
+    - Press `Ctrl+S` to save
+    - Save-as dialog appears asking for filename and location
+    - Can navigate directory tree or type path (relative or absolute)
+    - After save, untitled undo file (`~/.ue/files/untitled.ue`) is automatically deleted
+    - Undo history moved to new file location
+    - File removed from recent files list under untitled name
+  - **Untitled file storage**:
+    - Undo files stored in `~/.ue/files/` root (not in subdirectories)
+    - Naming pattern: `untitled.ue`, `untitled-2.ue`, etc.
+    - Case-insensitive detection (UNTITLED also treated as untitled)
 - **File selector**: Press `Esc` to toggle between editor and file selector
   - Shows all tracked files from `~/.ue/files/**`
   - Sorted by recent usage (via `~/.ue/files.ue`) - most recently opened file at top
   - Shows unsaved changes indicator
   - `Enter` opens file, `Esc` returns to editor
   - `Ctrl+w` closes selected file (removes from tracking)
-- **New file creation**: Can open with non-existent filename (e.g., `ue newfile.txt`)
+- **Opening non-existent files**: Can open with filename that doesn't exist (e.g., `ue newfile.txt`)
   - File tracked immediately with full undo support
   - Actual file created on disk only when saved (`Ctrl+s`)
   - Undo history persisted even for unsaved new files

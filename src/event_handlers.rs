@@ -45,8 +45,8 @@ pub(crate) fn handle_key_event(
         // Execute menu action
         match action {
             crate::menu::MenuAction::FileNew => {
-                // Create new file - for now, just open file selector
-                // TODO: Implement new file dialog
+                // Create new file - delegate to ui.rs which will create an untitled buffer
+                state.pending_menu_action = Some(action);
                 return Ok((false, false));
             }
             crate::menu::MenuAction::FileOpenDialog => {
@@ -61,6 +61,13 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::FileSave => {
+                // If this is an untitled file, we need to show the save-as dialog
+                if state.is_untitled {
+                    // Delegate to ui.rs which will show the save dialog
+                    state.pending_menu_action = Some(action);
+                    return Ok((false, false));
+                }
+
                 save_file(filename, lines)?;
                 state.modified = false;
                 state.undo_history.clear_unsaved_state();
@@ -418,6 +425,12 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
+    // Handle new file (configurable keybinding, default Ctrl+N)
+    if settings.keybindings.new_file_matches(&code, &modifiers) {
+        state.pending_menu_action = Some(crate::menu::MenuAction::FileNew);
+        return Ok((false, false));
+    }
+
     // Handle go to line (configurable keybinding, default Ctrl+G)
     if settings.keybindings.goto_line_matches(&code, &modifiers) {
         state.goto_line_active = true;
@@ -507,6 +520,13 @@ pub(crate) fn handle_key_event(
 
     // Handle save
     if settings.keybindings.save_matches(&code, &modifiers) {
+        // If this is an untitled file, we need to show the save-as dialog
+        if state.is_untitled {
+            // Mark the action so ui.rs can handle it
+            state.pending_menu_action = Some(crate::menu::MenuAction::FileSave);
+            return Ok((false, false));
+        }
+
         save_file(filename, lines)?;
         state.modified = false;
         state.needs_redraw = true;
@@ -1051,6 +1071,56 @@ pub(crate) fn show_close_confirmation(
     }
 }
 
+/// Show confirmation prompt when overwriting an existing file
+/// Returns true if user confirms overwrite (Enter), false if user cancels (Esc)
+#[allow(dead_code)] // Used in ui.rs for untitled file save handling
+pub(crate) fn show_overwrite_confirmation(
+    filename: &str,
+) -> Result<bool, std::io::Error> {
+    use crossterm::event;
+    use crossterm::terminal;
+
+    let mut stdout = std::io::stdout();
+    let (_, term_height) = terminal::size()?;
+    let footer_row = term_height - 1;
+
+    // Extract just the filename from the path
+    let path = std::path::Path::new(filename);
+    let display_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(filename);
+
+    // Display warning message in footer
+    execute!(
+        stdout,
+        crossterm::cursor::MoveTo(0, footer_row),
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
+        crossterm::style::SetForegroundColor(crossterm::style::Color::Yellow)
+    )?;
+    write!(
+        &mut stdout,
+        "Overwrite '{}'? [Enter=Yes, Esc=No]",
+        display_name
+    )?;
+    execute!(stdout, crossterm::style::ResetColor)?;
+    stdout.flush()?;
+
+    // Wait for user response
+    loop {
+        if let event::Event::Key(key) = event::read()? {
+            match key.code {
+                KeyCode::Enter => {
+                    return Ok(true); // User confirmed - overwrite file
+                }
+                KeyCode::Esc => {
+                    return Ok(false); // User cancelled - don't overwrite
+                }
+                _ => {
+                    // Ignore other keys, wait for Enter or Esc
+                }
+            }
+        }
+    }
+}
+
 /// Show confirmation prompt when undo file has unsaved changes but source file was modified externally
 /// Returns true if user confirms opening file anyway (Enter), false if user wants to discard (Esc)
 pub(crate) fn show_undo_conflict_confirmation() -> Result<bool, std::io::Error> {
@@ -1069,8 +1139,8 @@ pub(crate) fn show_undo_conflict_confirmation() -> Result<bool, std::io::Error> 
         crossterm::style::SetForegroundColor(crossterm::style::Color::Yellow)
     )?;
     write!(
-        stdout,
-        "File was modified. Open anyway? [Enter=Yes, Esc=No]"
+        &mut stdout,
+        "File modified externally. Keep unsaved changes? [Enter=Yes, Esc=No]"
     )?;
     execute!(stdout, crossterm::style::ResetColor)?;
     stdout.flush()?;
@@ -1080,10 +1150,10 @@ pub(crate) fn show_undo_conflict_confirmation() -> Result<bool, std::io::Error> 
         if let event::Event::Key(key) = event::read()? {
             match key.code {
                 KeyCode::Enter => {
-                    return Ok(true); // User confirmed - open file
+                    return Ok(true); // User confirmed - keep unsaved changes
                 }
                 KeyCode::Esc => {
-                    return Ok(false); // User declined - exit to selector
+                    return Ok(false); // User cancelled - discard unsaved changes
                 }
                 _ => {
                     // Ignore other keys, wait for Enter or Esc
@@ -1606,7 +1676,7 @@ mod tests {
         state.goto_line_active = true;
         state.goto_line_input = "1".to_string();
         state.goto_line_cursor_pos = 1; // Cursor at end
-        state.goto_line_typing_started = true; // Already typing, so append
+        state.goto_line_typing_started = true; // Mark as not yet typing
 
         let key_event = KeyEvent::new(KeyCode::Char('5'), KeyModifiers::empty());
         let result = handle_goto_line_input(&mut state, &lines, key_event, 20);

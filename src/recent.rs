@@ -11,7 +11,7 @@ fn recent_list_path() -> io::Result<PathBuf> {
     Ok(PathBuf::from(home).join(".ue").join("files.ue"))
 }
 
-pub(crate) fn get_recent_files() -> io::Result<Vec<PathBuf>> {
+pub fn get_recent_files() -> io::Result<Vec<PathBuf>> {
     let path = recent_list_path()?;
     if !path.exists() {
         return Ok(Vec::new());
@@ -61,6 +61,37 @@ pub fn update_recent_file(file_path: &str) -> io::Result<()> {
 
     let serialized = current.join("\n");
     fs::write(&recent_path, serialized)?;
+    Ok(())
+}
+
+/// Remove a file from the recent files list
+pub fn remove_recent_file(file_path: &str) -> io::Result<()> {
+    let path_buf = PathBuf::from(file_path);
+    // Try canonicalize but fall back to original if fails
+    let canonical = path_buf.canonicalize().unwrap_or(path_buf.clone());
+    let canonical_str = canonical.to_string_lossy().to_string();
+    let original_str = path_buf.to_string_lossy().to_string();
+
+    let recent_path = recent_list_path()?;
+    if !recent_path.exists() {
+        return Ok(());
+    }
+
+    let content = fs::read_to_string(&recent_path)?;
+    let current: Vec<String> = content
+        .lines()
+        .map(|l| l.trim().to_string())
+        .filter(|l| !l.is_empty())
+        .filter(|p| p != &canonical_str && p != &original_str)
+        .collect();
+
+    if current.is_empty() {
+        // Remove the file if empty
+        let _ = fs::remove_file(&recent_path);
+    } else {
+        let serialized = current.join("\n");
+        fs::write(&recent_path, serialized)?;
+    }
     Ok(())
 }
 
@@ -270,5 +301,94 @@ mod tests {
             2,
             "Should handle rapid updates without duplication"
         );
+    }
+
+    #[test]
+    fn recent_file_removal() {
+        let (tmp, _guard) = set_temp_home();
+        let f1 = tmp.path().join("to_remove.txt");
+        let f2 = tmp.path().join("to_stay.txt");
+        fs::write(&f1, "content").unwrap();
+        fs::write(&f2, "content").unwrap();
+        update_recent_file(f1.to_string_lossy().as_ref()).unwrap();
+        update_recent_file(f2.to_string_lossy().as_ref()).unwrap();
+
+        // Remove f1 from recent files
+        remove_recent_file(f1.to_string_lossy().as_ref()).unwrap();
+
+        let recent = get_recent_files().unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0], f2.canonicalize().unwrap());
+    }
+
+    #[test]
+    fn recent_file_removal_nonexistent() {
+        let (tmp, _guard) = set_temp_home();
+        let nonexistent = tmp.path().join("does_not_exist.txt");
+
+        // Removing a nonexistent file should not cause issues
+        let result = remove_recent_file(nonexistent.to_string_lossy().as_ref());
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn remove_untitled_from_recent_files() {
+        let (_tmp, _guard) = set_temp_home();
+        
+        // Add untitled to recent files
+        update_recent_file("untitled").unwrap();
+        
+        // Verify it's in the list
+        let recent = get_recent_files().unwrap();
+        let has_untitled = recent.iter().any(|p| {
+            p.to_string_lossy().contains("untitled")
+        });
+        assert!(has_untitled, "untitled should be in recent files");
+        
+        // Remove it
+        remove_recent_file("untitled").unwrap();
+        
+        // Verify it's gone
+        let recent_after = get_recent_files().unwrap();
+        let has_untitled_after = recent_after.iter().any(|p| {
+            p.to_string_lossy().contains("untitled")
+        });
+        assert!(!has_untitled_after, "untitled should be removed from recent files");
+    }
+
+    #[test]
+    fn remove_untitled_2_from_recent_files() {
+        let (_tmp, _guard) = set_temp_home();
+        
+        update_recent_file("untitled-2").unwrap();
+        
+        let recent = get_recent_files().unwrap();
+        assert!(recent.iter().any(|p| p.to_string_lossy().contains("untitled-2")));
+        
+        remove_recent_file("untitled-2").unwrap();
+        
+        let recent_after = get_recent_files().unwrap();
+        assert!(!recent_after.iter().any(|p| p.to_string_lossy().contains("untitled-2")));
+    }
+
+    #[test]
+    fn remove_multiple_untitled_files_from_recent() {
+        let (_tmp, _guard) = set_temp_home();
+        
+        // Add multiple untitled files
+        for name in &["untitled", "untitled-2", "untitled-3"] {
+            update_recent_file(name).unwrap();
+        }
+        
+        let recent = get_recent_files().unwrap();
+        assert_eq!(recent.len(), 3, "Should have 3 untitled files");
+        
+        // Remove all
+        for name in &["untitled", "untitled-2", "untitled-3"] {
+            remove_recent_file(name).unwrap();
+        }
+        
+        let recent_after = get_recent_files().unwrap();
+        assert!(recent_after.is_empty(), "All untitled files should be removed");
     }
 }
