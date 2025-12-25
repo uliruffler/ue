@@ -213,6 +213,21 @@ fn run_file_selector_overlay(
     }
 }
 
+/// Helper to fully restore terminal state on exit or when switching out of the editor
+fn restore_terminal(stdout: &mut impl Write) -> io::Result<()> {
+    // Ensure the cursor is visible and restore default user shape
+    execute!(
+        stdout,
+        SetCursorStyle::DefaultUserShape,
+        Show,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
+    // Best-effort: raw mode might already be disabled in some flows
+    let _ = terminal::disable_raw_mode();
+    Ok(())
+}
+
 pub fn show(files: &[String]) -> std::io::Result<()> {
     let settings = Settings::load().expect("Failed to load settings");
     let mut stdout = io::stdout();
@@ -257,13 +272,7 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
                     // Always show file selector after closing a file
                     // The closed file has already been removed from the tracked files list (undo history deleted)
                     // Exit alternate screen to show full file selector
-                    execute!(
-                        stdout,
-                        SetCursorStyle::DefaultUserShape,
-                        DisableMouseCapture,
-                        LeaveAlternateScreen
-                    )?;
-                    terminal::disable_raw_mode()?;
+                    restore_terminal(&mut stdout)?;
 
                     // Show full file selector
                     match crate::file_selector::select_file()? {
@@ -334,13 +343,7 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
                 if close_file {
                     current_files.remove(idx);
                     unsaved.retain(|f| f != &file);
-                    execute!(
-                        stdout,
-                        SetCursorStyle::DefaultUserShape,
-                        DisableMouseCapture,
-                        LeaveAlternateScreen
-                    )?;
-                    terminal::disable_raw_mode()?;
+                    restore_terminal(&mut stdout)?;
                     match crate::file_selector::select_file()? {
                         Some(selected_file) => {
                             terminal::enable_raw_mode()?;
@@ -389,13 +392,7 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
         }
     }
 
-    execute!(
-        stdout,
-        SetCursorStyle::DefaultUserShape,
-        DisableMouseCapture,
-        LeaveAlternateScreen
-    )?;
-    terminal::disable_raw_mode()?;
+    restore_terminal(&mut stdout)?;
     if !unsaved.is_empty() {
         println!(
             "Warning: Unsaved changes for: {}",
@@ -1272,5 +1269,22 @@ fn editing_session(
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restore_terminal_emits_show_cursor_and_leave_alt() {
+        // Use a memory buffer to capture escape sequences
+        let mut buf: Vec<u8> = Vec::new();
+        // It's safe to call even if raw mode isn't enabled
+        restore_terminal(&mut buf).unwrap();
+        let s = String::from_utf8_lossy(&buf);
+        // Cursor show sequence (CSI ?25h) and leave alt screen (CSI ?1049l)
+        assert!(s.contains("[?25h"), "expected cursor show sequence in output: {}", s);
+        assert!(s.contains("[?1049l"), "expected leave alt-screen sequence in output: {}", s);
     }
 }
