@@ -165,7 +165,7 @@ impl MenuBar {
             ),
             Menu::new(
                 "Help",
-                'h',
+                ' ',
                 vec![
                     MenuItem::Action {
                         label: "Editor Help".to_string(),

@@ -208,16 +208,26 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
-    // Handle Ctrl+A for select all
-    if modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('a')) {
-        if !lines.is_empty() {
-            state.selection_start = Some((0, 0));
-            let last_line = lines.len() - 1;
-            let last_col = lines[last_line].len();
-            state.selection_end = Some((last_line, last_col));
-            state.needs_redraw = true;
+    // Handle Ctrl+A for select all (but NOT when in find or replace mode)
+    // Ctrl+A can be reported as either Char('a') with CONTROL, or Char('\x01') with no modifiers
+    let is_ctrl_a = (modifiers.contains(KeyModifiers::CONTROL) && matches!(code, KeyCode::Char('a')))
+                    || matches!(code, KeyCode::Char('\x01'));
+
+    if is_ctrl_a {
+        // If in find or replace mode, don't handle it here - let those modes handle it
+        if state.find_active || state.replace_active {
+            // Don't return - continue to let find/replace handlers process it
+        } else {
+            // Normal document select all
+            if !lines.is_empty() {
+                state.selection_start = Some((0, 0));
+                let last_line = lines.len() - 1;
+                let last_col = lines[last_line].len();
+                state.selection_end = Some((last_line, last_col));
+                state.needs_redraw = true;
+            }
+            return Ok((false, false));
         }
-        return Ok((false, false));
     }
 
     // Ctrl+Home and Ctrl+End: jump to beginning/end of document
@@ -461,6 +471,71 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
+    // Handle replace mode entry (Ctrl+H) - only when we have a search pattern
+    // NOTE: Ctrl+H and Ctrl+Backspace are indistinguishable in most terminals (both send ASCII 0x08)
+    if settings.keybindings.replace_matches(&code, &modifiers)
+        && !state.replace_active
+    {
+        if state.last_search_pattern.is_some() {
+            // Enter replace mode
+            state.replace_active = true;
+            state.replace_pattern.clear();
+            state.replace_cursor_pos = 0;
+            state.needs_redraw = true;
+            return Ok((false, false));
+        } else {
+            // No search pattern - enter find mode first, then transition to replace on Enter
+            state.saved_search_pattern = state.last_search_pattern.clone();
+            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                state.find_scope = Some(normalized);
+            } else {
+                state.find_scope = None;
+            }
+            state.find_active = true;
+            state.find_pattern.clear();
+            state.find_cursor_pos = 0;
+            state.find_error = None;
+            state.transition_to_replace_on_enter = true;
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+    }
+
+    // Handle replace current occurrence (Ctrl+R) - works even if not in replace mode
+    // Requires both a search pattern and a replacement pattern
+    if settings.keybindings.replace_current_matches(&code, &modifiers) {
+        if state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
+            crate::find::replace_current_occurrence(state, lines, visible_lines);
+            // Save changes - update file content in undo history before saving
+            let abs = state.absolute_line();
+            state.undo_history.update_state(state.top_line, abs, state.cursor_col, lines.clone());
+            state.undo_history.find_history = state.find_history.clone();
+            let _ = state.undo_history.save(filename);
+            state.last_save_time = Some(Instant::now());
+            return Ok((false, false));
+        }
+    }
+
+    // Handle replace all occurrences (Ctrl+Alt+R) - works even if not in replace mode
+    // Requires both a search pattern and a replacement pattern
+    if settings.keybindings.replace_all_matches(&code, &modifiers) {
+        if state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
+            crate::find::replace_all_occurrences(state, lines);
+            // Save changes - update file content in undo history before saving
+            let abs = state.absolute_line();
+            state.undo_history.update_state(state.top_line, abs, state.cursor_col, lines.clone());
+            state.undo_history.find_history = state.find_history.clone();
+            let _ = state.undo_history.save(filename);
+            state.last_save_time = Some(Instant::now());
+            return Ok((false, false));
+        }
+    }
+
     // If in find mode, handle find input
     if state.find_active {
         let exited = crate::find::handle_find_input(state, lines, key_event, visible_lines);
@@ -472,6 +547,14 @@ pub(crate) fn handle_key_event(
         if exited {
             // Find mode was closed, continue normal processing
         }
+        return Ok((false, false));
+    }
+
+    // If in replace mode, handle replace input
+    if state.replace_active {
+        let _exited = crate::find::handle_replace_input(state, lines, key_event);
+        state.needs_redraw = true;
+        // If replace mode was exited, return early so we don't consume the event
         return Ok((false, false));
     }
 
@@ -603,6 +686,66 @@ pub(crate) fn handle_key_event(
     if settings.keybindings.toggle_line_wrap_matches(&code, &modifiers) {
         // Toggle line wrapping at runtime (not persisted to config file)
         state.toggle_line_wrapping();
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+
+    // Handle cursor movement keybindings (Ctrl+J/K/H/L)
+    if settings.keybindings.cursor_down_matches(&code, &modifiers) {
+        handle_down_navigation(state, lines, visible_lines);
+        let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        state.adjust_cursor_col(&lines_refs);
+        state.clear_selection();
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    if settings.keybindings.cursor_up_matches(&code, &modifiers) {
+        handle_up_navigation(state, lines, visible_lines);
+        let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+        state.adjust_cursor_col(&lines_refs);
+        state.clear_selection();
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    if settings.keybindings.cursor_left_matches(&code, &modifiers) {
+        if state.cursor_col > 0 {
+            state.cursor_col -= 1;
+        } else {
+            let current_absolute = state.top_line + state.cursor_line;
+            if current_absolute > 0 {
+                if state.cursor_line > 0 {
+                    state.cursor_line -= 1;
+                } else if state.top_line > 0 {
+                    state.top_line -= 1;
+                }
+                let new_absolute = state.top_line + state.cursor_line;
+                if let Some(line) = lines.get(new_absolute) {
+                    state.cursor_col = line.len();
+                }
+            }
+        }
+        state.clear_selection();
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    if settings.keybindings.cursor_right_matches(&code, &modifiers) {
+        if let Some(line) = lines.get(state.top_line + state.cursor_line) {
+            if state.cursor_col < line.len() {
+                state.cursor_col += 1;
+            } else {
+                let current_absolute = state.top_line + state.cursor_line;
+                if current_absolute + 1 < lines.len() {
+                    state.cursor_line += 1;
+                    state.cursor_col = 0;
+                    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
+                    if state.cursor_line >= effective_visible_lines {
+                        state.top_line += 1;
+                        state.cursor_line = effective_visible_lines - 1;
+                    }
+                }
+            }
+        }
+        state.clear_selection();
         state.needs_redraw = true;
         return Ok((false, false));
     }

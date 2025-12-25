@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use regex::Regex;
 
 use crate::editor_state::{FileViewerState, Position};
@@ -13,7 +13,7 @@ pub(crate) fn handle_find_input(
     key_event: KeyEvent,
     _visible_lines: usize,
 ) -> bool {
-    let KeyEvent { code, .. } = key_event;
+    let KeyEvent { code, modifiers, .. } = key_event;
 
     match code {
         KeyCode::Esc => {
@@ -22,6 +22,7 @@ pub(crate) fn handle_find_input(
             state.find_pattern.clear();
             state.find_error = None;
             state.find_history_index = None;
+            state.transition_to_replace_on_enter = false; // Clear transition flag
             // Note: Don't clear selection - keep it visible to show the search scope
             // Note: Don't clear find_scope here - keep it so highlighting remains scoped
             // Restore the search pattern from before entering find mode
@@ -52,6 +53,15 @@ pub(crate) fn handle_find_input(
                         state.saved_search_pattern = None;
                         // Note: Don't clear selection - keep it visible to show the search scope
                         // Note: Don't clear find_scope - keep it so highlighting remains scoped
+
+                        // Check if we should transition to replace mode
+                        if state.transition_to_replace_on_enter {
+                            state.replace_active = true;
+                            state.replace_pattern.clear();
+                            state.replace_cursor_pos = 0;
+                            state.transition_to_replace_on_enter = false;
+                        }
+
                         state.needs_redraw = true;
                     }
                     Err(e) => {
@@ -69,6 +79,7 @@ pub(crate) fn handle_find_input(
                 state.last_search_pattern = None; // Clear highlights
                 state.saved_search_pattern = None; // Clear saved pattern
                 state.find_scope = None; // Clear search scope for next search
+                state.transition_to_replace_on_enter = false; // Clear flag
                 state.needs_redraw = true;
             }
             true
@@ -131,6 +142,7 @@ pub(crate) fn handle_find_input(
                 }
                 state.find_pattern = new_pattern;
                 state.find_cursor_pos -= 1;
+                state.find_selection = None; // Clear selection
                 state.find_error = None;
                 state.find_history_index = None;
                 // Update highlights in real-time
@@ -143,6 +155,7 @@ pub(crate) fn handle_find_input(
         KeyCode::Left => {
             if state.find_cursor_pos > 0 {
                 state.find_cursor_pos -= 1;
+                state.find_selection = None; // Clear selection
                 state.needs_redraw = true;
             }
             false
@@ -151,35 +164,90 @@ pub(crate) fn handle_find_input(
             let pattern_len = state.find_pattern.chars().count();
             if state.find_cursor_pos < pattern_len {
                 state.find_cursor_pos += 1;
+                state.find_selection = None; // Clear selection
                 state.needs_redraw = true;
             }
             false
         }
         KeyCode::Home => {
             state.find_cursor_pos = 0;
+            state.find_selection = None; // Clear selection
             state.needs_redraw = true;
             false
         }
         KeyCode::End => {
             state.find_cursor_pos = state.find_pattern.chars().count();
+            state.find_selection = None; // Clear selection
             state.needs_redraw = true;
             false
         }
         KeyCode::Char(c) => {
-            // Insert character at cursor position
-            let chars: Vec<char> = state.find_pattern.chars().collect();
-            let mut new_pattern = String::new();
-            for (i, ch) in chars.iter().enumerate() {
-                if i == state.find_cursor_pos {
+            // Handle Ctrl+A to select all text in find pattern
+            // Ctrl+A is reported as character code 0x01 (ASCII SOH), not as 'a' with CONTROL modifier
+            if c == '\x01' || (c == 'a' && modifiers.contains(KeyModifiers::CONTROL)) {
+                let pattern_len = state.find_pattern.chars().count();
+                if pattern_len > 0 {
+                    state.find_selection = Some((0, pattern_len));
+                    state.find_cursor_pos = pattern_len;
+                }
+                state.needs_redraw = true;
+                return false;
+            }
+
+            // Clear selection if typing
+            if state.find_selection.is_some() {
+                state.find_selection = None;
+            }
+
+            // Ignore characters with Control or Alt modifiers (these are shortcuts)
+            // Also ignore ASCII control characters (0x00-0x1F) which are control sequences
+            let has_control = modifiers.contains(KeyModifiers::CONTROL);
+            let has_alt = modifiers.contains(KeyModifiers::ALT);
+            let is_control_char = (c as u32) < 0x20;
+            if has_control || has_alt || is_control_char {
+                return false;
+            }
+
+            // If there's a selection, delete it and insert the new character at selection start
+            if let Some((start, end)) = state.find_selection {
+                let chars: Vec<char> = state.find_pattern.chars().collect();
+                let mut new_pattern = String::new();
+
+                // Add everything before selection
+                for i in 0..start {
+                    if i < chars.len() {
+                        new_pattern.push(chars[i]);
+                    }
+                }
+
+                // Insert new character
+                new_pattern.push(c);
+
+                // Add everything after selection
+                for i in end..chars.len() {
+                    new_pattern.push(chars[i]);
+                }
+
+                state.find_pattern = new_pattern;
+                state.find_cursor_pos = start + 1;
+                state.find_selection = None;
+            } else {
+                // Insert character at cursor position
+                let chars: Vec<char> = state.find_pattern.chars().collect();
+                let mut new_pattern = String::new();
+                for (i, ch) in chars.iter().enumerate() {
+                    if i == state.find_cursor_pos {
+                        new_pattern.push(c);
+                    }
+                    new_pattern.push(*ch);
+                }
+                if state.find_cursor_pos == chars.len() {
                     new_pattern.push(c);
                 }
-                new_pattern.push(*ch);
+                state.find_pattern = new_pattern;
+                state.find_cursor_pos += 1;
             }
-            if state.find_cursor_pos == chars.len() {
-                new_pattern.push(c);
-            }
-            state.find_pattern = new_pattern;
-            state.find_cursor_pos += 1;
+
             state.find_error = None;
             state.find_history_index = None;
             // Update highlights in real-time
@@ -707,6 +775,296 @@ pub(crate) fn update_search_hit_count(state: &mut FileViewerState, lines: &[Stri
     } else {
         state.search_current_hit = 0;
         state.search_hit_count = 0;
+    }
+}
+
+/// Handle replace mode key events
+/// Returns true if replace mode should exit
+pub(crate) fn handle_replace_input(
+    state: &mut FileViewerState,
+    _lines: &[String],
+    key_event: KeyEvent,
+) -> bool {
+    let KeyEvent { code, modifiers, .. } = key_event;
+
+    match code {
+        KeyCode::Esc => {
+            // Exit replace mode
+            state.replace_active = false;
+            state.replace_pattern.clear();
+            state.replace_cursor_pos = 0;
+            state.needs_redraw = true;
+            true
+        }
+        KeyCode::Enter => {
+            // Just exit replace mode, don't do anything
+            // (user can click buttons or use Ctrl+R / Ctrl+Shift+R)
+            state.replace_active = false;
+            state.needs_redraw = true;
+            true
+        }
+        KeyCode::Backspace => {
+            if state.replace_cursor_pos > 0 {
+                // Get character indices (not byte indices)
+                let chars: Vec<char> = state.replace_pattern.chars().collect();
+                let mut new_pattern = String::new();
+                for (i, ch) in chars.iter().enumerate() {
+                    if i != state.replace_cursor_pos - 1 {
+                        new_pattern.push(*ch);
+                    }
+                }
+                state.replace_pattern = new_pattern;
+                state.replace_cursor_pos -= 1;
+                state.replace_selection = None; // Clear selection
+                state.needs_redraw = true;
+            }
+            false
+        }
+        KeyCode::Left => {
+            if state.replace_cursor_pos > 0 {
+                state.replace_cursor_pos -= 1;
+                state.replace_selection = None; // Clear selection
+                state.needs_redraw = true;
+            }
+            false
+        }
+        KeyCode::Right => {
+            let pattern_len = state.replace_pattern.chars().count();
+            if state.replace_cursor_pos < pattern_len {
+                state.replace_cursor_pos += 1;
+                state.replace_selection = None; // Clear selection
+                state.needs_redraw = true;
+            }
+            false
+        }
+        KeyCode::Home => {
+            state.replace_cursor_pos = 0;
+            state.replace_selection = None; // Clear selection
+            state.needs_redraw = true;
+            false
+        }
+        KeyCode::End => {
+            state.replace_cursor_pos = state.replace_pattern.chars().count();
+            state.replace_selection = None; // Clear selection
+            state.needs_redraw = true;
+            false
+        }
+        KeyCode::Char(c) => {
+            // Handle Ctrl+A to select all text in replace pattern
+            // Ctrl+A is reported as character code 0x01 (ASCII SOH), not as 'a' with CONTROL modifier
+            if c == '\x01' || (c == 'a' && modifiers.contains(KeyModifiers::CONTROL)) {
+                let pattern_len = state.replace_pattern.chars().count();
+                if pattern_len > 0 {
+                    state.replace_selection = Some((0, pattern_len));
+                    state.replace_cursor_pos = pattern_len;
+                }
+                state.needs_redraw = true;
+                return true; // Consume the event
+            }
+
+            // Clear selection if typing
+            if state.replace_selection.is_some() {
+                state.replace_selection = None;
+            }
+
+            // Ignore characters with Control or Alt modifiers (these are shortcuts)
+            // Also ignore ASCII control characters (0x00-0x1F) which are control sequences
+            let has_control = modifiers.contains(KeyModifiers::CONTROL);
+            let has_alt = modifiers.contains(KeyModifiers::ALT);
+            let is_control_char = (c as u32) < 0x20;
+            if has_control || has_alt || is_control_char {
+                return true; // Consume the event to prevent it from being processed by editor
+            }
+
+            // If there's a selection, delete it and insert the new character at selection start
+            if let Some((start, end)) = state.replace_selection {
+                let chars: Vec<char> = state.replace_pattern.chars().collect();
+                let mut new_pattern = String::new();
+
+                // Add everything before selection
+                for i in 0..start {
+                    if i < chars.len() {
+                        new_pattern.push(chars[i]);
+                    }
+                }
+
+                // Insert new character
+                new_pattern.push(c);
+
+                // Add everything after selection
+                for i in end..chars.len() {
+                    new_pattern.push(chars[i]);
+                }
+
+                state.replace_pattern = new_pattern;
+                state.replace_cursor_pos = start + 1;
+                state.replace_selection = None;
+            } else {
+                // Insert character at cursor position
+                let chars: Vec<char> = state.replace_pattern.chars().collect();
+                let mut new_pattern = String::new();
+                for (i, ch) in chars.iter().enumerate() {
+                    if i == state.replace_cursor_pos {
+                        new_pattern.push(c);
+                    }
+                    new_pattern.push(*ch);
+                }
+                if state.replace_cursor_pos == chars.len() {
+                    new_pattern.push(c);
+                }
+                state.replace_pattern = new_pattern;
+                state.replace_cursor_pos += 1;
+            }
+
+            state.needs_redraw = true;
+            false
+        }
+        _ => false,
+    }
+}
+
+/// Replace the current occurrence and jump to next
+pub(crate) fn replace_current_occurrence(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+    visible_lines: usize,
+) {
+    if let Some(ref pattern) = state.last_search_pattern {
+        // Make search case-insensitive by default
+        let pattern_with_flags = format!("(?i){}", pattern);
+        if let Ok(regex) = Regex::new(&pattern_with_flags) {
+            let (line, col) = state.current_position();
+
+            // Check if cursor is currently on a match
+            if line < lines.len() {
+                let line_text = &lines[line];
+
+                // Check scope
+                let in_scope = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = state.find_scope {
+                    line >= scope_start_line && line <= scope_end_line &&
+                    (line != scope_start_line || col >= scope_start_col) &&
+                    (line != scope_end_line || col < scope_end_col)
+                } else {
+                    true
+                };
+
+                if in_scope {
+                    // Find match at current position
+                    if let Some(m) = regex.find(line_text) {
+                        if m.start() == col {
+                            // We're at a match - replace it
+                            let before = &line_text[..m.start()];
+                            let after = &line_text[m.end()..];
+                            let new_line = format!("{}{}{}", before, state.replace_pattern, after);
+
+                            // Record the edit
+                            let old_line = lines[line].clone();
+                            lines[line] = new_line.clone();
+                            state.modified = true;
+
+                            // Add to undo history
+                            state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                line,
+                                old_content: old_line,
+                                new_content: new_line,
+                            });
+
+                            state.needs_redraw = true;
+                        }
+                    }
+                }
+            }
+
+            // Jump to next occurrence
+            find_next_occurrence(state, lines, visible_lines);
+
+            // Update hit count
+            update_search_hit_count(state, lines);
+        }
+    }
+}
+
+/// Replace all occurrences and exit replace mode
+pub(crate) fn replace_all_occurrences(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+) {
+    if let Some(ref pattern) = state.last_search_pattern {
+        // Make search case-insensitive by default
+        let pattern_with_flags = format!("(?i){}", pattern);
+        if let Ok(regex) = Regex::new(&pattern_with_flags) {
+            let mut replaced_count = 0;
+
+            // Determine search boundaries
+            let (min_line, max_line, scope) = if let Some(((scope_start_line, _), (scope_end_line, _))) = state.find_scope {
+                (scope_start_line, scope_end_line, state.find_scope)
+            } else {
+                (0, lines.len().saturating_sub(1), None)
+            };
+
+            // Replace in each line within scope
+            for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
+                let line_text = &lines[line_idx];
+
+                // Determine search boundaries for this line
+                let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+                    let start_offset = if line_idx == scope_start_line {
+                        scope_start_col
+                    } else {
+                        0
+                    };
+                    let end_offset = if line_idx == scope_end_line {
+                        scope_end_col.min(line_text.len())
+                    } else {
+                        line_text.len()
+                    };
+                    (start_offset, end_offset)
+                } else {
+                    (0, line_text.len())
+                };
+
+                if search_start < search_end {
+                    let before_scope = &line_text[..search_start];
+                    let search_slice = &line_text[search_start..search_end];
+                    let after_scope = &line_text[search_end..];
+
+                    // Replace all matches in the search slice
+                    let replaced_slice = regex.replace_all(search_slice, state.replace_pattern.as_str()).to_string();
+
+                    if replaced_slice != search_slice {
+                        let new_line = format!("{}{}{}", before_scope, replaced_slice, after_scope);
+
+                        // Count replacements in this line
+                        let line_replacements = regex.find_iter(search_slice).count();
+                        replaced_count += line_replacements;
+
+                        // Record the edit
+                        let old_line = lines[line_idx].clone();
+                        lines[line_idx] = new_line.clone();
+
+                        // Add to undo history
+                        state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                            line: line_idx,
+                            old_content: old_line,
+                            new_content: new_line,
+                        });
+                    }
+                }
+            }
+
+            if replaced_count > 0 {
+                state.modified = true;
+                state.needs_redraw = true;
+            }
+
+            // Don't exit replace mode - let user exit when they want
+            // state.replace_active = false;
+            // state.replace_pattern.clear();
+            // state.replace_cursor_pos = 0;
+
+            // Update hit count
+            update_search_hit_count(state, lines);
+        }
     }
 }
 

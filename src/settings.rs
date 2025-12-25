@@ -19,6 +19,12 @@ pub(crate) struct KeyBindings {
     pub(crate) find: String,
     pub(crate) find_next: String,
     pub(crate) find_previous: String,
+    #[serde(default = "default_replace")]
+    pub(crate) replace: String,
+    #[serde(default = "default_replace_current")]
+    pub(crate) replace_current: String,
+    #[serde(default = "default_replace_all")]
+    pub(crate) replace_all: String,
     pub(crate) goto_line: String,
     #[serde(default = "default_help")]
     pub(crate) help: String,
@@ -28,10 +34,46 @@ pub(crate) struct KeyBindings {
     pub(crate) toggle_line_wrap: String,
     #[serde(default = "default_new_file")]
     pub(crate) new_file: String,
+    #[serde(default = "default_cursor_down")]
+    pub(crate) cursor_down: String,
+    #[serde(default = "default_cursor_up")]
+    pub(crate) cursor_up: String,
+    #[serde(default = "default_cursor_left")]
+    pub(crate) cursor_left: String,
+    #[serde(default = "default_cursor_right")]
+    pub(crate) cursor_right: String,
 }
 
 fn default_new_file() -> String {
     "Ctrl+n".into()
+}
+
+fn default_cursor_down() -> String {
+    "Ctrl+j".into()
+}
+
+fn default_cursor_up() -> String {
+    "Ctrl+k".into()
+}
+
+fn default_cursor_left() -> String {
+    "Ctrl+h".into()
+}
+
+fn default_cursor_right() -> String {
+    "Ctrl+l".into()
+}
+
+fn default_replace() -> String {
+    "Ctrl+h".into()
+}
+
+fn default_replace_current() -> String {
+    "Ctrl+r".into()
+}
+
+fn default_replace_all() -> String {
+    "Ctrl+Alt+r".into()
 }
 
 fn default_save_and_quit() -> String {
@@ -232,6 +274,15 @@ impl KeyBindings {
     pub fn find_previous_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.find_previous, code, modifiers)
     }
+    pub fn replace_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.replace, code, modifiers)
+    }
+    pub fn replace_current_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.replace_current, code, modifiers)
+    }
+    pub fn replace_all_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.replace_all, code, modifiers)
+    }
     pub fn goto_line_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.goto_line, code, modifiers)
     }
@@ -241,7 +292,19 @@ impl KeyBindings {
     pub fn toggle_line_wrap_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.toggle_line_wrap, code, modifiers)
     }
-    
+    pub fn cursor_down_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.cursor_down, code, modifiers)
+    }
+    pub fn cursor_up_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.cursor_up, code, modifiers)
+    }
+    pub fn cursor_left_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.cursor_left, code, modifiers)
+    }
+    pub fn cursor_right_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.cursor_right, code, modifiers)
+    }
+
     pub fn new_file_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.new_file, code, modifiers)
     }
@@ -362,11 +425,18 @@ mod tests {
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
+            replace: "Ctrl+h".into(),
+            replace_current: "Ctrl+r".into(),
+            replace_all: "Ctrl+Alt+r".into(),
             goto_line: "Ctrl+g".into(),
             help: "F1".into(),
             save_and_quit: "Ctrl+q".into(),
             toggle_line_wrap: "Alt+w".into(),
             new_file: "Ctrl+n".into(),
+            cursor_down: "Ctrl+j".into(),
+            cursor_up: "Ctrl+k".into(),
+            cursor_left: "Ctrl+h".into(),
+            cursor_right: "Ctrl+l".into(),
         }
     }
 

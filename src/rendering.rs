@@ -259,7 +259,6 @@ fn render_footer(
         let find_label = "Find (regex): ";
         left_side.push_str(find_label);
         let pattern_start_col = left_side.len();
-        left_side.push_str(&state.find_pattern);
 
         // Build the right side (hit count + arrows + position)
         let line_num = state.absolute_line() + 1;
@@ -298,8 +297,32 @@ fn render_footer(
             0
         };
 
-        // Write left side
+        // Write left side (prompt)
         write!(stdout, "{}", left_side)?;
+
+        // Write find pattern with selection highlighting
+        if let Some((sel_start, sel_end)) = state.find_selection {
+            let chars: Vec<char> = state.find_pattern.chars().collect();
+            for (i, ch) in chars.iter().enumerate() {
+                if i == sel_start {
+                    // Start selection - invert colors
+                    execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::Reverse))?;
+                }
+                write!(stdout, "{}", ch)?;
+                if i + 1 == sel_end {
+                    // End selection - restore colors
+                    execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::NoReverse))?;
+                    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+                        execute!(stdout, SetBackgroundColor(color))?;
+                    }
+                }
+            }
+        } else {
+            write!(stdout, "{}", state.find_pattern)?;
+        }
+
+        // Update left_side length to account for the pattern we just wrote
+        let full_left_len = left_side.len() + state.find_pattern.chars().count();
 
         // Calculate right-aligned position (same method as normal mode)
         // In normal mode: remaining_width = total_width - left_len
@@ -308,7 +331,7 @@ fn render_footer(
         let remaining_width = total_width.saturating_sub(digit_area_len);
 
         // Calculate how much content we've written after the digit area
-        let written_after_digits = error_offset + left_side.len() - digit_area_len;
+        let written_after_digits = error_offset + full_left_len - digit_area_len;
 
         // Right-align: pad to push right_side to right edge
         let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.len());
@@ -332,6 +355,87 @@ fn render_footer(
         let chars: Vec<char> = state.find_pattern.chars().collect();
         let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
         let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
+        execute!(stdout, cursor::MoveTo(cursor_x, footer_row))?;
+        apply_cursor_shape(stdout, state.settings)?;
+        execute!(stdout, cursor::Show)?;
+        return Ok(());
+    }
+
+    // If in replace mode, show the replace prompt with buttons
+    if state.replace_active {
+        let digits = state.settings.appearance.line_number_digits as usize;
+        let total_width = state.term_width as usize;
+
+        // Build the left side (replace prompt)
+        let mut left_side = String::new();
+        if digits > 0 {
+            left_side.push_str(&format!("{:width$} ", "", width = digits));
+        }
+        let replace_label = "Replace with: ";
+        left_side.push_str(replace_label);
+        let pattern_start_col = left_side.len();
+
+        // Build the right side (buttons + position)
+        let line_num = state.absolute_line() + 1;
+        let col_num = state.cursor_col + 1;
+        let position_info = format!("{}:{}", line_num, col_num);
+
+        // Show buttons for replace operations
+        let buttons = "[replace occurrence] [replace all]";
+        let right_side = format!("{}  {}", buttons, position_info);
+
+        // Render the footer
+        write!(stdout, "\r")?;
+
+        // Write left side (prompt)
+        write!(stdout, "{}", left_side)?;
+
+        // Write replace pattern with selection highlighting
+        if let Some((sel_start, sel_end)) = state.replace_selection {
+            let chars: Vec<char> = state.replace_pattern.chars().collect();
+            for (i, ch) in chars.iter().enumerate() {
+                if i == sel_start {
+                    // Start selection - invert colors
+                    execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::Reverse))?;
+                }
+                write!(stdout, "{}", ch)?;
+                if i + 1 == sel_end {
+                    // End selection - restore colors
+                    execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::NoReverse))?;
+                    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+                        execute!(stdout, SetBackgroundColor(color))?;
+                    }
+                }
+            }
+        } else {
+            write!(stdout, "{}", state.replace_pattern)?;
+        }
+
+        // Update full left length to account for the pattern we just wrote
+        let full_left_len = left_side.len() + state.replace_pattern.chars().count();
+
+        // Calculate right-aligned position
+        let digit_area_len = if digits > 0 { digits + 1 } else { 0 };
+        let remaining_width = total_width.saturating_sub(digit_area_len);
+        let written_after_digits = full_left_len - digit_area_len;
+
+        // Right-align: pad to push right_side to right edge
+        let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.len());
+        for _ in 0..pad {
+            write!(stdout, " ")?;
+        }
+
+        // Write right side
+        write!(stdout, "{}", right_side)?;
+
+        // Clear rest of line
+        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        execute!(stdout, ResetColor)?;
+
+        // Position cursor at replace_cursor_pos within the replace pattern
+        let chars: Vec<char> = state.replace_pattern.chars().collect();
+        let cursor_offset = chars.iter().take(state.replace_cursor_pos).count();
+        let cursor_x = (pattern_start_col + cursor_offset) as u16;
         execute!(stdout, cursor::MoveTo(cursor_x, footer_row))?;
         apply_cursor_shape(stdout, state.settings)?;
         execute!(stdout, cursor::Show)?;
@@ -860,6 +964,11 @@ fn position_cursor(
 
     // If in find mode, cursor is already positioned in the search field by render_footer
     if state.find_active {
+        return Ok(());
+    }
+
+    // If in replace mode, cursor is already positioned in the replace field by render_footer
+    if state.replace_active {
         return Ok(());
     }
 

@@ -807,6 +807,17 @@ pub(crate) fn apply_undo(
                 // Cursor remains; ensure visibility
                 true
             }
+            Edit::ReplaceLine { line, old_content, .. } => {
+                // Undo replace: restore old content
+                if line < lines.len() {
+                    lines[line] = old_content;
+                    state.cursor_line = line.saturating_sub(state.top_line);
+                    state.cursor_col = 0;
+                    true
+                } else {
+                    false
+                }
+            }
         };
 
         if result {
@@ -916,6 +927,17 @@ pub(crate) fn apply_redo(
             Edit::DragBlock { after, .. } => {
                 *lines = after.clone();
                 true
+            }
+            Edit::ReplaceLine { line, new_content, .. } => {
+                // Redo replace: apply new content
+                if line < lines.len() {
+                    lines[line] = new_content;
+                    state.cursor_line = line.saturating_sub(state.top_line);
+                    state.cursor_col = 0;
+                    true
+                } else {
+                    false
+                }
             }
         };
 

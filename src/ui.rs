@@ -652,8 +652,28 @@ fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bo
         state.find_pattern.clear();
         state.find_error = None;
         state.find_history_index = None;
+        state.transition_to_replace_on_enter = false; // Clear transition flag
         state.last_search_pattern = state.saved_search_pattern.clone();
         state.saved_search_pattern = None;
+        state.needs_redraw = true;
+        return true;
+    }
+
+    // In replace mode, exit replace and find
+    if state.replace_active {
+        state.replace_active = false;
+        state.replace_pattern.clear();
+        state.replace_cursor_pos = 0;
+        // Also clear find mode and search highlights
+        state.find_active = false;
+        state.find_pattern.clear();
+        state.find_error = None;
+        state.find_history_index = None;
+        state.last_search_pattern = None;
+        state.saved_search_pattern = None;
+        state.find_scope = None;
+        state.search_hit_count = 0;
+        state.search_current_hit = 0;
         state.needs_redraw = true;
         return true;
     }

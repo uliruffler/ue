@@ -66,6 +66,11 @@ pub enum Edit {
         dest: (usize, usize),
         copy: bool,
     },
+    ReplaceLine {
+        line: usize,
+        old_content: String,
+        new_content: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -295,10 +295,62 @@ fn handle_scrollbar_drag(
 /// Handle clicks on the footer, particularly for search navigation arrows
 fn handle_footer_click(
     state: &mut FileViewerState,
-    lines: &[String],
+    lines: &mut Vec<String>,
     column: u16,
     visible_lines: usize,
 ) {
+    // Handle replace mode buttons
+    if state.replace_active {
+        let total_width = state.term_width as usize;
+        let digits = state.settings.appearance.line_number_digits as usize;
+        
+        // Build the right side to calculate button positions
+        let line_num = state.absolute_line() + 1;
+        let col_num = state.cursor_col + 1;
+        let position_info = format!("{}:{}", line_num, col_num);
+        let buttons = "[replace occurrence] [replace all]";
+        let right_side = format!("{}  {}", buttons, position_info);
+        
+        // Calculate where buttons are displayed
+        let digit_area_len = if digits > 0 { digits + 1 } else { 0 };
+        let remaining_width = total_width.saturating_sub(digit_area_len);
+        
+        // Calculate the starting position of right_side
+        let left_side_len = digit_area_len + "Replace with: ".len() + state.replace_pattern.len();
+        let pad = remaining_width.saturating_sub(left_side_len - digit_area_len).saturating_sub(right_side.len());
+        let right_start = left_side_len + pad;
+        
+        // Find button positions in right_side
+        let replace_occurrence_btn = "[replace occurrence]";
+        let replace_all_btn = "[replace all]";
+        
+        let click_col = column as usize;
+        
+        // Check if clicked on "replace occurrence" button
+        if let Some(pos) = buttons.find(replace_occurrence_btn) {
+            let btn_start = right_start + pos;
+            let btn_end = btn_start + replace_occurrence_btn.len();
+            if click_col >= btn_start && click_col < btn_end {
+                // Clicked on "replace occurrence" button
+                crate::find::replace_current_occurrence(state, lines, visible_lines);
+                return;
+            }
+        }
+        
+        // Check if clicked on "replace all" button
+        if let Some(pos) = buttons.find(replace_all_btn) {
+            let btn_start = right_start + pos;
+            let btn_end = btn_start + replace_all_btn.len();
+            if click_col >= btn_start && click_col < btn_end {
+                // Clicked on "replace all" button
+                crate::find::replace_all_occurrences(state, lines);
+                return;
+            }
+        }
+        
+        return;
+    }
+    
     // Only handle if we have search results
     if state.search_hit_count == 0 {
         return;

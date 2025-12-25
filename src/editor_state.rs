@@ -47,6 +47,8 @@ pub struct FileViewerState<'a> {
     pub(crate) find_pattern: String,
     /// Cursor position within find pattern (character index, not byte index)
     pub(crate) find_cursor_pos: usize,
+    /// Selection in find pattern: (start_pos, end_pos) in character indices
+    pub(crate) find_selection: Option<(usize, usize)>,
     /// Error message for invalid regex
     pub(crate) find_error: Option<String>,
     /// Find history (last 100 searches)
@@ -69,6 +71,16 @@ pub struct FileViewerState<'a> {
     pub(crate) search_hit_count: usize,
     /// Current hit index (1-based, 0 means cursor not on a hit)
     pub(crate) search_current_hit: usize,
+    /// Replace mode active (entered from find mode with Ctrl+H)
+    pub(crate) replace_active: bool,
+    /// Replacement text being entered
+    pub(crate) replace_pattern: String,
+    /// Cursor position within replace pattern (character index, not byte index)
+    pub(crate) replace_cursor_pos: usize,
+    /// Selection in replace pattern: (start_pos, end_pos) in character indices
+    pub(crate) replace_selection: Option<(usize, usize)>,
+    /// Flag to indicate find mode should transition to replace mode on Enter
+    pub(crate) transition_to_replace_on_enter: bool,
     /// Go to line mode active
     pub(crate) goto_line_active: bool,
     /// Input buffer for go to line
@@ -154,6 +166,7 @@ impl<'a> FileViewerState<'a> {
             find_active: false,
             find_pattern: String::new(),
             find_cursor_pos: 0,
+            find_selection: None,
             find_error: None,
             find_history: Vec::new(),
             find_history_index: None,
@@ -164,6 +177,11 @@ impl<'a> FileViewerState<'a> {
             find_scope: None,
             search_hit_count: 0,
             search_current_hit: 0,
+            replace_active: false,
+            replace_pattern: String::new(),
+            replace_cursor_pos: 0,
+            replace_selection: None,
+            transition_to_replace_on_enter: false,
             goto_line_active: false,
             goto_line_input: String::new(),
             goto_line_cursor_pos: 0,
