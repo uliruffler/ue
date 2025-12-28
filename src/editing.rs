@@ -962,6 +962,33 @@ pub(crate) fn apply_redo(
     }
 }
 
+/// Convert a block selection into multi-cursor mode at the block's start column
+fn activate_multi_cursor_from_block(
+    state: &mut FileViewerState,
+    start: Position,
+    end: Position,
+) {
+    let (start_line, start_col) = start;
+    let end_line = end.0.max(start_line);
+
+    // Position main cursor on the first line of the block
+    state.cursor_line = start_line.saturating_sub(state.top_line);
+    state.cursor_col = start_col;
+
+    // Populate multi-cursors for remaining lines in the block
+    state.multi_cursors.clear();
+    for line in start_line + 1..=end_line {
+        state.multi_cursors.push((line, start_col));
+    }
+
+    // Exit block selection mode
+    state.selection_start = None;
+    state.selection_end = None;
+    state.selection_anchor = None;
+    state.block_selection = false;
+    state.needs_redraw = true;
+}
+
 pub(crate) fn handle_editing_keys(
     state: &mut FileViewerState,
     lines: &mut Vec<String>,
@@ -972,12 +999,25 @@ pub(crate) fn handle_editing_keys(
 ) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
 
-    let selection_active = state.has_selection();
+    // If a zero-width block selection is active, convert it to multi-cursors for editing keys
+    if state.block_selection {
+        if let Some((start, end)) = state.selection_range() {
+            let is_zero_width_block = start.1 == end.1 && start.0 != end.0;
+            if is_zero_width_block
+                && matches!(code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete)
+            {
+                activate_multi_cursor_from_block(state, start, end);
+            }
+        }
+    }
 
     // Handle multi-cursor typing
     if state.has_multi_cursors() {
         match code {
-            KeyCode::Char(c) if !modifiers.contains(KeyModifiers::CONTROL) && !modifiers.contains(KeyModifiers::ALT) => {
+            KeyCode::Char(c)
+                if !modifiers.contains(KeyModifiers::CONTROL)
+                    && !modifiers.contains(KeyModifiers::ALT) =>
+            {
                 return insert_char_multi_cursor(state, lines, *c, filename);
             }
             KeyCode::Backspace => {
@@ -994,45 +1034,53 @@ pub(crate) fn handle_editing_keys(
     }
 
     match code {
-        KeyCode::Backspace | KeyCode::Delete if selection_active => {
+        KeyCode::Backspace | KeyCode::Delete if state.has_selection() && state.block_selection => {
+            if let Some((start, end)) = state.selection_range() {
+                let start_col = start.1;
+                let start_line = start.0;
+                let end_line = end.0;
+                let removed = remove_selection(state, lines, filename);
+                activate_multi_cursor_from_block(state, (start_line, start_col), (end_line, start_col));
+                removed
+            } else {
+                false
+            }
+        }
+        KeyCode::Backspace | KeyCode::Delete if state.has_selection() => {
             remove_selection(state, lines, filename)
         }
         KeyCode::Char(c)
             if !modifiers.contains(KeyModifiers::CONTROL)
                 && !modifiers.contains(KeyModifiers::ALT) =>
         {
-            // Check for zero-width block selection (multi-cursor)
-            if selection_active && state.block_selection {
-                let (s, e) = if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
-                    if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
-                        (start, end)
-                    } else {
-                        (end, start)
+            if state.has_selection() && state.block_selection {
+                if let Some((start, end)) = state.selection_range() {
+                    if start.1 != end.1 {
+                        let start_col = start.1;
+                        let start_line = start.0;
+                        let end_line = end.0;
+                        let _ = remove_selection(state, lines, filename);
+                        activate_multi_cursor_from_block(
+                            state,
+                            (start_line, start_col),
+                            (end_line, start_col),
+                        );
+                        return insert_char_multi_cursor(state, lines, *c, filename);
                     }
-                } else {
-                    ((0, 0), (0, 0))
-                };
-
-                // Zero-width block selection - use multi-cursor insert
-                if s.1 == e.1 && s.0 != e.0 {
-                    return insert_char_block(state, lines, *c, filename);
-                } else {
-                    // Non-zero width - remove selection first
-                    remove_selection(state, lines, filename);
                 }
-            } else if selection_active {
+            } else if state.has_selection() {
                 remove_selection(state, lines, filename);
             }
             insert_char(state, lines, *c, filename)
         }
         KeyCode::Enter => {
-            if selection_active {
+            if state.has_selection() {
                 remove_selection(state, lines, filename);
             }
             split_line(state, lines, visible_lines, filename)
         }
         KeyCode::Tab => {
-            if selection_active {
+            if state.has_selection() {
                 remove_selection(state, lines, filename);
             }
             insert_tab(state, lines, filename)
