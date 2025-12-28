@@ -71,6 +71,11 @@ pub enum Edit {
         old_content: String,
         new_content: String,
     },
+    CompositeEdit {
+        edits: Vec<Edit>,
+        #[serde(default)]
+        undo_cursor: Option<(usize, usize, Vec<(usize, usize)>)>, // (line, col, multi_cursors)
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -112,6 +117,24 @@ impl UndoHistory {
         // Remove any edits after current position (they were undone)
         self.edits.truncate(self.current);
         self.edits.push(edit);
+        self.current = self.edits.len();
+    }
+
+    pub fn push_composite(
+        &mut self,
+        edits: Vec<Edit>,
+        undo_cursor: Option<(usize, usize, Vec<(usize, usize)>)>,
+    ) {
+        if edits.is_empty() {
+            return;
+        }
+        // Remove any edits after current position (they were undone)
+        self.edits.truncate(self.current);
+        if edits.len() == 1 && undo_cursor.is_none() {
+            self.edits.push(edits.into_iter().next().unwrap());
+        } else {
+            self.edits.push(Edit::CompositeEdit { edits, undo_cursor });
+        }
         self.current = self.edits.len();
     }
 
@@ -1193,7 +1216,7 @@ mod tests {
         assert!(h1.modified);
         h1.save(&file_str).unwrap();
 
-        // Instance 2: Load and verify modified flag is true
+        // Instance 2: Load and verify modified=true
         let h2 = UndoHistory::load(&file_str).unwrap();
         assert!(h2.modified);
         assert_eq!(h2.edits.len(), 1);

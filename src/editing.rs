@@ -201,6 +201,8 @@ pub(crate) fn remove_selection(
 
     if state.block_selection {
         // Block selection deletion - remove column range from each line
+        let mut edits = Vec::new();
+
         for line_idx in s_line..=e_line {
             if line_idx >= lines.len() {
                 break;
@@ -214,7 +216,7 @@ pub(crate) fn remove_selection(
                 let removed: Vec<char> = chars[line_start..line_end].to_vec();
                 // Record deletes in reverse order
                 for (i, ch) in removed.into_iter().enumerate().rev() {
-                    state.undo_history.push(Edit::DeleteChar {
+                    edits.push(Edit::DeleteChar {
                         line: line_idx,
                         col: line_start + i,
                         ch,
@@ -228,6 +230,10 @@ pub(crate) fn remove_selection(
                 *line = new_line;
             }
         }
+
+        let undo_cursor = Some((s_line, s_col, state.multi_cursors.clone()));
+        // Push all deletes as a single composite edit
+        state.undo_history.push_composite(edits, undo_cursor);
 
         // Position cursor at start of selection
         state.cursor_line = s_line.saturating_sub(state.top_line);
@@ -255,22 +261,27 @@ pub(crate) fn remove_selection(
             return false;
         }
         let removed: Vec<char> = line[s_col..end_col].chars().collect();
-        // Record deletes in reverse order
+        // Record deletes in reverse order as composite
+        let mut edits = Vec::new();
         for (i, ch) in removed.into_iter().enumerate().rev() {
-            state.undo_history.push(Edit::DeleteChar {
+            edits.push(Edit::DeleteChar {
                 line: s_line,
                 col: s_col + i,
                 ch,
             });
         }
+        let undo_cursor = Some((s_line, s_col, state.multi_cursors.clone()));
+        state.undo_history.push_composite(edits, undo_cursor);
         line.replace_range(s_col..end_col, "");
     } else {
         // Multi-line removal
+        let mut edits = Vec::new();
+
         // Tail of start line
         if s_col < lines[s_line].len() {
             let tail: Vec<char> = lines[s_line][s_col..].chars().collect();
             for (i, ch) in tail.into_iter().enumerate().rev() {
-                state.undo_history.push(Edit::DeleteChar {
+                edits.push(Edit::DeleteChar {
                     line: s_line,
                     col: s_col + i,
                     ch,
@@ -280,7 +291,7 @@ pub(crate) fn remove_selection(
         }
         // Middle full lines
         for (line_idx, content) in lines.iter().enumerate().take(e_line).skip(s_line + 1) {
-            state.undo_history.push(Edit::DeleteLine {
+            edits.push(Edit::DeleteLine {
                 line: line_idx,
                 content: content.clone(),
             });
@@ -290,7 +301,7 @@ pub(crate) fn remove_selection(
         let head_limit = e_col.min(end_line_len);
         let head: Vec<char> = lines[e_line][..head_limit].chars().collect();
         for (i, ch) in head.into_iter().enumerate().rev() {
-            state.undo_history.push(Edit::DeleteChar {
+            edits.push(Edit::DeleteChar {
                 line: e_line,
                 col: i,
                 ch,
@@ -303,11 +314,16 @@ pub(crate) fn remove_selection(
         // Merge start and remaining end line
         let first_snapshot = lines[s_line].clone();
         let second_snapshot = lines[e_line].clone();
-        state.undo_history.push(Edit::MergeLine {
+        edits.push(Edit::MergeLine {
             line: s_line,
             first: first_snapshot,
             second: second_snapshot.clone(),
         });
+
+        let undo_cursor = Some((s_line, s_col, state.multi_cursors.clone()));
+        // Push all edits as composite
+        state.undo_history.push_composite(edits, undo_cursor);
+
         lines[s_line].push_str(&second_snapshot);
         // Remove intervening + original end line
         for _ in s_line + 1..=e_line {
@@ -356,6 +372,8 @@ pub(crate) fn insert_char(
     }
 }
 
+// Silence dead_code warning for insert_char_block used only in tests
+#[allow(dead_code)]
 /// Insert character on multiple lines for zero-width block selection
 fn insert_char_block(
     state: &mut FileViewerState,
@@ -727,118 +745,141 @@ pub(crate) fn apply_undo(
     visible_lines: usize,
 ) -> bool {
     if let Some(edit) = state.undo_history.undo() {
-        let result = match edit {
-            Edit::InsertChar { line, col, .. } => {
-                // Undo insert: delete the character
-                if line < lines.len() && col < lines[line].len() {
-                    lines[line].remove(col);
-                    state.cursor_col = col;
+        let result = match &edit {
+            Edit::CompositeEdit { edits, undo_cursor } => {
+                // Undo composite edit: apply all edits in reverse order
+                let mut success = true;
+                for e in edits.iter().rev() {
+                    if !apply_single_undo_edit(state, lines, e) {
+                        success = false;
+                    }
+                }
+                // Restore cursor & multi-cursors snapshot if present
+                if let Some((line, col, multi)) = undo_cursor {
                     state.cursor_line = line.saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
+                    state.cursor_col = *col;
+                    state.multi_cursors = multi.clone();
                 }
+                success
             }
-            Edit::DeleteChar { line, col, ch } => {
-                // Undo delete: insert the character back
-                if line < lines.len() && col <= lines[line].len() {
-                    lines[line].insert(col, ch);
-                    state.cursor_col = col + 1;
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::SplitLine {
-                line, col, before, ..
-            } => {
-                // Undo split: merge the lines back
-                if line < lines.len() && line + 1 < lines.len() {
-                    let after = lines.remove(line + 1);
-                    lines[line] = format!("{}{}", before, after);
-                    state.cursor_col = col;
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::MergeLine {
-                line,
-                first,
-                second,
-            } => {
-                // Undo merge: split the lines back
-                if line < lines.len() {
-                    lines[line] = first;
-                    lines.insert(line + 1, second);
-                    state.cursor_col = 0;
-                    state.cursor_line = (line + 1).saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::InsertLine { line, .. } => {
-                // Undo insert line: delete the line
-                if line < lines.len() {
-                    lines.remove(line);
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    state.cursor_col = 0;
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::DeleteLine { line, content } => {
-                // Undo delete line: insert the line back
-                if line <= lines.len() {
-                    lines.insert(line, content);
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    state.cursor_col = 0;
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::DragBlock { before, .. } => {
-                *lines = before.clone();
-                // Cursor remains; ensure visibility
-                true
-            }
-            Edit::ReplaceLine { line, old_content, .. } => {
-                // Undo replace: restore old content
-                if line < lines.len() {
-                    lines[line] = old_content;
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    state.cursor_col = 0;
-                    true
-                } else {
-                    false
-                }
-            }
+            _ => apply_single_undo_edit(state, lines, &edit),
         };
 
         if result {
-            // Ensure cursor is visible after undo operation
             state.ensure_cursor_visible(visible_lines, lines);
-
-            // Persist content changes (but not scroll/cursor separately) using update_state
             let absolute_line = state.absolute_line();
-            state.undo_history.update_state(
-                state.top_line,
-                absolute_line,
-                state.cursor_col,
-                lines.clone(),
-            );
-            // Sync modified flag from undo history
+            state
+                .undo_history
+                .update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
             state.modified = state.undo_history.modified;
             save_undo_with_timestamp(state, filename);
         }
         result
     } else {
         false
+    }
+}
+
+fn apply_single_undo_edit(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+    edit: &Edit,
+) -> bool {
+    match edit {
+        Edit::InsertChar { line, col, .. } => {
+            // Undo insert: delete the character
+            if *line < lines.len() && *col < lines[*line].len() {
+                lines[*line].remove(*col);
+                state.cursor_col = *col;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::DeleteChar { line, col, ch } => {
+            // Undo delete: insert the character back
+            if *line < lines.len() && *col <= lines[*line].len() {
+                lines[*line].insert(*col, *ch);
+                state.cursor_col = col + 1;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::SplitLine {
+            line, col, before, ..
+        } => {
+            // Undo split: merge the lines back
+            if *line < lines.len() && line + 1 < lines.len() {
+                let after = lines.remove(line + 1);
+                lines[*line] = format!("{}{}", before, after);
+                state.cursor_col = *col;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::MergeLine {
+            line,
+            first,
+            second,
+        } => {
+            // Undo merge: split the lines back
+            if *line < lines.len() {
+                lines[*line] = first.clone();
+                lines.insert(line + 1, second.clone());
+                state.cursor_col = 0;
+                state.cursor_line = (line + 1).saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::InsertLine { line, .. } => {
+            // Undo insert line: delete the line
+            if *line < lines.len() {
+                lines.remove(*line);
+                state.cursor_line = line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                true
+            } else {
+                false
+            }
+        }
+        Edit::DeleteLine { line, content } => {
+            // Undo delete line: insert the line back
+            if *line <= lines.len() {
+                lines.insert(*line, content.clone());
+                state.cursor_line = line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                true
+            } else {
+                false
+            }
+        }
+        Edit::DragBlock { before, .. } => {
+            *lines = before.clone();
+            // Cursor remains; ensure visibility
+            true
+        }
+        Edit::ReplaceLine { line, old_content, .. } => {
+            // Undo replace: restore old content
+            if *line < lines.len() {
+                lines[*line] = old_content.clone();
+                state.cursor_line = line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                true
+            } else {
+                false
+            }
+        }
+        Edit::CompositeEdit { .. } => {
+            // Nested composite edits should not happen, but handle gracefully
+            false
+        }
     }
 }
 
@@ -849,116 +890,140 @@ pub(crate) fn apply_redo(
     visible_lines: usize,
 ) -> bool {
     if let Some(edit) = state.undo_history.redo() {
-        let result = match edit {
-            Edit::InsertChar { line, col, ch } => {
-                // Redo insert: insert the character
-                if line < lines.len() && col <= lines[line].len() {
-                    lines[line].insert(col, ch);
-                    state.cursor_col = col + 1;
+        let result = match &edit {
+            Edit::CompositeEdit { edits, undo_cursor } => {
+                // Redo composite edit: apply all edits in forward order
+                let mut success = true;
+                for e in edits.iter() {
+                    if !apply_single_redo_edit(state, lines, e) {
+                        success = false;
+                    }
+                }
+                // Restore cursor & multi-cursors snapshot if present
+                if let Some((line, col, multi)) = undo_cursor {
                     state.cursor_line = line.saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
+                    state.cursor_col = *col;
+                    state.multi_cursors = multi.clone();
                 }
+                success
             }
-            Edit::DeleteChar { line, col, .. } => {
-                // Redo delete: delete the character
-                if line < lines.len() && col < lines[line].len() {
-                    lines[line].remove(col);
-                    state.cursor_col = col;
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::SplitLine {
-                line,
-                col: _,
-                before,
-                after,
-            } => {
-                // Redo split: split the line
-                if line < lines.len() {
-                    lines[line] = before;
-                    lines.insert(line + 1, after);
-                    state.cursor_col = 0;
-                    state.cursor_line = (line + 1).saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::MergeLine { line, .. } => {
-                // Redo merge: merge the lines
-                if line < lines.len() && line + 1 < lines.len() {
-                    let next = lines.remove(line + 1);
-                    let prev_len = lines[line].len();
-                    lines[line].push_str(&next);
-                    state.cursor_col = prev_len;
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::InsertLine { line, content } => {
-                // Redo insert line: insert the line
-                if line <= lines.len() {
-                    lines.insert(line, content);
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    state.cursor_col = 0;
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::DeleteLine { line, .. } => {
-                // Redo delete line: delete the line
-                if line < lines.len() {
-                    lines.remove(line);
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    state.cursor_col = 0;
-                    true
-                } else {
-                    false
-                }
-            }
-            Edit::DragBlock { after, .. } => {
-                *lines = after.clone();
-                true
-            }
-            Edit::ReplaceLine { line, new_content, .. } => {
-                // Redo replace: apply new content
-                if line < lines.len() {
-                    lines[line] = new_content;
-                    state.cursor_line = line.saturating_sub(state.top_line);
-                    state.cursor_col = 0;
-                    true
-                } else {
-                    false
-                }
-            }
+            _ => apply_single_redo_edit(state, lines, &edit),
         };
 
         if result {
-            // Ensure cursor is visible after redo operation
             state.ensure_cursor_visible(visible_lines, lines);
-
             let absolute_line = state.absolute_line();
-            state.undo_history.update_state(
-                state.top_line,
-                absolute_line,
-                state.cursor_col,
-                lines.clone(),
-            );
-            // Sync modified flag from undo history
+            state
+                .undo_history
+                .update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
             state.modified = state.undo_history.modified;
             save_undo_with_timestamp(state, filename);
         }
         result
     } else {
         false
+    }
+}
+
+fn apply_single_redo_edit(
+    state: &mut FileViewerState,
+    lines: &mut Vec<String>,
+    edit: &Edit,
+) -> bool {
+    match edit {
+        Edit::InsertChar { line, col, ch } => {
+            // Redo insert: insert the character
+            if *line < lines.len() && *col <= lines[*line].len() {
+                lines[*line].insert(*col, *ch);
+                state.cursor_col = col + 1;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::DeleteChar { line, col, .. } => {
+            // Redo delete: delete the character
+            if *line < lines.len() && *col < lines[*line].len() {
+                lines[*line].remove(*col);
+                state.cursor_col = *col;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::SplitLine {
+            line,
+            col: _,
+            before,
+            after,
+        } => {
+            // Redo split: split the line
+            if *line < lines.len() {
+                lines[*line] = before.clone();
+                lines.insert(line + 1, after.clone());
+                state.cursor_col = 0;
+                state.cursor_line = (line + 1).saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::MergeLine { line, .. } => {
+            // Redo merge: merge the lines
+            if *line < lines.len() && line + 1 < lines.len() {
+                let next = lines.remove(line + 1);
+                let prev_len = lines[*line].len();
+                lines[*line].push_str(&next);
+                state.cursor_col = prev_len;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                true
+            } else {
+                false
+            }
+        }
+        Edit::InsertLine { line, content } => {
+            // Redo insert line: insert the line
+            if *line <= lines.len() {
+                lines.insert(*line, content.clone());
+                state.cursor_line = line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                true
+            } else {
+                false
+            }
+        }
+        Edit::DeleteLine { line, .. } => {
+            // Redo delete line: delete the line
+            if *line < lines.len() {
+                lines.remove(*line);
+                state.cursor_line = line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                true
+            } else {
+                false
+            }
+        }
+        Edit::DragBlock { after, .. } => {
+            *lines = after.clone();
+            true
+        }
+        Edit::ReplaceLine { line, new_content, .. } => {
+            // Redo replace: apply new content
+            if *line < lines.len() {
+                lines[*line] = new_content.clone();
+                state.cursor_line = line.saturating_sub(state.top_line);
+                state.cursor_col = 0;
+                true
+            } else {
+                false
+            }
+        }
+        Edit::CompositeEdit { .. } => {
+            // Nested composite edits should not happen, but handle gracefully
+            false
+        }
     }
 }
 
@@ -1100,34 +1165,26 @@ fn insert_char_multi_cursor(
 ) -> bool {
     let positions = state.all_cursor_positions();
     let mut inserted = false;
+    let mut edits = Vec::new();
 
-    // Insert in reverse order to maintain position validity
+    // Capture cursor & multi-cursors BEFORE mutation for correct undo restoration
+    let undo_cursor = Some((state.absolute_line(), state.cursor_col, state.multi_cursors.clone()));
+
     for &(line_idx, col) in positions.iter().rev() {
         if line_idx < lines.len() && col <= lines[line_idx].len() {
             lines[line_idx].insert(col, c);
-            state.undo_history.push(Edit::InsertChar {
-                line: line_idx,
-                col,
-                ch: c,
-            });
+            edits.push(Edit::InsertChar { line: line_idx, col, ch: c });
             inserted = true;
         }
     }
 
     if inserted {
-        // Update all cursor positions to move right by 1
+        state.undo_history.push_composite(edits, undo_cursor);
+        // Advance all cursor positions by 1
         state.cursor_col += 1;
-        for cursor in &mut state.multi_cursors {
-            cursor.1 += 1;
-        }
-
+        for cursor in &mut state.multi_cursors { cursor.1 += 1; }
         let absolute_line = state.absolute_line();
-        state.undo_history.update_state(
-            state.top_line,
-            absolute_line,
-            state.cursor_col,
-            lines.to_vec(),
-        );
+        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.to_vec());
         save_undo_with_timestamp(state, filename);
         true
     } else {
@@ -1143,10 +1200,12 @@ fn delete_backward_multi_cursor(
 ) -> bool {
     let mut positions = state.all_cursor_positions();
     let mut deleted = false;
+    let mut edits = Vec::new();
 
-    // Sort in reverse order to maintain validity
+    // Capture cursor & multi-cursors BEFORE mutation for correct undo restoration
+    let undo_cursor = Some((state.absolute_line(), state.cursor_col, state.multi_cursors.clone()));
+
     positions.sort_by(|a, b| b.cmp(a));
-
     for &(line_idx, col) in &positions {
         if line_idx < lines.len() && col > 0 {
             let line = &mut lines[line_idx];
@@ -1154,11 +1213,7 @@ fn delete_backward_multi_cursor(
                 let chars: Vec<char> = line.chars().collect();
                 if col > 0 && col <= chars.len() {
                     let removed_char = chars[col - 1];
-                    state.undo_history.push(Edit::DeleteChar {
-                        line: line_idx,
-                        col: col - 1,
-                        ch: removed_char,
-                    });
+                    edits.push(Edit::DeleteChar { line: line_idx, col: col - 1, ch: removed_char });
                     line.remove(col - 1);
                     deleted = true;
                 }
@@ -1167,23 +1222,12 @@ fn delete_backward_multi_cursor(
     }
 
     if deleted {
-        // Update all cursor positions to move left by 1
-        if state.cursor_col > 0 {
-            state.cursor_col -= 1;
-        }
-        for cursor in &mut state.multi_cursors {
-            if cursor.1 > 0 {
-                cursor.1 -= 1;
-            }
-        }
-
+        state.undo_history.push_composite(edits, undo_cursor);
+        // Move all cursor positions left by 1
+        if state.cursor_col > 0 { state.cursor_col -= 1; }
+        for cursor in &mut state.multi_cursors { if cursor.1 > 0 { cursor.1 -= 1; } }
         let absolute_line = state.absolute_line();
-        state.undo_history.update_state(
-            state.top_line,
-            absolute_line,
-            state.cursor_col,
-            lines.clone(),
-        );
+        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
         save_undo_with_timestamp(state, filename);
         true
     } else {
@@ -1199,21 +1243,19 @@ fn delete_forward_multi_cursor(
 ) -> bool {
     let mut positions = state.all_cursor_positions();
     let mut deleted = false;
+    let mut edits = Vec::new();
 
-    // Sort in reverse order to maintain validity
+    // Capture cursor & multi-cursors BEFORE mutation for correct undo restoration
+    let undo_cursor = Some((state.absolute_line(), state.cursor_col, state.multi_cursors.clone()));
+
     positions.sort_by(|a, b| b.cmp(a));
-
     for &(line_idx, col) in &positions {
         if line_idx < lines.len() {
             let line = &mut lines[line_idx];
             let chars: Vec<char> = line.chars().collect();
             if col < chars.len() {
                 let removed_char = chars[col];
-                state.undo_history.push(Edit::DeleteChar {
-                    line: line_idx,
-                    col,
-                    ch: removed_char,
-                });
+                edits.push(Edit::DeleteChar { line: line_idx, col, ch: removed_char });
                 line.remove(col);
                 deleted = true;
             }
@@ -1221,18 +1263,12 @@ fn delete_forward_multi_cursor(
     }
 
     if deleted {
+        state.undo_history.push_composite(edits, undo_cursor);
         let absolute_line = state.absolute_line();
-        state.undo_history.update_state(
-            state.top_line,
-            absolute_line,
-            state.cursor_col,
-            lines.clone(),
-        );
+        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
         save_undo_with_timestamp(state, filename);
         true
-    } else {
-        false
-    }
+    } else { false }
 }
 
 fn extract_selection(lines: &[&str], sel_start: Position, sel_end: Position) -> String {
@@ -1974,6 +2010,122 @@ mod tests {
         let new_ue = crate::undo::UndoHistory::history_path_for(target_path.to_str().unwrap()).unwrap();
         assert!(new_ue.exists(), "New undo file must exist at {}", new_ue.display());
     }
+
+    #[test]
+    fn test_composite_edit_block_selection_undo() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "abcdef".to_string(),
+            "123456".to_string(),
+            "ABCDEF".to_string(),
+        ];
+
+        // Set up block selection from (0, 2) to (2, 4) - columns 2-3 on lines 0-2
+        state.selection_start = Some((0, 2));
+        state.selection_end = Some((2, 4));
+        state.block_selection = true;
+
+        // Remove the block selection
+        let removed = remove_selection(&mut state, &mut lines, "test.txt");
+        assert!(removed, "Block selection should be removed");
+
+        // Verify content changed
+        assert_eq!(lines[0], "abef");
+        assert_eq!(lines[1], "1256");
+        assert_eq!(lines[2], "ABEF");
+
+        // Now undo should restore everything in ONE step
+        let undone = apply_undo(&mut state, &mut lines, "test.txt", 10);
+        assert!(undone, "Undo should succeed");
+
+        // All content should be restored
+        assert_eq!(lines[0], "abcdef");
+        assert_eq!(lines[1], "123456");
+        assert_eq!(lines[2], "ABCDEF");
+
+        // Redo should remove everything again in ONE step
+        let redone = apply_redo(&mut state, &mut lines, "test.txt", 10);
+        assert!(redone, "Redo should succeed");
+
+        assert_eq!(lines[0], "abef");
+        assert_eq!(lines[1], "1256");
+        assert_eq!(lines[2], "ABEF");
+    }
+
+    #[test]
+    fn test_composite_edit_multi_cursor_insert() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "abc".to_string(),
+            "def".to_string(),
+            "ghi".to_string(),
+        ];
+
+        // Set up multi-cursor mode at column 1 on lines 0, 1, 2
+        state.cursor_line = 0;
+        state.cursor_col = 1;
+        state.multi_cursors = vec![(1, 1), (2, 1)];
+
+        // Insert 'X' at all cursor positions
+        let inserted = insert_char_multi_cursor(&mut state, &mut lines, 'X', "test.txt");
+        assert!(inserted, "Multi-cursor insert should succeed");
+
+        // Verify all insertions happened
+        assert_eq!(lines[0], "aXbc");
+        assert_eq!(lines[1], "dXef");
+        assert_eq!(lines[2], "gXhi");
+
+        // Undo should remove ALL insertions in ONE step
+        let undone = apply_undo(&mut state, &mut lines, "test.txt", 10);
+        assert!(undone, "Undo should succeed");
+
+        assert_eq!(lines[0], "abc");
+        assert_eq!(lines[1], "def");
+        assert_eq!(lines[2], "ghi");
+
+        // Redo should restore ALL insertions in ONE step
+        let redone = apply_redo(&mut state, &mut lines, "test.txt", 10);
+        assert!(redone, "Redo should succeed");
+
+        assert_eq!(lines[0], "aXbc");
+        assert_eq!(lines[1], "dXef");
+        assert_eq!(lines[2], "gXhi");
+    }
+
+    #[test]
+    fn test_composite_edit_multi_cursor_delete() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "abc".to_string(),
+            "def".to_string(),
+            "ghi".to_string(),
+        ];
+
+        // Set up multi-cursor mode at column 1 on lines 0, 1, 2
+        state.cursor_line = 0;
+        state.cursor_col = 1;
+        state.multi_cursors = vec![(1, 1), (2, 1)];
+
+        // Delete backward at all cursor positions
+        let deleted = delete_backward_multi_cursor(&mut state, &mut lines, "test.txt");
+        assert!(deleted, "Multi-cursor delete should succeed");
+
+        // Verify all deletions happened
+        assert_eq!(lines[0], "bc");
+        assert_eq!(lines[1], "ef");
+        assert_eq!(lines[2], "hi");
+
+        // Undo should restore ALL deletions in ONE step
+        let undone = apply_undo(&mut state, &mut lines, "test.txt", 10);
+        assert!(undone, "Undo should succeed");
+
+        assert_eq!(lines[0], "abc");
+        assert_eq!(lines[1], "def");
+        assert_eq!(lines[2], "ghi");
+    }
 }
 
 
@@ -1985,3 +2137,5 @@ fn copy_to_clipboard(_text: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn paste_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::new())
 }
+
+
