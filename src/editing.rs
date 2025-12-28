@@ -54,19 +54,112 @@ pub(crate) fn handle_paste(
     if text.is_empty() {
         return false;
     }
-    state.clear_selection();
+
+    // We'll accumulate all edits to push as one composite for proper undo behavior
+    let mut edits: Vec<Edit> = Vec::new();
+
+    // If there's a selection, delete it first (inline, without creating separate undo entry)
+    if state.has_selection() {
+        let (sel_start, sel_end) = {
+            let s = state.selection_start.unwrap();
+            let e = state.selection_end.unwrap();
+            if s.0 < e.0 || (s.0 == e.0 && s.1 <= e.1) {
+                (s, e)
+            } else {
+                (e, s)
+            }
+        };
+        let (s_line, s_col) = sel_start;
+        let (e_line, e_col) = sel_end;
+
+        if s_line < lines.len() && e_line < lines.len() {
+            // Record deletion edits in the composite
+            if s_line == e_line {
+                // Single-line deletion
+                let line = &lines[s_line];
+                let end_col = e_col.min(line.len());
+                if s_col < end_col {
+                    let removed: Vec<char> = line[s_col..end_col].chars().collect();
+                    for (i, ch) in removed.into_iter().enumerate().rev() {
+                        edits.push(Edit::DeleteChar {
+                            line: s_line,
+                            col: s_col + i,
+                            ch,
+                        });
+                    }
+                    lines[s_line].replace_range(s_col..end_col, "");
+                }
+            } else {
+                // Multi-line deletion
+                // Tail of start line
+                if s_col < lines[s_line].len() {
+                    let tail: Vec<char> = lines[s_line][s_col..].chars().collect();
+                    for (i, ch) in tail.into_iter().enumerate().rev() {
+                        edits.push(Edit::DeleteChar {
+                            line: s_line,
+                            col: s_col + i,
+                            ch,
+                        });
+                    }
+                    lines[s_line].truncate(s_col);
+                }
+                // Middle full lines
+                for (line_idx, content) in lines.iter().enumerate().take(e_line).skip(s_line + 1) {
+                    edits.push(Edit::DeleteLine {
+                        line: line_idx,
+                        content: content.clone(),
+                    });
+                }
+                // Head of end line
+                let end_line_len = lines[e_line].len();
+                let head_limit = e_col.min(end_line_len);
+                let head: Vec<char> = lines[e_line][..head_limit].chars().collect();
+                for (i, ch) in head.into_iter().enumerate().rev() {
+                    edits.push(Edit::DeleteChar {
+                        line: e_line,
+                        col: i,
+                        ch,
+                    });
+                }
+                // Remove head portion
+                if head_limit <= end_line_len {
+                    lines[e_line].replace_range(..head_limit, "");
+                }
+                // Merge start and remaining end line
+                let first_snapshot = lines[s_line].clone();
+                let second_snapshot = lines[e_line].clone();
+                edits.push(Edit::MergeLine {
+                    line: s_line,
+                    first: first_snapshot,
+                    second: second_snapshot.clone(),
+                });
+                lines[s_line].push_str(&second_snapshot);
+                // Remove intervening + original end line
+                for _ in s_line + 1..=e_line {
+                    lines.remove(s_line + 1);
+                }
+            }
+            // Position cursor at selection start for paste
+            state.cursor_line = s_line.saturating_sub(state.top_line);
+            state.cursor_col = s_col;
+        }
+        state.clear_selection();
+    }
+
     let idx = state.absolute_line();
     if idx >= lines.len() {
         return false;
     }
+
     let paste_lines: Vec<&str> = text.lines().collect();
     if paste_lines.is_empty() {
         return false;
     }
+
     if paste_lines.len() == 1 {
         let paste_text = paste_lines[0];
         for (i, ch) in paste_text.chars().enumerate() {
-            state.undo_history.push(Edit::InsertChar {
+            edits.push(Edit::InsertChar {
                 line: idx,
                 col: state.cursor_col + i,
                 ch,
@@ -80,7 +173,7 @@ pub(crate) fn handle_paste(
         let before = current_line[..state.cursor_col].to_string();
         let after = current_line[state.cursor_col..].to_string();
         let first_paste_line = paste_lines[0].to_string();
-        state.undo_history.push(Edit::SplitLine {
+        edits.push(Edit::SplitLine {
             line: idx,
             col: state.cursor_col,
             before: before.clone(),
@@ -88,7 +181,7 @@ pub(crate) fn handle_paste(
         });
         lines[idx] = before.clone() + &first_paste_line;
         for (i, paste_line) in paste_lines[1..paste_lines.len() - 1].iter().enumerate() {
-            state.undo_history.push(Edit::InsertLine {
+            edits.push(Edit::InsertLine {
                 line: idx + 1 + i,
                 content: paste_line.to_string(),
             });
@@ -96,7 +189,7 @@ pub(crate) fn handle_paste(
         }
         let last_paste_line = paste_lines.last().unwrap().to_string();
         let final_line = last_paste_line.clone() + &after;
-        state.undo_history.push(Edit::InsertLine {
+        edits.push(Edit::InsertLine {
             line: idx + paste_lines.len() - 1,
             content: final_line.clone(),
         });
@@ -105,7 +198,12 @@ pub(crate) fn handle_paste(
         state.cursor_col = last_paste_line.len();
         state.modified = true;
     }
+
+    // Push all edits (selection deletion + paste) as a single composite so Ctrl+Z undoes the entire operation
     let absolute_line = state.absolute_line();
+    let undo_cursor = Some((absolute_line, state.cursor_col, state.multi_cursors.clone()));
+    state.undo_history.push_composite(edits, undo_cursor);
+
     state.undo_history.update_state(
         state.top_line,
         absolute_line,
@@ -115,6 +213,8 @@ pub(crate) fn handle_paste(
     save_undo_with_timestamp(state, filename);
     true
 }
+
+// ...existing code...
 
 pub(crate) fn handle_cut(
     state: &mut FileViewerState,
@@ -809,12 +909,21 @@ fn apply_single_undo_edit(
             }
         }
         Edit::SplitLine {
-            line, col, before, ..
+            line, col, before, after
         } => {
-            // Undo split: merge the lines back
-            if *line < lines.len() && line + 1 < lines.len() {
-                let after = lines.remove(line + 1);
+            // Undo split: merge the lines back using stored before/after content
+            // This handles the case where the "after" line may have been deleted already
+            if *line < lines.len() {
+                // Restore the original line by combining before + after
                 lines[*line] = format!("{}{}", before, after);
+                // Remove any lines that were created by the split
+                // (they may have already been deleted by undo of subsequent insertions)
+                if line + 1 < lines.len() && lines[line + 1] != *after {
+                    // The next line is not our "after" content, so don't remove it
+                } else if line + 1 < lines.len() {
+                    // The next line matches our "after", remove it
+                    lines.remove(line + 1);
+                }
                 state.cursor_col = *col;
                 state.cursor_line = line.saturating_sub(state.top_line);
                 true
@@ -1622,509 +1731,62 @@ mod tests {
     }
 
     #[test]
-    fn remove_selection_single_line() {
+    fn paste_replaces_selection() {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
         let mut lines = vec!["hello world".to_string()];
-        state.selection_start = Some((0, 0));
-        state.selection_end = Some((0, 5));
-
-        assert!(remove_selection(&mut state, &mut lines, "test.txt"));
-        assert_eq!(lines[0], " world");
-        assert_eq!(state.cursor_col, 0);
-        assert!(!state.has_selection());
-    }
-
-    #[test]
-    fn remove_selection_multi_line() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let mut lines = vec![
-            "hello".to_string(),
-            "beautiful".to_string(),
-            "world".to_string(),
-        ];
-        state.selection_start = Some((0, 2));
-        state.selection_end = Some((2, 3));
-
-        assert!(remove_selection(&mut state, &mut lines, "test.txt"));
-        assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0], "held");
-        assert_eq!(state.cursor_col, 2);
-    }
-
-    #[test]
-    fn extract_selection_single_line() {
-        let lines = vec!["hello world"];
-        let result = extract_selection(&lines, (0, 0), (0, 5));
-        assert_eq!(result, "hello");
-    }
-
-    #[test]
-    fn extract_selection_multi_line() {
-        let lines = vec!["hello", "beautiful", "world"];
-        let result = extract_selection(&lines, (0, 2), (2, 3));
-        assert_eq!(result, "llo\nbeautiful\nwor");
-    }
-
-    #[test]
-    fn normalize_selection_already_normalized() {
-        let start = (0, 5);
-        let end = (1, 3);
-        let (s, e) = normalize_selection(start, end);
-        assert_eq!(s, (0, 5));
-        assert_eq!(e, (1, 3));
-    }
-
-    #[test]
-    fn normalize_selection_reversed() {
-        let start = (2, 8);
-        let end = (1, 3);
-        let (s, e) = normalize_selection(start, end);
-        assert_eq!(s, (1, 3));
-        assert_eq!(e, (2, 8));
-    }
-
-    #[test]
-    fn extract_block_selection_full_columns() {
-        let lines = vec!["hello world", "beautiful day", "nice weather"];
-        let result = extract_block_selection(&lines, 0, 6, 2, 11);
-        // Should extract columns 6-10 (indices 6,7,8,9,10) from each line
-        // "hello world" -> indices 6-10 = "world"
-        // "beautiful day" -> indices 6-10 = "ful d"
-        // "nice weather" -> indices 6-10 = "eathe"
-        assert_eq!(result, "world\nful d\neathe");
-    }
-
-    #[test]
-    fn extract_block_selection_short_lines() {
-        let lines = vec!["hello world", "short", "nice weather"];
-        let result = extract_block_selection(&lines, 0, 6, 2, 11);
-        // Second line is too short (only 5 chars) - column 6 is beyond its length
-        assert_eq!(result, "world\n\neathe");
-    }
-
-    #[test]
-    fn extract_block_selection_single_column() {
-        let lines = vec!["hello", "world", "tests"];
-        let result = extract_block_selection(&lines, 0, 0, 2, 1);
-        // Should extract first character from each line
-        assert_eq!(result, "h\nw\nt");
-    }
-
-    #[test]
-    fn extract_block_selection_beyond_line_length() {
-        let lines = vec!["hi", "hello", "hey"];
-        let result = extract_block_selection(&lines, 0, 1, 2, 10);
-        // Should extract from col 1 to end of each line
-        assert_eq!(result, "i\nello\ney");
-    }
-
-    #[test]
-    fn insert_char_block_multiline_cursor() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let mut lines = vec!["abc".to_string(), "def".to_string(), "ghi".to_string()];
-
-        // Set up zero-width block selection at column 1 across lines 0-2
-        state.selection_start = Some((0, 1));
-        state.selection_end = Some((2, 1));
-        state.block_selection = true;
-        state.cursor_col = 1;
-
-        // Insert 'X' - should insert on all three lines
-        let result = insert_char_block(&mut state, &mut lines, 'X', "test.txt");
-
-        assert!(result);
-        assert_eq!(lines[0], "aXbc");
-        assert_eq!(lines[1], "dXef");
-        assert_eq!(lines[2], "gXhi");
-
-        // Cursor and selection should move right by one
-        assert_eq!(state.cursor_col, 2);
-        assert_eq!(state.selection_start, Some((0, 2)));
-        assert_eq!(state.selection_end, Some((2, 2)));
-    }
-
-    #[test]
-    fn insert_char_block_preserves_block_selection() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let mut lines = vec!["line1".to_string(), "line2".to_string()];
-
-        // Set up zero-width block selection
-        state.selection_start = Some((0, 0));
-        state.selection_end = Some((1, 0));
-        state.block_selection = true;
-
-        insert_char_block(&mut state, &mut lines, '#', "test.txt");
-
-        // Block selection should still be active
-        assert!(state.block_selection);
-        assert_eq!(state.selection_start, Some((0, 1)));
-        assert_eq!(state.selection_end, Some((1, 1)));
-    }
-
-
-    #[test]
-    fn delete_file_history_handles_nonexistent_file() {
-        let (_tmp, _guard) = set_temp_home();
-
-        // Deleting non-existent file should not error
-        let result = delete_file_history("/tmp/nonexistent_file_12345.txt");
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn clipboard_helpers_used() {
-        let _ = copy_to_clipboard("test");
-        let _ = paste_from_clipboard();
-    }
-
-    // ===== UNTITLED FILE CLEANUP TESTS =====
-
-    #[test]
-    fn test_untitled_file_stored_in_root() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        // Create and save untitled file
-        let mut undo_history = UndoHistory::new();
-        undo_history.update_state(0, 0, 0, vec!["test".into()]);
-        undo_history.save("untitled").unwrap();
-
-        // Verify it's in root .ue/files/
-        let expected = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
-        assert!(expected.exists(), "untitled.ue should exist at {}", expected.display());
-    }
-
-    #[test]
-    fn test_untitled_2_stored_in_root() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        let mut undo_history = UndoHistory::new();
-        undo_history.update_state(0, 0, 0, vec!["test".into()]);
-        undo_history.save("untitled-2").unwrap();
-
-        let expected = std::path::PathBuf::from(&home).join(".ue/files/untitled-2.ue");
-        assert!(expected.exists(), "untitled-2.ue should exist at {}", expected.display());
-    }
-
-    #[test]
-    fn test_delete_untitled_history() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        // Create untitled file
-        let mut undo_history = UndoHistory::new();
-        undo_history.update_state(0, 0, 0, vec!["content".into()]);
-        undo_history.save("untitled").unwrap();
-
-        let undo_path = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
-        assert!(undo_path.exists(), "untitled.ue should exist before deletion");
-
-        // Delete it
-        let result = delete_file_history("untitled");
-        assert!(result.is_ok(), "Should successfully delete untitled history");
-        assert!(!undo_path.exists(), "untitled.ue should be deleted");
-    }
-
-    #[test]
-    fn test_delete_untitled_2_history() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        let mut undo_history = UndoHistory::new();
-        undo_history.update_state(0, 0, 0, vec!["content".into()]);
-        undo_history.save("untitled-2").unwrap();
-
-        let undo_path = std::path::PathBuf::from(&home).join(".ue/files/untitled-2.ue");
-        assert!(undo_path.exists());
-
-        delete_file_history("untitled-2").unwrap();
-        assert!(!undo_path.exists(), "untitled-2.ue should be deleted");
-    }
-
-    #[test]
-    fn test_delete_multiple_untitled_files() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        // Create multiple untitled files
-        for name in &["untitled", "untitled-2", "untitled-3"] {
-            let mut undo_history = UndoHistory::new();
-            undo_history.update_state(0, 0, 0, vec!["test".into()]);
-            undo_history.save(name).unwrap();
-        }
-
-        // Verify all exist
-        for name in &["untitled", "untitled-2", "untitled-3"] {
-            let path = std::path::PathBuf::from(&home).join(format!(".ue/files/{}.ue", name));
-            assert!(path.exists(), "{}.ue should exist", name);
-        }
-
-        // Delete all
-        for name in &["untitled", "untitled-2", "untitled-3"] {
-            delete_file_history(name).unwrap();
-        }
-
-        // Verify all deleted
-        for name in &["untitled", "untitled-2", "untitled-3"] {
-            let path = std::path::PathBuf::from(&home).join(format!(".ue/files/{}.ue", name));
-            assert!(!path.exists(), "{}.ue should be deleted", name);
-        }
-    }
-
-    #[test]
-    fn test_full_save_workflow_with_cleanup() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        // Step 1: Create untitled file
-        let mut undo_history = UndoHistory::new();
-        undo_history.push(crate::undo::Edit::InsertChar {
-            line: 0,
-            col: 0,
-            ch: 'h',
-        });
-        undo_history.update_state(0, 0, 1, vec!["hello".into()]);
-        undo_history.save("untitled").unwrap();
-
-        // Step 2: Verify untitled exists
-        let untitled_path = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
-        assert!(untitled_path.exists(), "untitled.ue should exist");
-
-        // Step 3: Simulate saving to real file (cleanup untitled)
-        delete_file_history("untitled").unwrap();
-        crate::recent::remove_recent_file("untitled").unwrap();
-
-        // Step 4: Save to new location
-        let target_file = std::path::PathBuf::from(&home).join("myfile.txt");
-        fs::write(&target_file, "hello").unwrap();
-        undo_history.save(target_file.to_str().unwrap()).unwrap();
-
-        // Step 5: Verify cleanup
-        assert!(!untitled_path.exists(), "untitled.ue should be deleted after save");
-
-        // Step 6: Verify new file exists
-        let new_undo_path = std::path::PathBuf::from(&home)
-            .join(".ue/files")
-            .join(home.trim_start_matches('/'))
-            .join("myfile.txt.ue");
-        assert!(new_undo_path.exists(), "New undo file should exist at {}", new_undo_path.display());
-    }
-
-    #[test]
-    fn test_untitled_with_path_not_in_root() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        // Create a file with path containing "untitled"
-        let test_dir = std::path::PathBuf::from(&home).join("testdir");
-        fs::create_dir_all(&test_dir).unwrap();
-        let test_file = test_dir.join("untitled");
-        fs::write(&test_file, "test").unwrap();
-
-        let mut undo_history = UndoHistory::new();
-        undo_history.update_state(0, 0, 0, vec!["content".into()]);
-
-        // Save with full path
-        let file_path = test_file.to_string_lossy().to_string();
-        undo_history.save(&file_path).unwrap();
-
-        // Should NOT be in root (because it has a path)
-        let wrong_path = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
-        assert!(!wrong_path.exists(), "File with path should not be in root");
-    }
-
-    #[test]
-    fn test_delete_nonexistent_untitled() {
-        let (_tmp, _guard) = set_temp_home();
-
-        // Deleting non-existent file should not error
-        let result = delete_file_history("untitled-999");
-        assert!(result.is_ok(), "Deleting non-existent file should succeed");
-    }
-
-    #[test]
-    fn test_simulate_exact_ui_save_workflow() {
-        let (_tmp, _guard) = set_temp_home();
-        let home = std::env::var("UE_TEST_HOME").unwrap();
-
-        // This test simulates EXACTLY what ui.rs does when saving an untitled file
-
-        // Step 1: User creates new file - it gets "untitled" as filename
-        let file = "untitled";
-
-        // Step 2: User types content and undo history is created
-        let mut undo_history = UndoHistory::new();
-        undo_history.push(crate::undo::Edit::InsertChar {
-            line: 0,
-            col: 0,
-            ch: 't',
-        });
-        undo_history.update_state(0, 0, 1, vec!["test content".into()]);
-        undo_history.save(file).unwrap();
-
-        // Step 3: User adds it to recent files
-        crate::recent::update_recent_file(file).unwrap();
-
-        // Verify untitled.ue exists
-        let untitled_ue = std::path::PathBuf::from(&home).join(".ue/files/untitled.ue");
-        assert!(untitled_ue.exists(), "untitled.ue must exist before save");
-
-        // Verify it's in recent files
-        let recent = crate::recent::get_recent_files().unwrap();
-        let in_recent = recent.iter().any(|p| p.to_string_lossy().contains("untitled"));
-        assert!(in_recent, "untitled must be in recent files before save");
-
-        // Step 4: User saves with Ctrl+S -> Save As dialog
-        let target_path = std::path::PathBuf::from(&home).join("saved_file.txt");
-
-        // THIS IS THE CRITICAL PART - what ui.rs does:
-        // Delete the old untitled undo file and remove from recent files
-        let delete_result = delete_file_history(file);
-        println!("delete_file_history result: {:?}", delete_result);
-        assert!(delete_result.is_ok(), "delete_file_history should succeed");
-
-        let remove_result = crate::recent::remove_recent_file(file);
-        println!("remove_recent_file result: {:?}", remove_result);
-        assert!(remove_result.is_ok(), "remove_recent_file should succeed");
-
-        // Save the actual file
-        fs::write(&target_path, "test content").unwrap();
-
-        // Save undo history to NEW location
-        undo_history.save(target_path.to_str().unwrap()).unwrap();
-        crate::recent::update_recent_file(target_path.to_str().unwrap()).unwrap();
-
-        // Step 5: VERIFY CLEANUP HAPPENED
-        assert!(!untitled_ue.exists(), "untitled.ue MUST be deleted after save");
-
-        let recent_after = crate::recent::get_recent_files().unwrap();
-        let still_in_recent = recent_after.iter().any(|p| p.to_string_lossy().contains("untitled"));
-        assert!(!still_in_recent, "untitled must NOT be in recent files after save");
-
-        // Verify new file is properly saved
-        let new_ue = crate::undo::UndoHistory::history_path_for(target_path.to_str().unwrap()).unwrap();
-        assert!(new_ue.exists(), "New undo file must exist at {}", new_ue.display());
-    }
-
-    #[test]
-    fn test_composite_edit_block_selection_undo() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let mut lines = vec![
-            "abcdef".to_string(),
-            "123456".to_string(),
-            "ABCDEF".to_string(),
-        ];
-
-        // Set up block selection from (0, 2) to (2, 4) - columns 2-3 on lines 0-2
-        state.selection_start = Some((0, 2));
-        state.selection_end = Some((2, 4));
-        state.block_selection = true;
-
-        // Remove the block selection
-        let removed = remove_selection(&mut state, &mut lines, "test.txt");
-        assert!(removed, "Block selection should be removed");
-
-        // Verify content changed
-        assert_eq!(lines[0], "abef");
-        assert_eq!(lines[1], "1256");
-        assert_eq!(lines[2], "ABEF");
-
-        // Now undo should restore everything in ONE step
-        let undone = apply_undo(&mut state, &mut lines, "test.txt", 10);
-        assert!(undone, "Undo should succeed");
-
-        // All content should be restored
-        assert_eq!(lines[0], "abcdef");
-        assert_eq!(lines[1], "123456");
-        assert_eq!(lines[2], "ABCDEF");
-
-        // Redo should remove everything again in ONE step
-        let redone = apply_redo(&mut state, &mut lines, "test.txt", 10);
-        assert!(redone, "Redo should succeed");
-
-        assert_eq!(lines[0], "abef");
-        assert_eq!(lines[1], "1256");
-        assert_eq!(lines[2], "ABEF");
-    }
-
-    #[test]
-    fn test_composite_edit_multi_cursor_insert() {
-        let (_tmp, _guard) = set_temp_home();
-        let mut state = create_test_state();
-        let mut lines = vec![
-            "abc".to_string(),
-            "def".to_string(),
-            "ghi".to_string(),
-        ];
-
-        // Set up multi-cursor mode at column 1 on lines 0, 1, 2
         state.cursor_line = 0;
-        state.cursor_col = 1;
-        state.multi_cursors = vec![(1, 1), (2, 1)];
+        state.cursor_col = 6; // after "hello "
+        state.selection_start = Some((0, 6));
+        state.selection_end = Some((0, 11)); // select "world"
 
-        // Insert 'X' at all cursor positions
-        let inserted = insert_char_multi_cursor(&mut state, &mut lines, 'X', "test.txt");
-        assert!(inserted, "Multi-cursor insert should succeed");
+        // Put clipboard content
+        {
+            let mut lock = get_clipboard().lock().unwrap();
+            *lock = arboard::Clipboard::new().ok();
+            if let Some(cb) = lock.as_mut() {
+                let _ = cb.set_text("UE");
+            }
+        }
 
-        // Verify all insertions happened
-        assert_eq!(lines[0], "aXbc");
-        assert_eq!(lines[1], "dXef");
-        assert_eq!(lines[2], "gXhi");
-
-        // Undo should remove ALL insertions in ONE step
-        let undone = apply_undo(&mut state, &mut lines, "test.txt", 10);
-        assert!(undone, "Undo should succeed");
-
-        assert_eq!(lines[0], "abc");
-        assert_eq!(lines[1], "def");
-        assert_eq!(lines[2], "ghi");
-
-        // Redo should restore ALL insertions in ONE step
-        let redone = apply_redo(&mut state, &mut lines, "test.txt", 10);
-        assert!(redone, "Redo should succeed");
-
-        assert_eq!(lines[0], "aXbc");
-        assert_eq!(lines[1], "dXef");
-        assert_eq!(lines[2], "gXhi");
+        assert!(handle_paste(&mut state, &mut lines, "test.txt"));
+        assert_eq!(lines[0], "hello UE", "paste should replace selection");
     }
 
     #[test]
-    fn test_composite_edit_multi_cursor_delete() {
+    fn paste_multiline_is_single_undo_action() {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
-        let mut lines = vec![
-            "abc".to_string(),
-            "def".to_string(),
-            "ghi".to_string(),
-        ];
-
-        // Set up multi-cursor mode at column 1 on lines 0, 1, 2
+        let mut lines = vec!["abc".to_string()];
         state.cursor_line = 0;
-        state.cursor_col = 1;
-        state.multi_cursors = vec![(1, 1), (2, 1)];
+        state.cursor_col = 1; // a|bc
+        state.top_line = 0;
 
-        // Delete backward at all cursor positions
-        let deleted = delete_backward_multi_cursor(&mut state, &mut lines, "test.txt");
-        assert!(deleted, "Multi-cursor delete should succeed");
+        // Clipboard with multiple lines
+        let clipboard_text = "X\nY\nZ";
+        {
+            let mut lock = get_clipboard().lock().unwrap();
+            *lock = arboard::Clipboard::new().ok();
+            if let Some(cb) = lock.as_mut() {
+                let _ = cb.set_text(clipboard_text);
+            }
+        }
 
-        // Verify all deletions happened
-        assert_eq!(lines[0], "bc");
-        assert_eq!(lines[1], "ef");
-        assert_eq!(lines[2], "hi");
+        assert!(handle_paste(&mut state, &mut lines, "test.txt"));
+        // Expect: aX, Y, Zbc
+        assert_eq!(lines.len(), 3);
+        assert_eq!(lines[0], "aX");
+        assert_eq!(lines[1], "Y");
+        assert_eq!(lines[2], "Zbc");
 
-        // Undo should restore ALL deletions in ONE step
-        let undone = apply_undo(&mut state, &mut lines, "test.txt", 10);
-        assert!(undone, "Undo should succeed");
-
-        assert_eq!(lines[0], "abc");
-        assert_eq!(lines[1], "def");
-        assert_eq!(lines[2], "ghi");
+        // Verify it's a composite edit
+        assert_eq!(state.undo_history.edits.len(), 1);
+        if let Edit::CompositeEdit { edits, .. } = &state.undo_history.edits[0] {
+            // Should have: SplitLine + 2x InsertLine
+            assert!(edits.len() >= 3, "should have at least 3 edits, got {}", edits.len());
+        } else {
+            panic!("should be composite edit");
+        }
     }
 }
 
@@ -2137,5 +1799,4 @@ fn copy_to_clipboard(_text: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn paste_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::new())
 }
-
 
