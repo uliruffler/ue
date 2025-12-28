@@ -665,6 +665,9 @@ pub(crate) fn run_open_dialog(
         }
 
         if let Event::Key(key) = event::read()? {
+            // Normalize key event to handle num-pad Enter
+            let key = crate::event_handlers::normalize_key_event(key, settings);
+            
             // Check for help key
             if settings.keybindings.help_matches(&key) {
                 state.help_active = !state.help_active;

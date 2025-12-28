@@ -11,6 +11,24 @@ use crate::editing::{
 use crate::editor_state::FileViewerState;
 use crate::settings::Settings;
 
+/// Normalize key events so keypad Enter (often reported as '\r' or '\n') behaves like Enter
+/// Normalize key events so keypad Enter (often reported as '\r', '\n', or the numpad_enter keybinding) behaves like Enter
+pub(crate) fn normalize_key_event(mut key_event: KeyEvent, settings: &Settings) -> KeyEvent {
+    match key_event.code {
+        // Standard conversions for carriage return and newline
+        KeyCode::Char('\r') | KeyCode::Char('\n') => key_event.code = KeyCode::Enter,
+        // Handle num-pad Enter using the configured keybinding
+        _ => {
+            // Check if this key matches the numpad_enter keybinding
+            if settings.keybindings.numpad_enter_matches(&key_event.code, &key_event.modifiers) {
+                key_event.code = KeyCode::Enter;
+                key_event.modifiers = KeyModifiers::empty();
+            }
+        }
+    }
+    key_event
+}
+
 /// Result of handle_key_event: (should_quit, should_close_file)
 pub(crate) fn handle_key_event(
     state: &mut FileViewerState,
@@ -83,7 +101,7 @@ pub(crate) fn handle_key_event(
                 if state.modified {
                     // Show confirmation dialog
                     let _ = crossterm::execute!(std::io::stdout(), crossterm::cursor::Show);
-                    let confirmed = show_close_confirmation(filename)?;
+                    let confirmed = show_close_confirmation(filename, settings)?;
                     if confirmed {
                         let _ = delete_file_history(filename);
                         return Ok((false, true));
@@ -336,7 +354,7 @@ pub(crate) fn handle_key_event(
     if settings.keybindings.close_matches(&code, &modifiers) {
         if state.modified {
             // Show confirmation prompt
-            if show_close_confirmation(filename)? {
+            if show_close_confirmation(filename, settings)? {
                 // User confirmed - delete file history
                 let _ = delete_file_history(filename);
                 return Ok((false, true)); // Don't quit editor, but close this file
@@ -1169,6 +1187,7 @@ fn handle_navigation(
 /// Returns true if user confirms closing (Enter), false if user cancels (Esc)
 pub(crate) fn show_close_confirmation(
     filename: &str,
+    settings: &Settings,
 ) -> Result<bool, std::io::Error> {
     use crossterm::event;
     use crossterm::terminal;
@@ -1199,6 +1218,7 @@ pub(crate) fn show_close_confirmation(
     // Wait for user response
     loop {
         if let event::Event::Key(key) = event::read()? {
+            let key = normalize_key_event(key, settings);
             match key.code {
                 KeyCode::Enter => {
                     return Ok(true); // User confirmed - close file
@@ -1219,6 +1239,7 @@ pub(crate) fn show_close_confirmation(
 #[allow(dead_code)] // Used in ui.rs for untitled file save handling
 pub(crate) fn show_overwrite_confirmation(
     filename: &str,
+    settings: &Settings,
 ) -> Result<bool, std::io::Error> {
     use crossterm::event;
     use crossterm::terminal;
@@ -1249,6 +1270,7 @@ pub(crate) fn show_overwrite_confirmation(
     // Wait for user response
     loop {
         if let event::Event::Key(key) = event::read()? {
+            let key = normalize_key_event(key, settings);
             match key.code {
                 KeyCode::Enter => {
                     return Ok(true); // User confirmed - overwrite file
@@ -1266,7 +1288,7 @@ pub(crate) fn show_overwrite_confirmation(
 
 /// Show confirmation prompt when undo file has unsaved changes but source file was modified externally
 /// Returns true if user confirms opening file anyway (Enter), false if user wants to discard (Esc)
-pub(crate) fn show_undo_conflict_confirmation() -> Result<bool, std::io::Error> {
+pub(crate) fn show_undo_conflict_confirmation(settings: &Settings) -> Result<bool, std::io::Error> {
     use crossterm::event;
     use crossterm::terminal;
 
@@ -1291,6 +1313,7 @@ pub(crate) fn show_undo_conflict_confirmation() -> Result<bool, std::io::Error> 
     // Wait for user response
     loop {
         if let event::Event::Key(key) = event::read()? {
+            let key = normalize_key_event(key, settings);
             match key.code {
                 KeyCode::Enter => {
                     return Ok(true); // User confirmed - keep unsaved changes
@@ -1922,6 +1945,24 @@ mod tests {
         let _ = handle_goto_line_input(&mut state, &lines, key_event, visible_lines);
         assert!(state.top_line >= 35 && state.top_line <= 45);
         assert_eq!(state.absolute_line(), 49);
+    }
+
+    #[test]
+    fn normalize_key_event_maps_carriage_return_to_enter() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Settings::load().expect("Failed to load test settings");
+        let key_event = KeyEvent::new(KeyCode::Char('\r'), KeyModifiers::empty());
+        let normalized = normalize_key_event(key_event, &settings);
+        assert!(matches!(normalized.code, KeyCode::Enter));
+    }
+
+    #[test]
+    fn normalize_key_event_maps_newline_to_enter() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Settings::load().expect("Failed to load test settings");
+        let key_event = KeyEvent::new(KeyCode::Char('\n'), KeyModifiers::empty());
+        let normalized = normalize_key_event(key_event, &settings);
+        assert!(matches!(normalized.code, KeyCode::Enter));
     }
     #[test]
     fn help_activates_with_f1() {

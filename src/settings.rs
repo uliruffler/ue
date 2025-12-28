@@ -42,6 +42,8 @@ pub(crate) struct KeyBindings {
     pub(crate) cursor_left: String,
     #[serde(default = "default_cursor_right")]
     pub(crate) cursor_right: String,
+    #[serde(default = "default_numpad_enter")]
+    pub(crate) numpad_enter: String,
 }
 
 fn default_new_file() -> String {
@@ -49,19 +51,23 @@ fn default_new_file() -> String {
 }
 
 fn default_cursor_down() -> String {
-    "Ctrl+j".into()
+    "Alt+j".into()
 }
 
 fn default_cursor_up() -> String {
-    "Ctrl+k".into()
+    "Alt+k".into()
 }
 
 fn default_cursor_left() -> String {
-    "Ctrl+h".into()
+    "Alt+h".into()
 }
 
 fn default_cursor_right() -> String {
-    "Ctrl+l".into()
+    "Alt+l".into()
+}
+
+fn default_numpad_enter() -> String {
+    "Ctrl+j".into()
 }
 
 fn default_replace() -> String {
@@ -304,6 +310,9 @@ impl KeyBindings {
     pub fn cursor_right_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.cursor_right, code, modifiers)
     }
+    pub fn numpad_enter_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.numpad_enter, code, modifiers)
+    }
 
     pub fn new_file_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.new_file, code, modifiers)
@@ -339,7 +348,7 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
     let key_matches = match code {
         KeyCode::Char(c) => key == c.to_string().to_lowercase(),
         KeyCode::Esc => key == "esc" || key == "escape",
-        KeyCode::Enter => key == "enter" || key == "return",
+        KeyCode::Enter => key == "enter" || key == "return" || key == "numpadenter",
         KeyCode::Tab => key == "tab",
         KeyCode::Backspace => key == "backspace",
         KeyCode::Delete => key == "delete" || key == "del",
@@ -433,10 +442,11 @@ mod tests {
             save_and_quit: "Ctrl+q".into(),
             toggle_line_wrap: "Alt+w".into(),
             new_file: "Ctrl+n".into(),
-            cursor_down: "Ctrl+j".into(),
-            cursor_up: "Ctrl+k".into(),
-            cursor_left: "Ctrl+h".into(),
-            cursor_right: "Ctrl+l".into(),
+            cursor_down: "Alt+j".into(),
+            cursor_up: "Alt+k".into(),
+            cursor_left: "Alt+h".into(),
+            cursor_right: "Alt+l".into(),
+            numpad_enter: "Ctrl+j".into(),
         }
     }
 
@@ -742,21 +752,25 @@ mod tests {
         kb.paste = "return".into();
         assert!(kb.paste_matches(&KeyCode::Enter, &KeyModifiers::empty()));
 
+        // Test NumpadEnter alias
+        kb.cut = "numpadenter".into();
+        assert!(kb.cut_matches(&KeyCode::Enter, &KeyModifiers::empty()));
+
         // Test Tab key
-        kb.cut = "tab".into();
-        assert!(kb.cut_matches(&KeyCode::Tab, &KeyModifiers::empty()));
+        kb.undo = "tab".into();
+        assert!(kb.undo_matches(&KeyCode::Tab, &KeyModifiers::empty()));
 
         // Test Backspace key
-        kb.undo = "backspace".into();
-        assert!(kb.undo_matches(&KeyCode::Backspace, &KeyModifiers::empty()));
+        kb.redo = "backspace".into();
+        assert!(kb.redo_matches(&KeyCode::Backspace, &KeyModifiers::empty()));
 
         // Test Delete key
-        kb.redo = "delete".into();
-        assert!(kb.redo_matches(&KeyCode::Delete, &KeyModifiers::empty()));
+        kb.close = "delete".into();
+        assert!(kb.close_matches(&KeyCode::Delete, &KeyModifiers::empty()));
 
         // Test Del alias
-        kb.close = "del".into();
-        assert!(kb.close_matches(&KeyCode::Delete, &KeyModifiers::empty()));
+        kb.save = "del".into();
+        assert!(kb.save_matches(&KeyCode::Delete, &KeyModifiers::empty()));
     }
     #[test]
     fn test_missing_help_field_uses_default() {

@@ -1181,6 +1181,7 @@ pub(crate) fn handle_editing_keys(
 ) -> bool {
     use crossterm::event::{KeyCode, KeyModifiers};
 
+
     // If a zero-width block selection is active, convert it to multi-cursors for editing keys
     if state.block_selection {
         if let Some((start, end)) = state.selection_range() {

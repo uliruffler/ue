@@ -76,6 +76,7 @@ fn generate_untitled_filename() -> String {
 enum SelectorResult {
     Selected(String),
     Cancelled,
+    #[allow(dead_code)]
     Quit,
 }
 
@@ -126,20 +127,7 @@ fn run_file_selector_overlay(
 
         match event::read()? {
             Event::Key(k) => {
-                // Process Esc key with DoubleEscDetector
-                match last_esc.process_key(&k) {
-                    EscResult::Double => {
-                        execute!(stdout, Show)?;
-                        return Ok(SelectorResult::Quit);
-                    }
-                    EscResult::First => {
-                        continue; // Wait for second Esc or timeout
-                    }
-                    EscResult::None => {
-                        // Normal key handling
-                    }
-                }
-
+                let k = crate::event_handlers::normalize_key_event(k, settings);
                 match k.code {
                     KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
                         // Close selected file (remove its tracked undo entry)
@@ -742,7 +730,7 @@ fn editing_session(
         }
         ValidationResult::ModifiedWithUnsaved => {
             // File was modified externally but has unsaved changes - ask user
-            if !show_undo_conflict_confirmation()? {
+            if !show_undo_conflict_confirmation(settings)? {
                 // User pressed Esc (No) - go to file selector WITHOUT deleting undo file
                 // This allows them to select the same file again and keep the undo history
                 return show_file_selector_and_return(file, settings);
@@ -917,6 +905,7 @@ fn editing_session(
 
         match event::read()? {
             Event::Key(key_event) => {
+                let key_event = crate::event_handlers::normalize_key_event(key_event, settings);
                 // Process all Esc keys through double-Esc detector first
                 match last_esc.process_key(&key_event) {
                     EscResult::Double => {
@@ -1023,7 +1012,7 @@ fn editing_session(
                                         if std::path::Path::new(target_path).exists() {
                                             use crate::event_handlers::show_overwrite_confirmation;
                                             // Show overwrite confirmation in footer
-                                            if !show_overwrite_confirmation(target_path)? {
+                                            if !show_overwrite_confirmation(target_path, settings)? {
                                                 // User declined - redraw and continue editing
                                                 state.needs_redraw = true;
                                                 continue; // Go back to event loop
@@ -1142,7 +1131,7 @@ fn editing_session(
                                         if std::path::Path::new(target_path).exists() {
                                             use crate::event_handlers::show_overwrite_confirmation;
                                             // Show overwrite confirmation in footer
-                                            if !show_overwrite_confirmation(target_path)? {
+                                            if !show_overwrite_confirmation(target_path, settings)? {
                                                 // User declined - redraw and continue editing
                                                 state.needs_redraw = true;
                                                 continue; // Go back to event loop

@@ -271,6 +271,9 @@ fn run_file_selector(
         prev_scroll_offset = scroll_offset;
 
         if let Event::Key(key_event) = event::read()? {
+            // Normalize key event to handle num-pad Enter
+            let key_event = crate::event_handlers::normalize_key_event(key_event, settings);
+            
             // F1 toggles help
             if matches!(key_event.code, KeyCode::F(1)) {
                 help_active = !help_active;
