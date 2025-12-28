@@ -151,9 +151,17 @@ pub(crate) fn handle_paste(
         return false;
     }
 
-    let paste_lines: Vec<&str> = text.lines().collect();
+    // Check if the pasted text ends with a newline (indicating complete lines)
+    let text_ends_with_newline = text.ends_with('\n');
+
+    let mut paste_lines: Vec<&str> = text.lines().collect();
     if paste_lines.is_empty() {
         return false;
+    }
+
+    // If text ends with newline, add an empty string to represent the final newline
+    if text_ends_with_newline && !paste_lines.is_empty() {
+        paste_lines.push("");
     }
 
     if paste_lines.len() == 1 {
@@ -1788,6 +1796,66 @@ mod tests {
             panic!("should be composite edit");
         }
     }
+
+    #[test]
+    fn paste_complete_lines_with_trailing_newline() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["before".to_string(), "after".to_string()];
+        state.cursor_line = 0;
+        state.cursor_col = 6; // at end of first line
+        state.top_line = 0;
+
+        // Clipboard with single line ending with newline (like copying entire line)
+        let clipboard_text = "copied\n";
+        {
+            let mut lock = get_clipboard().lock().unwrap();
+            *lock = arboard::Clipboard::new().ok();
+            if let Some(cb) = lock.as_mut() {
+                let _ = cb.set_text(clipboard_text);
+            }
+        }
+
+        assert!(handle_paste(&mut state, &mut lines, "test.txt"));
+        // Expect: "beforecopied", "", "after"
+        // The trailing newline causes an empty line to be created
+        assert_eq!(lines.len(), 3, "should have created a new line");
+        assert_eq!(lines[0], "beforecopied");
+        assert_eq!(lines[1], "");
+        assert_eq!(lines[2], "after");
+    }
+
+    #[test]
+    fn paste_multiple_complete_lines_with_trailing_newline() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["before".to_string(), "after".to_string()];
+        state.cursor_line = 0;
+        state.cursor_col = 6; // at end of first line
+        state.top_line = 0;
+
+        // Clipboard with two lines, each ending with newline (like copying two entire lines)
+        let clipboard_text = "line1\nline2\n";
+        {
+            let mut lock = get_clipboard().lock().unwrap();
+            *lock = arboard::Clipboard::new().ok();
+            if let Some(cb) = lock.as_mut() {
+                let _ = cb.set_text(clipboard_text);
+            }
+        }
+
+        assert!(handle_paste(&mut state, &mut lines, "test.txt"));
+        // With "line1\nline2\n", paste_lines becomes ["line1", "line2", ""]
+        // Line 0: "beforeline1"
+        // Line 1: "line2" (middle line)
+        // Line 2: "" (last empty line from trailing newline)
+        // Line 3: "after"
+        assert_eq!(lines.len(), 4, "should have created new lines");
+        assert_eq!(lines[0], "beforeline1");
+        assert_eq!(lines[1], "line2");
+        assert_eq!(lines[2], "");
+        assert_eq!(lines[3], "after");
+    }
 }
 
 
@@ -1799,4 +1867,6 @@ fn copy_to_clipboard(_text: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn paste_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::new())
 }
+
+
 
