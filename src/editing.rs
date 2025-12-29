@@ -829,6 +829,8 @@ pub fn delete_file_history(file_path: &str) -> Result<(), Box<dyn std::error::Er
     if history_path.exists() {
         fs::remove_file(&history_path)?;
     }
+    // Also remove from recent files list to keep both in sync
+    let _ = crate::recent::remove_recent_file(file_path);
     Ok(())
 }
 

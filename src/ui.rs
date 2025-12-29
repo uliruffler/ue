@@ -42,7 +42,7 @@ const UNDO_FILE_CHECK_INTERVAL_MS: u64 = 150;
 const SAVE_GRACE_PERIOD_MS: u64 = 200;
 
 /// Generate a unique untitled filename (untitled, untitled-2, untitled-3, etc.)
-fn generate_untitled_filename() -> String {
+pub fn generate_untitled_filename() -> String {
     use std::sync::atomic::{AtomicUsize, Ordering};
     static COUNTER: AtomicUsize = AtomicUsize::new(1);
 
@@ -1024,7 +1024,6 @@ fn editing_session(
 
                                         // Delete the old untitled undo file and remove from recent files
                                         let _ = delete_file_history(file);
-                                        let _ = crate::recent::remove_recent_file(file);
 
                                         save_file(target_path, &lines)?;
                                         state.modified = false;
@@ -1143,7 +1142,6 @@ fn editing_session(
 
                                         // Delete the old untitled undo file and remove from recent files
                                         let _ = delete_file_history(file);
-                                        let _ = crate::recent::remove_recent_file(file);
 
                                         save_file(target_path, &lines)?;
                                         state.modified = false;

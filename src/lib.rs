@@ -38,3 +38,5 @@ pub mod syntax;
 pub mod ui;
 pub mod undo;
 
+// Re-export commonly used functions for binary
+pub use ui::generate_untitled_filename;

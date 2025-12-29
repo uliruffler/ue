@@ -30,8 +30,8 @@ fn main() -> std::io::Result<()> {
                         match file_selector::select_file()? {
                             Some(f) => files = vec![f],
                             None => {
-                                let _ = session::save_selector_session();
-                                return Ok(());
+                                // No tracked files - create new untitled document
+                                files = vec![generate_untitled_filename()];
                             }
                         }
                     }
@@ -39,18 +39,18 @@ fn main() -> std::io::Result<()> {
                 session::SessionMode::Selector => match file_selector::select_file()? {
                     Some(f) => files = vec![f],
                     None => {
-                        let _ = session::save_selector_session();
-                        return Ok(());
+                        // No tracked files - create new untitled document
+                        files = vec![generate_untitled_filename()];
                     }
                 },
             }
         } else {
-            // No previous session - normal selector flow
+            // No previous session - check if there are tracked files
             match file_selector::select_file()? {
                 Some(f) => files = vec![f],
                 None => {
-                    let _ = session::save_selector_session();
-                    return Ok(());
+                    // No tracked files - create new untitled document
+                    files = vec![generate_untitled_filename()];
                 }
             }
         }

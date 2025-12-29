@@ -69,8 +69,24 @@ fn collect_files_recursive(
             collect_files_recursive(base_dir, &path, files)?;
         } else if let Some(file_name) = path.file_name() {
             let file_name_str = file_name.to_string_lossy();
-            // Only include .*.ue files (hidden files ending with .ue)
-            if file_name_str.starts_with('.') && file_name_str.ends_with(".ue") {
+
+            // Check if this is an untitled file (stored directly as "untitled.ue", "untitled-2.ue", etc.)
+            let is_untitled = file_name_str.to_lowercase().starts_with("untitled") && file_name_str.ends_with(".ue");
+
+            // Regular tracked files start with a dot and end with .ue
+            let is_tracked = file_name_str.starts_with('.') && file_name_str.ends_with(".ue");
+
+            if is_untitled {
+                // Handle untitled files - they don't have subdirectories
+                let original_filename = file_name_str.trim_end_matches(".ue");
+                let full_path = PathBuf::from(original_filename);
+                let has_unsaved = check_unsaved_changes(&path);
+                files.push(FileEntry {
+                    path: full_path,
+                    has_unsaved_changes: has_unsaved,
+                });
+            } else if is_tracked {
+                // Handle regular tracked files with original logic
                 // Compatibility: legacy format stored artificial leading dot for non-hidden files (.name.ext.ue)
                 let without_suffix = file_name_str.trim_end_matches(".ue");
                 let legacy_candidate = &without_suffix[1..]; // strip the first dot
@@ -147,8 +163,7 @@ fn format_file_display(path: &Path) -> String {
 pub fn select_file() -> io::Result<Option<String>> {
     let files = get_tracked_files()?;
     if files.is_empty() {
-        eprintln!("No tracked files found in ~/.ue/files/");
-        eprintln!("Please provide a filename as argument.");
+        // No tracked files - return None so caller can handle it
         return Ok(None);
     }
 
@@ -221,6 +236,9 @@ pub fn remove_tracked_file(path: &Path) -> io::Result<()> {
     if undo_file.exists() {
         fs::remove_file(&undo_file)?;
     }
+    // Also remove from recent files list to keep both in sync
+    let path_str = path.to_string_lossy();
+    let _ = crate::recent::remove_recent_file(&path_str);
     Ok(())
 }
 
@@ -273,7 +291,7 @@ fn run_file_selector(
         if let Event::Key(key_event) = event::read()? {
             // Normalize key event to handle num-pad Enter
             let key_event = crate::event_handlers::normalize_key_event(key_event, settings);
-            
+
             // F1 toggles help
             if matches!(key_event.code, KeyCode::F(1)) {
                 help_active = !help_active;
