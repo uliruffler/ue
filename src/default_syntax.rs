@@ -20,6 +20,7 @@ const SYNTAX_TOML: &str = include_str!("../defaults/syntax/toml.ue-syntax");
 const SYNTAX_YAML: &str = include_str!("../defaults/syntax/yaml.ue-syntax");
 const SYNTAX_SQL: &str = include_str!("../defaults/syntax/sql.ue-syntax");
 const SYNTAX_TXT: &str = include_str!("../defaults/syntax/txt.ue-syntax");
+const SYNTAX_UE_SYNTAX: &str = include_str!("../defaults/syntax/ue-syntax.ue-syntax");
 
 /// Get embedded default syntax content for a given extension
 fn get_default_syntax(extension: &str) -> Option<&'static str> {
@@ -43,6 +44,7 @@ fn get_default_syntax(extension: &str) -> Option<&'static str> {
         "yaml" | "yml" => Some(SYNTAX_YAML),
         "sql" => Some(SYNTAX_SQL),
         "txt" => Some(SYNTAX_TXT),
+        "ue-syntax" => Some(SYNTAX_UE_SYNTAX),
         _ => None,
     }
 }
@@ -77,6 +79,7 @@ pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
         ("yml", SYNTAX_YAML), // yml uses same as yaml
         ("sql", SYNTAX_SQL),
         ("txt", SYNTAX_TXT),
+        ("ue-syntax", SYNTAX_UE_SYNTAX),
     ];
 
     // Deploy each file if it doesn't exist
@@ -120,6 +123,7 @@ mod tests {
         assert!(get_default_syntax("rs").is_some());
         assert!(get_default_syntax("py").is_some());
         assert!(get_default_syntax("js").is_some());
+        assert!(get_default_syntax("ue-syntax").is_some());
         assert!(get_default_syntax("unknown_ext").is_none());
     }
 

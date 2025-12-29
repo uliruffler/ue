@@ -1,0 +1,13 @@
+# UE Syntax file highlighting
+# Format: priority|color|regex
+# Comments
+10|dark_green|#.*$
+# Priority values (at start of line or after |)
+9|cyan|\b[0-9]+(?=\|)
+# Color names (valid crossterm colors)
+8|yellow|\b(?:black|dark_grey|red|dark_red|green|dark_green|yellow|dark_yellow|blue|dark_blue|magenta|dark_magenta|cyan|dark_cyan|white|grey)\b
+# Regex patterns (between pipes)
+7|green|\|[^|]*$
+# Pipes (structural characters)
+6|grey|\|
+

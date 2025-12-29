@@ -56,6 +56,45 @@ fn main() -> std::io::Result<()> {
         }
     }
 
+    // Canonicalize file paths to absolute paths for consistent display
+    // but skip untitled files (they are just simple filenames)
+    let files: Vec<String> = files
+        .into_iter()
+        .map(|f| {
+            // Check if this is an untitled file (simple filename like "untitled" or "untitled-2")
+            let is_untitled = {
+                let path = std::path::Path::new(&f);
+                let filename_lower = path.file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                // Untitled files are simple filenames starting with "untitled" (no path separators)
+                !f.contains('/') && !f.contains('\\') && filename_lower.starts_with("untitled")
+            };
+
+            if is_untitled {
+                // Keep untitled files as-is
+                f
+            } else {
+                // Canonicalize other files to absolute paths
+                std::fs::canonicalize(&f)
+                    .unwrap_or_else(|_| {
+                        // If canonicalization fails (file doesn't exist yet), convert to absolute path manually
+                        let path = std::path::PathBuf::from(&f);
+                        if path.is_absolute() {
+                            path
+                        } else {
+                            std::env::current_dir()
+                                .unwrap_or_else(|_| std::path::PathBuf::from("."))
+                                .join(path)
+                        }
+                    })
+                    .to_string_lossy()
+                    .to_string()
+            }
+        })
+        .collect();
+
     // Update recent list for each file chosen
     for f in &files {
         let _ = recent::update_recent_file(f);
