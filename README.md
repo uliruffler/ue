@@ -27,6 +27,7 @@ One of the main reasons for creating this editor was to explore how to work with
 - `Esc` leaves a mode (selection, find, go to, help) or toggles between the editor and the file selector page
 - `F1` for help
 - Arrow keys move the cursor one character or line
+- `Alt+ARROW` scrolls the viewport (vertical and horizontal) without moving the cursor position
 - `Shift+ARROW` selects text (line-wise)
 - `Alt+Shift+ARROW` selects text in block mode (column-based, across multiple lines)
 - `Ctrl+ARROW` moves the cursor one word or paragraph

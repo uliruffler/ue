@@ -777,6 +777,15 @@ pub(crate) fn handle_key_event(
         state.clear_multi_cursors();
     }
 
+    // Handle Alt+Arrow (without Shift) for viewport scrolling without moving cursor
+    if is_navigation && is_alt && !is_shift {
+        let scrolled = handle_viewport_scroll(state, lines, code, visible_lines);
+        if scrolled {
+            state.needs_redraw = true;
+        }
+        return Ok((false, false));
+    }
+
     // Handle selection with navigation keys:
     // - Alt+Shift+Arrow: Block selection (rectangular/column-based selection)
     // - Shift+Arrow: Normal line-wise selection
@@ -844,6 +853,110 @@ fn update_redraw_flags(state: &mut FileViewerState, did_edit: bool, moved: bool)
     if did_edit {
         state.modified = true;
     }
+}
+
+/// Handle Alt+Arrow viewport scrolling without moving cursor
+fn handle_viewport_scroll(
+    state: &mut FileViewerState,
+    lines: &[String],
+    code: KeyCode,
+    visible_lines: usize,
+) -> bool {
+    let tab_width = state.settings.tab_width;
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
+
+    match code {
+        KeyCode::Up => {
+            // Scroll viewport up (show earlier lines)
+            if state.top_line > 0 {
+                // Save absolute cursor position BEFORE scrolling
+                let absolute_cursor = state.absolute_line();
+
+                // Scroll viewport
+                state.top_line -= 1;
+
+                // Update cursor position to maintain absolute position
+                if absolute_cursor < state.top_line {
+                    // Cursor is still above the viewport (off-screen)
+                    state.saved_absolute_cursor = Some(absolute_cursor);
+                    state.cursor_line = 0;
+                } else {
+                    let new_cursor_line = absolute_cursor - state.top_line;
+                    if new_cursor_line >= visible_lines {
+                        // Cursor is off-screen below viewport
+                        state.saved_absolute_cursor = Some(absolute_cursor);
+                        state.cursor_line = new_cursor_line;
+                    } else {
+                        // Cursor is now visible in the viewport
+                        state.saved_absolute_cursor = None;
+                        state.cursor_line = new_cursor_line;
+                    }
+                }
+
+                return true;
+            }
+        }
+        KeyCode::Down => {
+            // Scroll viewport down (show later lines)
+            let max_scroll = lines.len().saturating_sub(1);
+            if state.top_line < max_scroll {
+                // Save absolute cursor position BEFORE scrolling
+                let absolute_cursor = state.absolute_line();
+
+                // Scroll viewport
+                state.top_line += 1;
+
+                // Update cursor position to maintain absolute position
+                if absolute_cursor < state.top_line {
+                    // Cursor is now off-screen above viewport
+                    state.saved_absolute_cursor = Some(absolute_cursor);
+                    state.cursor_line = 0;  // Set to top of viewport (but cursor is actually above)
+                } else {
+                    let new_cursor_line = absolute_cursor - state.top_line;
+                    if new_cursor_line >= visible_lines {
+                        // Cursor is off-screen below viewport
+                        state.saved_absolute_cursor = Some(absolute_cursor);
+                        state.cursor_line = new_cursor_line;
+                    } else {
+                        // Cursor is still visible
+                        state.saved_absolute_cursor = None;
+                        state.cursor_line = new_cursor_line;
+                    }
+                }
+
+                return true;
+            }
+        }
+        KeyCode::Left => {
+            // Scroll viewport left (horizontal)
+            if !state.is_line_wrapping_enabled() && state.horizontal_scroll_offset > 0 {
+                let scroll_amount = state.settings.horizontal_scroll_speed;
+                state.horizontal_scroll_offset = state.horizontal_scroll_offset.saturating_sub(scroll_amount);
+                // Cursor column stays the same - it may scroll off-screen horizontally
+                // which is fine; the rendering will handle it
+                return true;
+            }
+        }
+        KeyCode::Right => {
+            // Scroll viewport right (horizontal)
+            if !state.is_line_wrapping_enabled() {
+                let max_line_width = lines.iter()
+                    .map(|line| crate::coordinates::visual_width(line, tab_width))
+                    .max()
+                    .unwrap_or(0);
+                let max_scroll = max_line_width.saturating_sub(text_width);
+
+                if state.horizontal_scroll_offset < max_scroll {
+                    let scroll_amount = state.settings.horizontal_scroll_speed;
+                    state.horizontal_scroll_offset = (state.horizontal_scroll_offset + scroll_amount).min(max_scroll);
+                    // Cursor column stays the same - it may scroll off-screen horizontally
+                    return true;
+                }
+            }
+        }
+        _ => {}
+    }
+    false
 }
 
 /// Handle moving up through wrapped lines
@@ -2273,24 +2386,29 @@ mod tests {
             "line three".to_string(),
         ];
 
-        state.top_line = 0;
+        state.top_line = 1;
         state.cursor_line = 1;
         state.cursor_col = 0;
         let settings = state.settings;
 
         // Alt+Up (without Shift) should NOT create multi-cursor
+        // Instead, it scrolls the viewport without moving cursor
         let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
         assert!(result.is_ok());
         assert!(!state.has_multi_cursors(), "Alt+Up without Shift should NOT create multi-cursors");
-        assert_eq!(state.cursor_line, 0, "Cursor should move up normally");
+        // With new behavior: viewport scrolls up, cursor stays at same absolute position
+        assert_eq!(state.top_line, 0, "Viewport should scroll up");
+        assert_eq!(state.cursor_line, 2, "Cursor relative position should adjust to maintain absolute position");
 
         // Alt+Down (without Shift) should also NOT create multi-cursor
         let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
         assert!(result.is_ok());
         assert!(!state.has_multi_cursors(), "Alt+Down without Shift should NOT create multi-cursors");
-        assert_eq!(state.cursor_line, 1, "Cursor should move down normally");
+        // Viewport should scroll back down
+        assert_eq!(state.top_line, 1, "Viewport should scroll down");
+        assert_eq!(state.cursor_line, 1, "Cursor relative position should adjust back");
     }
 
     #[test]
@@ -2598,5 +2716,320 @@ mod tests {
         assert!(state.cursor_col <= lines[absolute_line].len(), "cursor column should be valid");
     }
 
+    #[test]
+    fn alt_arrow_up_scrolls_viewport_without_moving_cursor() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 10;
+        state.cursor_line = 5;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        // Initial absolute cursor position
+        let initial_absolute_cursor = state.absolute_line();
+        assert_eq!(initial_absolute_cursor, 15);
+
+        // Alt+Up should scroll viewport up
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Viewport should scroll up
+        assert_eq!(state.top_line, 9, "viewport should scroll up by 1");
+        // Cursor should stay at same absolute position
+        assert_eq!(state.absolute_line(), initial_absolute_cursor, "cursor absolute position should not change");
+        assert_eq!(state.cursor_line, 6, "cursor relative position should adjust");
+        assert_eq!(state.cursor_col, 3, "cursor column should not change");
+    }
+
+    #[test]
+    fn alt_arrow_down_scrolls_viewport_without_moving_cursor() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 10;
+        state.cursor_line = 5;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        let initial_absolute_cursor = state.absolute_line();
+        assert_eq!(initial_absolute_cursor, 15);
+
+        // Alt+Down should scroll viewport down
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Viewport should scroll down
+        assert_eq!(state.top_line, 11, "viewport should scroll down by 1");
+        // Cursor should stay at same absolute position
+        assert_eq!(state.absolute_line(), initial_absolute_cursor, "cursor absolute position should not change");
+        assert_eq!(state.cursor_line, 4, "cursor relative position should adjust");
+        assert_eq!(state.cursor_col, 3, "cursor column should not change");
+    }
+
+    #[test]
+    fn alt_arrow_up_at_top_does_nothing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 0;
+        state.cursor_line = 5;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        let initial_absolute_cursor = state.absolute_line();
+
+        // Alt+Up at top should do nothing
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        assert_eq!(state.top_line, 0, "viewport should not scroll");
+        assert_eq!(state.absolute_line(), initial_absolute_cursor, "cursor position should not change");
+    }
+
+    #[test]
+    fn alt_arrow_down_at_bottom_does_nothing() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 49; // At max scroll
+        state.cursor_line = 0;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        let initial_absolute_cursor = state.absolute_line();
+
+        // Alt+Down at bottom should do nothing
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        assert_eq!(state.top_line, 49, "viewport should not scroll");
+        assert_eq!(state.absolute_line(), initial_absolute_cursor, "cursor position should not change");
+    }
+
+    #[test]
+    fn alt_arrow_left_scrolls_horizontally() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        // Toggle wrapping off to enable horizontal scrolling
+        if state.is_line_wrapping_enabled() {
+            state.toggle_line_wrapping();
+        }
+        let mut lines = vec![
+            "x".repeat(200), // Very long line
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 50;
+        state.horizontal_scroll_offset = 20;
+        let settings = state.settings;
+
+        // Alt+Left should scroll viewport left
+        let key_event = KeyEvent::new(KeyCode::Left, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Horizontal scroll should decrease
+        assert!(state.horizontal_scroll_offset < 20, "horizontal scroll should decrease");
+        // Cursor column should stay the same
+        assert_eq!(state.cursor_col, 50, "cursor column should not change");
+    }
+
+    #[test]
+    fn alt_arrow_right_scrolls_horizontally() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        // Toggle wrapping off to enable horizontal scrolling
+        if state.is_line_wrapping_enabled() {
+            state.toggle_line_wrapping();
+        }
+        let mut lines = vec![
+            "x".repeat(200), // Very long line
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 50;
+        state.horizontal_scroll_offset = 10;
+        let settings = state.settings;
+
+        // Alt+Right should scroll viewport right
+        let key_event = KeyEvent::new(KeyCode::Right, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Horizontal scroll should increase
+        assert!(state.horizontal_scroll_offset > 10, "horizontal scroll should increase");
+        // Cursor column should stay the same
+        assert_eq!(state.cursor_col, 50, "cursor column should not change");
+    }
+
+    #[test]
+    fn alt_shift_arrow_still_creates_block_selection() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "line one".to_string(),
+            "line two".to_string(),
+            "line three".to_string(),
+        ];
+        state.top_line = 0;
+        state.cursor_line = 1;
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        // Alt+Shift+Down should create block selection (not viewport scroll)
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 10, "test.txt");
+        assert!(result.is_ok());
+
+        assert!(state.block_selection, "block selection should be enabled");
+        assert!(state.has_selection(), "should have selection");
+    }
+
+    #[test]
+    fn alt_arrow_up_allows_cursor_to_go_offscreen() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 10;
+        state.cursor_line = 5;  // Absolute position 15
+        state.cursor_col = 3;
+        let visible_lines = 10;  // Small viewport
+        let settings = state.settings;
+
+        let initial_absolute = state.absolute_line();
+        assert_eq!(initial_absolute, 15);
+
+        // Scroll up enough times to push cursor off bottom of viewport
+        for _ in 0..10 {
+            let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+            let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        }
+
+        // Viewport scrolled up by 10
+        assert_eq!(state.top_line, 0, "viewport should scroll to top");
+        // Cursor stayed at absolute position 15
+        assert_eq!(state.absolute_line(), initial_absolute, "cursor absolute position should not change");
+        // Cursor is now at line 15 (relative to top_line 0), which exceeds visible_lines (10)
+        assert_eq!(state.cursor_line, 15, "cursor relative position shows it's off-screen");
+        assert!(state.cursor_line >= visible_lines, "cursor should be beyond viewport");
+    }
+
+    #[test]
+    fn alt_arrow_down_when_cursor_at_top() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 10;
+        state.cursor_line = 0;  // Cursor at top of viewport (absolute position 10)
+        state.cursor_col = 3;
+        let settings = state.settings;
+
+        let initial_absolute = state.absolute_line();
+        assert_eq!(initial_absolute, 10);
+
+        // Alt+Down when cursor is at cursor_line 0
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Viewport scrolls down
+        assert_eq!(state.top_line, 11, "viewport should scroll down");
+        // Cursor stays at absolute position 10, which is now ABOVE the viewport
+        // So saved_absolute_cursor is set and cursor_line is 0
+        assert_eq!(state.cursor_line, 0, "cursor_line is 0 (cursor is above viewport)");
+        assert_eq!(state.saved_absolute_cursor, Some(10), "saved_absolute_cursor should be set");
+        assert_eq!(state.absolute_line(), 10, "absolute position should NOT change");
+    }
+
+    #[test]
+    fn alt_arrow_up_with_cursor_above_viewport_keeps_it_offscreen() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(50);
+        state.top_line = 15;
+        state.cursor_line = 0;  // Cursor at absolute position 15
+        state.cursor_col = 3;
+        let visible_lines = 10;
+        let settings = state.settings;
+
+        // First, scroll down to push cursor above viewport
+        for _ in 0..5 {
+            let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::ALT);
+            let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        }
+
+        // Now cursor is at position 15, viewport is at top_line=20
+        // Cursor is 5 lines ABOVE the viewport
+        assert_eq!(state.top_line, 20);
+        assert_eq!(state.absolute_line(), 15, "cursor should still be at position 15");
+        assert_eq!(state.saved_absolute_cursor, Some(15), "cursor should be tracked as off-screen");
+
+        // Now scroll up once - cursor should STAY off-screen
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+
+        assert_eq!(state.top_line, 19, "viewport should scroll up");
+        assert_eq!(state.absolute_line(), 15, "cursor should STILL be at position 15");
+        assert_eq!(state.saved_absolute_cursor, Some(15), "cursor should STILL be tracked as off-screen");
+
+        // Scroll up multiple more times - cursor should stay off-screen until viewport reaches it
+        for _ in 0..3 {
+            let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+            let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        }
+
+        // After 3 more scrolls, top_line is 16, cursor is still at 15 (still above viewport)
+        assert_eq!(state.top_line, 16);
+        assert_eq!(state.absolute_line(), 15, "cursor should STILL be at position 15");
+        assert_eq!(state.saved_absolute_cursor, Some(15), "cursor should STILL be off-screen");
+
+        // One more scroll brings cursor into view
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
+        let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+
+        // Now top_line is 15, cursor is at 15, so cursor_line should be 0 and visible
+        assert_eq!(state.top_line, 15);
+        assert_eq!(state.cursor_line, 0, "cursor should be at top of viewport");
+        assert_eq!(state.saved_absolute_cursor, None, "cursor should now be visible");
+        assert_eq!(state.absolute_line(), 15, "cursor absolute position unchanged");
+    }
+
+    #[test]
+    fn alt_arrow_horizontal_keeps_cursor_column() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        // Toggle wrapping off to enable horizontal scrolling
+        if state.is_line_wrapping_enabled() {
+            state.toggle_line_wrapping();
+        }
+        let mut lines = vec![
+            "x".repeat(200), // Very long line
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 50;
+        state.horizontal_scroll_offset = 0;
+        let settings = state.settings;
+
+        // Scroll right multiple times
+        for _ in 0..10 {
+            let key_event = KeyEvent::new(KeyCode::Right, KeyModifiers::ALT);
+            let _ = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        }
+
+        // Cursor column should stay the same
+        assert_eq!(state.cursor_col, 50, "cursor column should not change");
+        // Horizontal scroll should have increased
+        assert!(state.horizontal_scroll_offset > 0, "viewport should have scrolled right");
+    }
+
 
 }
+
+
+

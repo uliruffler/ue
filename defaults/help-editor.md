@@ -7,6 +7,7 @@ Press **{help}** or **ESC** to close this help.
 | Key | Action |
 |-----|--------|
 | **Arrow Keys** | Move cursor |
+| **Alt+Arrow Keys** | Scroll viewport (vertical & horizontal) without moving cursor |
 | **Home** / **End** | Jump to start/end of line |
 | **Ctrl+Home** / **Ctrl+End** | Jump to start/end of file |
 | **Page Up** / **Page Down** | Scroll by page |
@@ -29,12 +30,14 @@ Press **{help}** or **ESC** to close this help.
 | Key | Action |
 |-----|--------|
 | **Shift+Arrow** | Select text |
+| **Alt+Shift+Arrow** | Block (rectangular) selection |
 | **Ctrl+A** | Select all |
 | **{copy}** | Copy selection |
 | **{cut}** | Cut selection |
 | **{paste}** | Paste |
 | **ESC** | Clear selection |
 | **Mouse drag** | Select text |
+| **Alt+Mouse drag** | Block (rectangular) selection |
 | **Click line #** | Select entire line |
 
 ## Search
@@ -66,8 +69,7 @@ Untitled files show as "(unsaved)" in the header until you save them with a real
 | Key | Action |
 |-----|--------|
 | **{help}** | Show this help |
-| **Mouse scroll** | Scroll viewport |
-| **Ctrl+Scroll** | Scroll while keeping cursor position |
+| **Mouse scroll** | Scroll viewport (Shift+Scroll for horizontal) |
 
 ---
 
