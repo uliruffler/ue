@@ -262,6 +262,7 @@ pub(crate) fn handle_key_event(
                 state.top_line = 0;
                 state.cursor_line = 0;
                 state.cursor_col = 0;
+                state.desired_cursor_col = 0;
                 moved = true;
             }
             KeyCode::End => {
@@ -280,6 +281,7 @@ pub(crate) fn handle_key_event(
                         state.cursor_line = last_line - state.top_line;
                     }
                     state.cursor_col = lines[last_line].len();
+                    state.desired_cursor_col = state.cursor_col;
                 }
                 moved = true;
             }
@@ -940,7 +942,12 @@ fn handle_viewport_scroll(
 
 /// Handle moving up through wrapped lines
 fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_lines: usize) {
-    use crate::coordinates::{calculate_wrapped_lines_for_line, visual_width_up_to};
+    use crate::coordinates::visual_width_up_to;
+
+    // Initialize desired_cursor_col from cursor_col if this is the first vertical movement
+    if state.desired_cursor_col == 0 && state.cursor_col > 0 {
+        state.desired_cursor_col = state.cursor_col;
+    }
 
     let absolute_line = state.absolute_line();
     if absolute_line >= lines.len() {
@@ -959,8 +966,14 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
     if !state.is_line_wrapping_enabled() {
         if state.cursor_line > 0 {
             state.cursor_line -= 1;
+            // Try to restore desired column position
+            let prev_line = &lines[state.absolute_line()];
+            state.cursor_col = state.desired_cursor_col.min(prev_line.len());
         } else if state.top_line > 0 {
             state.top_line -= 1;
+            // Try to restore desired column position
+            let prev_line = &lines[state.absolute_line()];
+            state.cursor_col = state.desired_cursor_col.min(prev_line.len());
         }
         return;
     }
@@ -979,42 +992,22 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         if state.cursor_line > 0 {
             state.cursor_line -= 1;
 
-            // Move to the last wrapped line of the previous logical line
+            // Move to the previous logical line, trying to preserve desired column
             let prev_absolute = state.absolute_line();
             if prev_absolute < lines.len() {
                 let prev_line = &lines[prev_absolute];
-                let num_wrapped = calculate_wrapped_lines_for_line(
-                    lines,
-                    prev_absolute,
-                    text_width as u16,
-                    tab_width,
-                ) as usize;
-
-                // Calculate target column on the last wrap line
-                let target_wrap_line = num_wrapped.saturating_sub(1);
-                let target_visual_col = (target_wrap_line * text_width) + (visual_col % text_width);
-                state.cursor_col =
-                    visual_col_to_char_index(prev_line, target_visual_col, tab_width);
+                // Use desired_cursor_col instead of calculating from visual_col
+                state.cursor_col = state.desired_cursor_col.min(prev_line.len());
             }
         } else if state.top_line > 0 {
             // Scroll up
             state.top_line -= 1;
 
-            // Move to the last wrapped line of the new top line
+            // Move to the new top line, trying to preserve desired column
             let new_top_absolute = state.top_line;
             if new_top_absolute < lines.len() {
                 let new_top_line = &lines[new_top_absolute];
-                let num_wrapped = calculate_wrapped_lines_for_line(
-                    lines,
-                    new_top_absolute,
-                    text_width as u16,
-                    tab_width,
-                ) as usize;
-
-                let target_wrap_line = num_wrapped.saturating_sub(1);
-                let target_visual_col = (target_wrap_line * text_width) + (visual_col % text_width);
-                state.cursor_col =
-                    visual_col_to_char_index(new_top_line, target_visual_col, tab_width);
+                state.cursor_col = state.desired_cursor_col.min(new_top_line.len());
             }
         }
     }
@@ -1025,6 +1018,11 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
     use crate::coordinates::{
         calculate_visual_lines_to_cursor, calculate_wrapped_lines_for_line, visual_width_up_to,
     };
+
+    // Initialize desired_cursor_col from cursor_col if this is the first vertical movement
+    if state.desired_cursor_col == 0 && state.cursor_col > 0 {
+        state.desired_cursor_col = state.cursor_col;
+    }
 
     let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
     let absolute_line = state.absolute_line();
@@ -1049,6 +1047,9 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                 state.top_line += 1;
                 state.cursor_line = effective_visible_lines - 1;
             }
+            // Try to restore desired column position
+            let next_line = &lines[state.absolute_line()];
+            state.cursor_col = state.desired_cursor_col.min(next_line.len());
         }
         return;
     }
@@ -1089,13 +1090,12 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                 state.cursor_line += 1;
             }
 
-            // Move to the first wrapped line of the next logical line
+            // Move to the next logical line, trying to preserve desired column
             let next_absolute = state.absolute_line();
             if next_absolute < lines.len() {
                 let next_line = &lines[next_absolute];
-                let target_visual_col = visual_col % text_width;
-                state.cursor_col =
-                    visual_col_to_char_index(next_line, target_visual_col, tab_width);
+                // Use desired_cursor_col instead of visual_col % text_width
+                state.cursor_col = state.desired_cursor_col.min(next_line.len());
             }
         }
     }
@@ -1148,6 +1148,7 @@ fn handle_navigation(
         KeyCode::Left => {
             if state.cursor_col > 0 {
                 state.cursor_col -= 1;
+                state.desired_cursor_col = state.cursor_col;
                 true
             } else {
                 // At beginning of line - move to end of previous line
@@ -1163,6 +1164,7 @@ fn handle_navigation(
                     let new_absolute = state.top_line + state.cursor_line;
                     if let Some(line) = lines.get(new_absolute) {
                         state.cursor_col = line.len();
+                        state.desired_cursor_col = state.cursor_col;
                     }
                     true
                 } else {
@@ -1174,6 +1176,7 @@ fn handle_navigation(
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
                 if state.cursor_col < line.len() {
                     state.cursor_col += 1;
+                    state.desired_cursor_col = state.cursor_col;
                     true
                 } else {
                     // At end of line - move to beginning of next line
@@ -1182,6 +1185,7 @@ fn handle_navigation(
                         // Move to next line
                         state.cursor_line += 1;
                         state.cursor_col = 0;
+                        state.desired_cursor_col = state.cursor_col;
 
                         // Check if we need to scroll
                         if state.cursor_line >= effective_visible_lines {
@@ -1215,9 +1219,11 @@ fn handle_navigation(
                 };
 
                 state.cursor_col = new_pos;
+                state.desired_cursor_col = state.cursor_col;
                 true
             } else {
                 state.cursor_col = 0;
+                state.desired_cursor_col = state.cursor_col;
                 true
             }
         }
@@ -1225,6 +1231,7 @@ fn handle_navigation(
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
                 // Always go to end of line
                 state.cursor_col = line.len();
+                state.desired_cursor_col = state.cursor_col;
                 true
             } else {
                 true
@@ -1539,6 +1546,7 @@ fn paragraph_up(state: &mut FileViewerState, lines: &[String]) -> bool {
         state.cursor_line = current_line.saturating_sub(state.top_line);
     }
     state.cursor_col = 0;
+    state.desired_cursor_col = 0;
     true
 }
 
@@ -1577,6 +1585,7 @@ fn paragraph_down(state: &mut FileViewerState, lines: &[String], visible_lines: 
         state.cursor_line = target_line.saturating_sub(state.top_line);
     }
     state.cursor_col = 0;
+    state.desired_cursor_col = 0;
     true
 }
 
@@ -2519,6 +2528,39 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(state.cursor_line, 0, "cursor should move to previous line");
         assert_eq!(state.cursor_col, 3, "cursor column should be preserved");
+    }
+
+    #[test]
+    fn cursor_column_memory_through_short_line() {
+        // Test the exact scenario from user request:
+        // Cursor at column 5 line 1, next line is empty, line 3 is 10 chars
+        // Pressing Down twice should move cursor to column 5 line 3, not column 0
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec![
+            "0123456789".to_string(),  // Line 0: 10 characters
+            "".to_string(),             // Line 1: empty
+            "0123456789".to_string(),  // Line 2: 10 characters
+        ];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        state.cursor_col = 5;  // Start at column 5
+        let settings = state.settings;
+
+        // Press Down once - move to empty line
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor_line, 1, "cursor should move to line 1");
+        assert_eq!(state.cursor_col, 0, "cursor should be at column 0 on empty line");
+        assert_eq!(state.desired_cursor_col, 5, "desired column should remain 5");
+
+        // Press Down again - move to line with 10 characters
+        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(state.cursor_line, 2, "cursor should move to line 2");
+        assert_eq!(state.cursor_col, 5, "cursor should restore to column 5, not column 0");
     }
 
     #[test]

@@ -530,6 +530,7 @@ mod tests {
             top_line: 0,
             cursor_line: 0,
             cursor_col: 0,
+            desired_cursor_col: 0,
             selection_start: None,
             selection_end: None,
             selection_anchor: None,

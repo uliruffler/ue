@@ -492,6 +492,7 @@ fn try_reload_undo_from_external_change(
                 state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
                 if new_cursor_col <= lines[new_cursor_line].len() {
                     state.cursor_col = new_cursor_col;
+                    state.desired_cursor_col = new_cursor_col;
                 }
             }
 
@@ -782,6 +783,7 @@ fn editing_session(
         state.cursor_line = saved_cursor_line.saturating_sub(state.top_line);
         if saved_cursor_col <= lines[saved_cursor_line].len() {
             state.cursor_col = saved_cursor_col;
+            state.desired_cursor_col = saved_cursor_col;
         }
     }
     let mut visible_lines = (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT);
@@ -1069,6 +1071,7 @@ fn editing_session(
                 state.top_line = new_top;
                 state.cursor_line = rel_cursor;
                 state.cursor_col = cursor_col;
+                state.desired_cursor_col = cursor_col;
                 execute!(stdout, terminal::Clear(ClearType::All))?;
                 state.needs_redraw = true;
             }

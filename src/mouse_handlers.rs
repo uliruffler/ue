@@ -78,6 +78,7 @@ fn handle_double_click(
         state.selection_end = Some((logical_line, word_end));
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = word_end;
+        state.desired_cursor_col = word_end;
         state.mouse_dragging = true;
         state.needs_redraw = true;
     }
@@ -92,6 +93,7 @@ fn handle_triple_click(state: &mut FileViewerState, lines: &[String], logical_li
         state.selection_start = Some((logical_line, 0));
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = lines[logical_line].len();
+        state.desired_cursor_col = state.cursor_col;
 
         if logical_line + 1 < lines.len() {
             state.selection_end = Some((logical_line + 1, 0));
@@ -468,6 +470,7 @@ pub(crate) fn handle_continuous_auto_scroll(
             // Always extend selection to end of line when mouse is beyond text boundary
             state.cursor_line = absolute_line.saturating_sub(state.top_line);
             state.cursor_col = line.len(); // Set to end of line
+            state.desired_cursor_col = state.cursor_col;
             state.update_selection();
         }
     }
@@ -711,6 +714,7 @@ fn handle_mouse_click(
         restore_cursor_to_screen(state);
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = col.min(lines[logical_line].len());
+        state.desired_cursor_col = state.cursor_col;
 
         // Reset horizontal scroll if clicking on empty/short line in horizontal scroll mode
         if !state.is_line_wrapping_enabled() {
@@ -781,6 +785,7 @@ fn handle_mouse_drag(
                 restore_cursor_to_screen(state);
                 state.cursor_line = absolute_line.saturating_sub(state.top_line);
                 state.cursor_col = line.len(); // Set to end of line
+                state.desired_cursor_col = state.cursor_col;
                 state.update_selection();
                 state.needs_redraw = true;
             }
@@ -803,6 +808,7 @@ fn handle_mouse_drag(
         restore_cursor_to_screen(state);
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = col.min(lines[logical_line].len()); // Clamp to line length
+        state.desired_cursor_col = state.cursor_col;
         state.update_selection();
         state.needs_redraw = true;
     }
@@ -829,6 +835,7 @@ fn handle_line_number_click(
         // Position cursor at end of line
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = lines[logical_line].len();
+        state.desired_cursor_col = state.cursor_col;
 
         // Set selection end to include the entire line
         // If there's a next line, go to start of it; otherwise end of current line
@@ -871,6 +878,7 @@ fn handle_line_number_drag(
                 // Position cursor at end of dragged line
                 state.cursor_line = logical_line.saturating_sub(state.top_line);
                 state.cursor_col = lines[logical_line].len();
+                state.desired_cursor_col = state.cursor_col;
 
                 // Extend to start of next line or end of current line
                 if logical_line + 1 < lines.len() {
@@ -885,6 +893,7 @@ fn handle_line_number_drag(
                 // Position cursor at start of dragged line
                 state.cursor_line = logical_line.saturating_sub(state.top_line);
                 state.cursor_col = 0;
+                state.desired_cursor_col = 0;
 
                 // Extend to start of line after start_line or end of start_line
                 if start_line + 1 < lines.len() {

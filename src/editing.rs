@@ -175,6 +175,7 @@ pub(crate) fn handle_paste(
         }
         lines[idx].insert_str(state.cursor_col, paste_text);
         state.cursor_col += paste_text.len();
+        state.desired_cursor_col = state.cursor_col;
         state.modified = true;
     } else {
         let current_line = &lines[idx];
@@ -204,6 +205,7 @@ pub(crate) fn handle_paste(
         lines.insert(idx + paste_lines.len() - 1, final_line);
         state.cursor_line = (idx + paste_lines.len() - 1).saturating_sub(state.top_line);
         state.cursor_col = last_paste_line.len();
+        state.desired_cursor_col = state.cursor_col;
         state.modified = true;
     }
 
@@ -470,6 +472,7 @@ pub(crate) fn insert_char(
             ch: c,
         });
         state.cursor_col += 1;
+        state.desired_cursor_col = state.cursor_col;
         state
             .undo_history
             .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
@@ -574,6 +577,7 @@ pub(crate) fn split_line(
         state.top_line += 1;
     }
     state.cursor_col = 0;
+    state.desired_cursor_col = 0;
     let absolute_line = state.absolute_line();
     state.undo_history.update_state(
         state.top_line,
@@ -603,6 +607,7 @@ pub(crate) fn delete_backward(
             ch,
         });
         state.cursor_col -= 1;
+        state.desired_cursor_col = state.cursor_col;
         state
             .undo_history
             .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
@@ -624,6 +629,7 @@ pub(crate) fn delete_backward(
             state.top_line = state.top_line.saturating_sub(1);
         }
         state.cursor_col = prev_len;
+        state.desired_cursor_col = state.cursor_col;
         let absolute_line = state.absolute_line();
         state.undo_history.update_state(
             state.top_line,
@@ -729,6 +735,7 @@ pub(crate) fn delete_word_backward(
     
     lines[idx].replace_range(end_col..start_col, "");
     state.cursor_col = end_col;
+    state.desired_cursor_col = state.cursor_col;
 
     state
         .undo_history
@@ -817,6 +824,7 @@ pub(crate) fn insert_tab(
             });
         }
         state.cursor_col += tab_width;
+        state.desired_cursor_col = state.cursor_col;
         state
             .undo_history
             .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
