@@ -22,7 +22,6 @@ pub(crate) fn handle_find_input(
             state.find_pattern.clear();
             state.find_error = None;
             state.find_history_index = None;
-            state.transition_to_replace_on_enter = false; // Clear transition flag
             // Note: Don't clear selection - keep it visible to show the search scope
             // Note: Don't clear find_scope here - keep it so highlighting remains scoped
             // Restore the search pattern from before entering find mode
@@ -54,13 +53,6 @@ pub(crate) fn handle_find_input(
                         // Note: Don't clear selection - keep it visible to show the search scope
                         // Note: Don't clear find_scope - keep it so highlighting remains scoped
 
-                        // Check if we should transition to replace mode
-                        if state.transition_to_replace_on_enter {
-                            state.replace_active = true;
-                            state.replace_pattern.clear();
-                            state.replace_cursor_pos = 0;
-                            state.transition_to_replace_on_enter = false;
-                        }
 
                         state.needs_redraw = true;
                     }
@@ -79,7 +71,6 @@ pub(crate) fn handle_find_input(
                 state.last_search_pattern = None; // Clear highlights
                 state.saved_search_pattern = None; // Clear saved pattern
                 state.find_scope = None; // Clear search scope for next search
-                state.transition_to_replace_on_enter = false; // Clear flag
                 state.needs_redraw = true;
             }
             true

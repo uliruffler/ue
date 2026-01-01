@@ -640,7 +640,6 @@ fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bo
         state.find_pattern.clear();
         state.find_error = None;
         state.find_history_index = None;
-        state.transition_to_replace_on_enter = false; // Clear transition flag
         state.last_search_pattern = state.saved_search_pattern.clone();
         state.saved_search_pattern = None;
         state.needs_redraw = true;

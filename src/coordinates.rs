@@ -569,7 +569,6 @@ mod tests {
             replace_pattern: String::new(),
             replace_cursor_pos: 0,
             replace_selection: None,
-            transition_to_replace_on_enter: false,
             goto_line_active: false,
             goto_line_input: String::new(),
             goto_line_cursor_pos: 0,

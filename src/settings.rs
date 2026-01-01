@@ -434,7 +434,7 @@ mod tests {
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
-            replace: "Ctrl+h".into(),
+            replace: "Ctrl+Shift+h".into(),
             replace_current: "Ctrl+r".into(),
             replace_all: "Ctrl+Alt+r".into(),
             goto_line: "Ctrl+g".into(),

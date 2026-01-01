@@ -71,6 +71,12 @@ pub enum Edit {
         old_content: String,
         new_content: String,
     },
+    DeleteWord {
+        line: usize,
+        col: usize,
+        text: String,
+        forward: bool, // true = delete forward, false = delete backward
+    },
     CompositeEdit {
         edits: Vec<Edit>,
         #[serde(default)]

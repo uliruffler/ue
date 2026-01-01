@@ -717,14 +717,16 @@ pub(crate) fn delete_word_backward(
     }
 
     // Delete characters from end_col to start_col
-    let chars_to_delete: Vec<char> = line[end_col..start_col].chars().collect();
-    for (i, ch) in chars_to_delete.into_iter().enumerate().rev() {
-        state.undo_history.push(Edit::DeleteChar {
-            line: idx,
-            col: end_col + i,
-            ch,
-        });
-    }
+    let deleted_text: String = line.chars().skip(end_col).take(start_col - end_col).collect();
+    
+    // Create single undo entry for the entire word deletion
+    state.undo_history.push(Edit::DeleteWord {
+        line: idx,
+        col: end_col,
+        text: deleted_text,
+        forward: false,
+    });
+    
     lines[idx].replace_range(end_col..start_col, "");
     state.cursor_col = end_col;
 
@@ -774,14 +776,16 @@ pub(crate) fn delete_word_forward(
     }
 
     // Delete characters from start_col to end_col
-    let chars_to_delete: Vec<char> = line[start_col..end_col].chars().collect();
-    for (i, ch) in chars_to_delete.into_iter().enumerate().rev() {
-        state.undo_history.push(Edit::DeleteChar {
-            line: idx,
-            col: start_col + i,
-            ch,
-        });
-    }
+    let deleted_text: String = line.chars().skip(start_col).take(end_col - start_col).collect();
+    
+    // Create single undo entry for the entire word deletion
+    state.undo_history.push(Edit::DeleteWord {
+        line: idx,
+        col: start_col,
+        text: deleted_text,
+        forward: true,
+    });
+    
     lines[idx].replace_range(start_col..end_col, "");
 
     state
@@ -995,6 +999,26 @@ fn apply_single_undo_edit(
                 false
             }
         }
+        Edit::DeleteWord { line, col, text, forward } => {
+            // Undo word deletion: insert the word back
+            if *line < lines.len() && *col <= lines[*line].len() {
+                let line_text = &lines[*line];
+                let new_line: String = line_text
+                    .chars()
+                    .take(*col)
+                    .chain(text.chars())
+                    .chain(line_text.chars().skip(*col))
+                    .collect();
+                lines[*line] = new_line;
+                state.cursor_line = line.saturating_sub(state.top_line);
+                // Restore cursor: for backward deletion, cursor goes to end of restored text
+                // For forward deletion, cursor stays at col
+                state.cursor_col = if *forward { *col } else { col + text.chars().count() };
+                true
+            } else {
+                false
+            }
+        }
         Edit::CompositeEdit { .. } => {
             // Nested composite edits should not happen, but handle gracefully
             false
@@ -1135,6 +1159,28 @@ fn apply_single_redo_edit(
                 state.cursor_line = line.saturating_sub(state.top_line);
                 state.cursor_col = 0;
                 true
+            } else {
+                false
+            }
+        }
+        Edit::DeleteWord { line, col, text, .. } => {
+            // Redo word deletion: delete the word again
+            if *line < lines.len() {
+                let text_len = text.chars().count();
+                if *col + text_len <= lines[*line].chars().count() {
+                    let line_text = &lines[*line];
+                    let new_line: String = line_text
+                        .chars()
+                        .take(*col)
+                        .chain(line_text.chars().skip(col + text_len))
+                        .collect();
+                    lines[*line] = new_line;
+                    state.cursor_line = line.saturating_sub(state.top_line);
+                    state.cursor_col = *col;
+                    true
+                } else {
+                    false
+                }
             } else {
                 false
             }
@@ -1859,6 +1905,60 @@ mod tests {
         assert_eq!(lines[2], "");
         assert_eq!(lines[3], "after");
     }
+
+    #[test]
+    fn delete_word_backward_single_undo() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world test".to_string()];
+        state.cursor_col = 16; // At end of "test"
+
+        // Delete word backward (should delete "test")
+        assert!(delete_word_backward(&mut state, &mut lines, "test.txt"));
+        assert_eq!(lines[0], "hello world ");
+        assert_eq!(state.cursor_col, 12);
+
+        // Undo should restore entire word with single undo
+        assert!(apply_undo(&mut state, &mut lines, "test.txt", 10));
+        assert_eq!(lines[0], "hello world test");
+        assert_eq!(state.cursor_col, 16);
+        
+        // Verify only one edit was created
+        assert_eq!(state.undo_history.edits.len(), 1);
+        if let Edit::DeleteWord { text, forward, .. } = &state.undo_history.edits[0] {
+            assert_eq!(text, "test");
+            assert_eq!(*forward, false);
+        } else {
+            panic!("Expected DeleteWord edit");
+        }
+    }
+
+    #[test]
+    fn delete_word_forward_single_undo() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world test".to_string()];
+        state.cursor_col = 6; // After "hello "
+
+        // Delete word forward (should delete "world")
+        assert!(delete_word_forward(&mut state, &mut lines, "test.txt"));
+        assert_eq!(lines[0], "hello  test");
+        assert_eq!(state.cursor_col, 6);
+
+        // Undo should restore entire word with single undo
+        assert!(apply_undo(&mut state, &mut lines, "test.txt", 10));
+        assert_eq!(lines[0], "hello world test");
+        assert_eq!(state.cursor_col, 6);
+        
+        // Verify only one edit was created
+        assert_eq!(state.undo_history.edits.len(), 1);
+        if let Edit::DeleteWord { text, forward, .. } = &state.undo_history.edits[0] {
+            assert_eq!(text, "world");
+            assert_eq!(*forward, true);
+        } else {
+            panic!("Expected DeleteWord edit");
+        }
+    }
 }
 
 
@@ -1870,6 +1970,4 @@ fn copy_to_clipboard(_text: &str) -> Result<(), Box<dyn std::error::Error>> {
 fn paste_from_clipboard() -> Result<String, Box<dyn std::error::Error>> {
     Ok(String::new())
 }
-
-
 

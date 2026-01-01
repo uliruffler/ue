@@ -489,39 +489,17 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
-    // Handle replace mode entry (Ctrl+H) - only when we have a search pattern
-    // NOTE: Ctrl+H and Ctrl+Backspace are indistinguishable in most terminals (both send ASCII 0x08)
+    // Handle replace mode entry (Ctrl+Shift+H) - only when we have an active search pattern
     if settings.keybindings.replace_matches(&code, &modifiers)
         && !state.replace_active
+        && state.last_search_pattern.is_some()
     {
-        if state.last_search_pattern.is_some() {
-            // Enter replace mode
-            state.replace_active = true;
-            state.replace_pattern.clear();
-            state.replace_cursor_pos = 0;
-            state.needs_redraw = true;
-            return Ok((false, false));
-        } else {
-            // No search pattern - enter find mode first, then transition to replace on Enter
-            state.saved_search_pattern = state.last_search_pattern.clone();
-            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
-                let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
-                    (start, end)
-                } else {
-                    (end, start)
-                };
-                state.find_scope = Some(normalized);
-            } else {
-                state.find_scope = None;
-            }
-            state.find_active = true;
-            state.find_pattern.clear();
-            state.find_cursor_pos = 0;
-            state.find_error = None;
-            state.transition_to_replace_on_enter = true;
-            state.needs_redraw = true;
-            return Ok((false, false));
-        }
+        // Enter replace mode
+        state.replace_active = true;
+        state.replace_pattern.clear();
+        state.replace_cursor_pos = 0;
+        state.needs_redraw = true;
+        return Ok((false, false));
     }
 
     // Handle replace current occurrence (Ctrl+R) - works even if not in replace mode
@@ -678,8 +656,9 @@ pub(crate) fn handle_key_event(
 
     // Handle Ctrl+Backspace/Delete and Alt+Backspace/Delete for word-wise deletion
     // Alt+Backspace/Delete provided for better terminal compatibility (some terminals don't send Ctrl+Backspace)
+    // Also handle Ctrl+H since Ctrl+Backspace sends ASCII 0x08 which can be interpreted as Ctrl+H
     if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
-        && matches!(code, KeyCode::Backspace)
+        && (matches!(code, KeyCode::Backspace) || matches!(code, KeyCode::Char('h')))
     {
         use crate::editing::delete_word_backward;
         if delete_word_backward(state, lines, filename) {
@@ -3028,8 +3007,87 @@ mod tests {
         assert!(state.horizontal_scroll_offset > 0, "viewport should have scrolled right");
     }
 
+    #[test]
+    fn ctrl_backspace_deletes_word_backward() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world test".to_string()];
+        let settings = state.settings;
+
+        // Position cursor at end of line
+        state.cursor_col = 16; // After "test"
+
+        // Press Ctrl+Backspace
+        let key_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert_eq!(lines[0], "hello world ", "should delete 'test'");
+        assert_eq!(state.cursor_col, 12, "cursor should be at start of deleted word");
+        assert!(!state.replace_active, "should not enter replace mode");
+    }
+
+    #[test]
+    fn ctrl_backspace_does_not_trigger_replace_without_search() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world".to_string()];
+        let settings = state.settings;
+
+        state.cursor_col = 11;
+        state.last_search_pattern = None; // No active search
+
+        // Press Ctrl+Backspace
+        let key_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert!(!state.replace_active, "should not enter replace mode");
+        assert_eq!(lines[0], "hello ", "should delete word");
+    }
+
+    #[test]
+    fn ctrl_h_deletes_word_backward() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world".to_string()];
+        let settings = state.settings;
+
+        state.cursor_col = 11; // After "world"
+
+        // Press Ctrl+H (as Char('h')) - should delete word backward
+        let key_event = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert!(!state.replace_active, "should not enter replace mode");
+        assert_eq!(lines[0], "hello ", "should delete word backward");
+        assert_eq!(state.cursor_col, 6, "cursor should be at start of deleted word");
+    }
+
+    #[test]
+    fn ctrl_shift_h_triggers_replace_with_active_search() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = vec!["hello world".to_string()];
+        let settings = state.settings;
+
+        // Set up active search
+        state.last_search_pattern = Some("hello".to_string());
+
+        // Press Ctrl+Shift+H (new replace keybinding)
+        let key_event = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+
+        assert!(result.is_ok());
+        assert!(state.replace_active, "should enter replace mode with active search");
+        assert_eq!(lines[0], "hello world", "should not modify content");
+    }
+
 
 }
+
+
 
 
 

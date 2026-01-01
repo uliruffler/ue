@@ -79,8 +79,6 @@ pub struct FileViewerState<'a> {
     pub(crate) replace_cursor_pos: usize,
     /// Selection in replace pattern: (start_pos, end_pos) in character indices
     pub(crate) replace_selection: Option<(usize, usize)>,
-    /// Flag to indicate find mode should transition to replace mode on Enter
-    pub(crate) transition_to_replace_on_enter: bool,
     /// Go to line mode active
     pub(crate) goto_line_active: bool,
     /// Input buffer for go to line
@@ -181,7 +179,6 @@ impl<'a> FileViewerState<'a> {
             replace_pattern: String::new(),
             replace_cursor_pos: 0,
             replace_selection: None,
-            transition_to_replace_on_enter: false,
             goto_line_active: false,
             goto_line_input: String::new(),
             goto_line_cursor_pos: 0,
