@@ -173,6 +173,37 @@ pub(crate) fn handle_find_input(
             false
         }
         KeyCode::Char(c) => {
+            // Handle Ctrl+F to toggle filter mode (when there's a pattern)
+            if (c == 'f' || c == '\x06') && modifiers.contains(KeyModifiers::CONTROL) {
+                if !state.find_pattern.is_empty() {
+                    // Toggle filter mode and exit find mode
+                    state.filter_active = !state.filter_active;
+
+                    // Exit find mode with the pattern as the search
+                    let pattern = format!("(?i){}", state.find_pattern);
+                    if let Ok(_regex) = Regex::new(&pattern) {
+                        state.last_search_pattern = Some(state.find_pattern.clone());
+                        add_to_history(state, state.find_pattern.clone());
+                        update_search_hit_count(state, lines);
+                        state.search_wrapped = false;
+                        state.wrap_warning_pending = None;
+                        state.find_error = None;
+                        state.find_active = false;
+                        state.find_history_index = None;
+                        state.saved_search_pattern = None;
+
+                        // When enabling filter mode, ensure cursor is on a visible line
+                        if state.filter_active {
+                            ensure_cursor_on_visible_line(state, lines);
+                        }
+
+                        state.needs_redraw = true;
+                    }
+                    return true;
+                }
+                return false;
+            }
+
             // Handle Ctrl+A to select all text in find pattern
             // Ctrl+A is reported as character code 0x01 (ASCII SOH), not as 'a' with CONTROL modifier
             if c == '\x01' || (c == 'a' && modifiers.contains(KeyModifiers::CONTROL)) {
@@ -767,6 +798,116 @@ pub(crate) fn update_search_hit_count(state: &mut FileViewerState, lines: &[Stri
         state.search_current_hit = 0;
         state.search_hit_count = 0;
     }
+}
+
+/// Ensure cursor is positioned on a visible line when filter mode is active
+fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) {
+    if !state.filter_active || state.last_search_pattern.is_none() {
+        return;
+    }
+
+    let pattern = state.last_search_pattern.as_ref().unwrap();
+    let filtered_lines = get_lines_with_matches(lines, pattern, state.find_scope);
+
+    if filtered_lines.is_empty() {
+        return;
+    }
+
+    let absolute_line = state.absolute_line();
+
+    // Check if current cursor position is on a visible line
+    if !filtered_lines.contains(&absolute_line) {
+        // Cursor is on a filtered-out line, move to nearest visible line
+        // Try to find the next visible line first, then previous if not found
+        if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
+            // Move to next visible line
+            if next_line_idx >= state.top_line {
+                state.cursor_line = next_line_idx - state.top_line;
+            } else {
+                state.top_line = next_line_idx;
+                state.cursor_line = 0;
+            }
+            // Adjust cursor column to be within the line
+            if let Some(line) = lines.get(next_line_idx) {
+                state.cursor_col = state.cursor_col.min(line.len());
+            }
+        } else if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
+            // Move to previous visible line
+            if prev_line_idx >= state.top_line {
+                state.cursor_line = prev_line_idx - state.top_line;
+            } else {
+                state.top_line = prev_line_idx;
+                state.cursor_line = 0;
+            }
+            // Adjust cursor column to be within the line
+            if let Some(line) = lines.get(prev_line_idx) {
+                state.cursor_col = state.cursor_col.min(line.len());
+            }
+        } else if let Some(&first_line_idx) = filtered_lines.first() {
+            // No visible lines around cursor, jump to first visible line
+            state.top_line = first_line_idx;
+            state.cursor_line = 0;
+            if let Some(line) = lines.get(first_line_idx) {
+                state.cursor_col = state.cursor_col.min(line.len());
+            }
+        }
+    }
+}
+
+/// Get all line indices that have search matches
+/// Returns a vector of line indices (0-based) that contain at least one match
+pub fn get_lines_with_matches(
+    lines: &[String],
+    pattern: &str,
+    scope: Option<(Position, Position)>,
+) -> Vec<usize> {
+    // Make search case-insensitive by default
+    let pattern_with_flags = format!("(?i){}", pattern);
+    let Ok(regex) = Regex::new(&pattern_with_flags) else {
+        return Vec::new();
+    };
+
+    let mut matching_lines = Vec::new();
+
+    // Determine search boundaries
+    let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
+        (scope_start_line, scope_end_line)
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
+
+    for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
+        let line = &lines[line_idx];
+
+        // Determine search boundaries for this line based on scope
+        let (search_start, search_end) =
+            if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
+                scope
+            {
+                let start_offset = if line_idx == scope_start_line {
+                    scope_start_col
+                } else {
+                    0
+                };
+                let end_offset = if line_idx == scope_end_line {
+                    scope_end_col.min(line.len())
+                } else {
+                    line.len()
+                };
+                (start_offset, end_offset)
+            } else {
+                (0, line.len())
+            };
+
+        if search_start < search_end {
+            let search_slice = &line[search_start..search_end];
+            if regex.is_match(search_slice) {
+                matching_lines.push(line_idx);
+            }
+        }
+    }
+
+    matching_lines
 }
 
 /// Handle replace mode key events

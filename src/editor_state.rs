@@ -45,6 +45,8 @@ pub struct FileViewerState<'a> {
     pub(crate) last_save_time: Option<Instant>,
     /// Find mode active
     pub(crate) find_active: bool,
+    /// Filter mode active (shows only lines with search hits)
+    pub(crate) filter_active: bool,
     /// Current find pattern being entered
     pub(crate) find_pattern: String,
     /// Cursor position within find pattern (character index, not byte index)
@@ -165,6 +167,7 @@ impl<'a> FileViewerState<'a> {
             drag_target: None,
             last_save_time: None,
             find_active: false,
+            filter_active: false,
             find_pattern: String::new(),
             find_cursor_pos: 0,
             find_selection: None,

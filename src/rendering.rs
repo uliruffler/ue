@@ -181,6 +181,11 @@ fn render_header(
                 modified_char, filename, parent_display
             )?;
         }
+        
+        // Show filter indicator when filter mode is active
+        if state.filter_active && state.last_search_pattern.is_some() {
+            write!(stdout, " [Filter]")?;
+        }
     }
 
     // Clear rest of line (applies to both menu and filename modes)
@@ -256,7 +261,12 @@ fn render_footer(
         if digits > 0 {
             left_side.push_str(&format!("{:width$} ", "", width = digits));
         }
-        let find_label = "Find (regex): ";
+        // Show "Filter" label if filter mode will be activated, otherwise "Find"
+        let find_label = if state.filter_active {
+            "Filter (regex): "
+        } else {
+            "Find (regex): "
+        };
         left_side.push_str(find_label);
         let pattern_start_col = left_side.len();
 
@@ -607,8 +617,6 @@ fn render_visible_lines(
         visible_lines
     };
 
-    let mut visual_lines_rendered = 0;
-    let mut logical_line_index = state.top_line;
     let text_width_u16 = crate::coordinates::calculate_text_width(state, lines, visible_lines);
     let _text_width_usize = text_width_u16 as usize;
 
@@ -621,18 +629,57 @@ fn render_visible_lines(
         visible_lines,
     };
 
-    while visual_lines_rendered < content_lines && logical_line_index < lines.len() {
-        let lines_for_this_logical = render_line(
-            stdout,
-            &ctx,
-            logical_line_index,
-            cursor_visual_line,
-            visual_lines_rendered,
-            content_lines - visual_lines_rendered,
-        )?;
+    // Get filtered lines if filter mode is active
+    let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
+        let pattern = state.last_search_pattern.as_ref().unwrap();
+        crate::find::get_lines_with_matches(lines, pattern, state.find_scope)
+    } else {
+        Vec::new()
+    };
 
-        visual_lines_rendered += lines_for_this_logical;
-        logical_line_index += 1;
+    let mut visual_lines_rendered = 0;
+    
+    if state.filter_active && !filtered_lines.is_empty() {
+        // Filter mode: render only lines with matches
+        let mut filtered_index = 0;
+        
+        // Find starting position in filtered lines based on top_line
+        while filtered_index < filtered_lines.len() && filtered_lines[filtered_index] < state.top_line {
+            filtered_index += 1;
+        }
+        
+        // Render filtered lines starting from the first visible one
+        while visual_lines_rendered < content_lines && filtered_index < filtered_lines.len() {
+            let logical_line_index = filtered_lines[filtered_index];
+            let lines_for_this_logical = render_line(
+                stdout,
+                &ctx,
+                logical_line_index,
+                cursor_visual_line,
+                visual_lines_rendered,
+                content_lines - visual_lines_rendered,
+            )?;
+
+            visual_lines_rendered += lines_for_this_logical;
+            filtered_index += 1;
+        }
+    } else {
+        // Normal mode: render all lines
+        let mut logical_line_index = state.top_line;
+        
+        while visual_lines_rendered < content_lines && logical_line_index < lines.len() {
+            let lines_for_this_logical = render_line(
+                stdout,
+                &ctx,
+                logical_line_index,
+                cursor_visual_line,
+                visual_lines_rendered,
+                content_lines - visual_lines_rendered,
+            )?;
+
+            visual_lines_rendered += lines_for_this_logical;
+            logical_line_index += 1;
+        }
     }
 
     // Fill remaining content lines with empty lines
@@ -951,6 +998,90 @@ fn apply_cursor_shape(
     Ok(())
 }
 
+/// Calculate the Y position (row) for a cursor at the given absolute line
+/// Returns None if the line is not visible (scrolled off screen or filtered out)
+fn calculate_cursor_y_position(
+    state: &FileViewerState,
+    lines: &[String],
+    cursor_line_abs: usize,
+    text_width: u16,
+    tab_width: usize,
+    visible_lines: usize,
+) -> Option<u16> {
+    // Get filtered lines if filter mode is active
+    let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
+        let pattern = state.last_search_pattern.as_ref().unwrap();
+        crate::find::get_lines_with_matches(lines, pattern, state.find_scope)
+    } else {
+        Vec::new()
+    };
+
+    let wrapping_enabled = state.is_line_wrapping_enabled();
+    let mut cursor_y = 1u16; // Start at row 1 (after header)
+
+    if state.filter_active && !filtered_lines.is_empty() {
+        // Filter mode: check if cursor line is in filtered results
+        if !filtered_lines.contains(&cursor_line_abs) {
+            return None; // Cursor is on a line that's filtered out
+        }
+
+        // Calculate Y position by iterating through visible filtered lines
+        let mut filtered_index = 0;
+
+        // Find starting position in filtered lines based on top_line
+        while filtered_index < filtered_lines.len() && filtered_lines[filtered_index] < state.top_line {
+            filtered_index += 1;
+        }
+
+        // Iterate through visible filtered lines until we reach the cursor line
+        while filtered_index < filtered_lines.len() {
+            let logical_line = filtered_lines[filtered_index];
+
+            if logical_line == cursor_line_abs {
+                return Some(cursor_y); // Found the cursor line
+            }
+
+            if logical_line > cursor_line_abs {
+                return None; // Cursor line is above visible area
+            }
+
+            let wrapped_lines = if wrapping_enabled {
+                calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width)
+            } else {
+                1
+            };
+
+            cursor_y += wrapped_lines;
+
+            // Check if we've gone past the visible area
+            if cursor_y > visible_lines as u16 {
+                return None; // Cursor is below visible area
+            }
+
+            filtered_index += 1;
+        }
+
+        None // Cursor line not found in visible filtered lines
+    } else {
+        // Normal mode: check if cursor is in visible range
+        if cursor_line_abs < state.top_line || cursor_line_abs >= state.top_line + visible_lines {
+            return None; // Not visible
+        }
+
+        // Calculate Y position by iterating from top_line to cursor line
+        for i in state.top_line..cursor_line_abs {
+            let wrapped_lines = if wrapping_enabled {
+                calculate_wrapped_lines_for_line(lines, i, text_width, tab_width)
+            } else {
+                1
+            };
+            cursor_y += wrapped_lines;
+        }
+
+        Some(cursor_y)
+    }
+}
+
 fn position_cursor(
     stdout: &mut impl Write,
     lines: &[String],
@@ -1020,38 +1151,40 @@ fn position_cursor(
     {
         let tab_width = state.settings.tab_width;
         if target_line < lines.len() {
-            let mut cursor_y = 1u16;
-            let wrapping_enabled = state.is_line_wrapping_enabled();
-            for logical in state.top_line..target_line {
-                let wrapped_lines = if wrapping_enabled {
-                    calculate_wrapped_lines_for_line(lines, logical, text_width, tab_width)
-                } else {
-                    1  // No wrapping - each line is exactly 1 visual line
-                };
-                cursor_y += wrapped_lines;
-            }
-            let visual_col = visual_width_up_to(
-                &lines[target_line],
-                target_col.min(lines[target_line].len()),
+            // Calculate Y position for drag target, accounting for filtered lines
+            let cursor_y_opt = calculate_cursor_y_position(
+                state,
+                lines,
+                target_line,
+                text_width,
                 tab_width,
+                visible_lines,
             );
 
-            // Calculate position based on wrapping mode
-            let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
-                let wrapped_line = visual_col / (text_width as usize);
-                let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
-                (cursor_x, wrapped_line as u16)
-            } else {
-                // Horizontal scroll mode: apply horizontal offset
-                let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
-                (cursor_x, 0)
-            };
+            if let Some(mut cursor_y) = cursor_y_opt {
+                let visual_col = visual_width_up_to(
+                    &lines[target_line],
+                    target_col.min(lines[target_line].len()),
+                    tab_width,
+                );
 
-            cursor_y += wrapped_offset;
-            execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
-            apply_cursor_shape(stdout, state.settings)?;
-            execute!(stdout, cursor::Show)?;
-            return Ok(());
+                // Calculate position based on wrapping mode
+                let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
+                    let wrapped_line = visual_col / (text_width as usize);
+                    let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+                    (cursor_x, wrapped_line as u16)
+                } else {
+                    // Horizontal scroll mode: apply horizontal offset
+                    let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
+                    (cursor_x, 0)
+                };
+
+                cursor_y += wrapped_offset;
+                execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
+                apply_cursor_shape(stdout, state.settings)?;
+                execute!(stdout, cursor::Show)?;
+                return Ok(());
+            }
         }
     }
     if !state.is_cursor_visible(lines, visible_lines, text_width) {
@@ -1084,24 +1217,23 @@ fn position_cursor(
 
         // Draw blinking block cursor on ALL cursor lines (including main cursor)
         for &(cursor_line_abs, cursor_col) in &cursor_positions {
-            if cursor_line_abs < state.top_line || cursor_line_abs >= state.top_line + visible_lines {
-                continue; // Not visible
-            }
             if cursor_line_abs >= lines.len() {
                 continue;
             }
 
-            // Calculate Y position for this cursor
-            let mut cursor_y = 1u16;
-            let wrapping_enabled = state.is_line_wrapping_enabled();
-            for i in state.top_line..cursor_line_abs {
-                let wrapped_lines = if wrapping_enabled {
-                    calculate_wrapped_lines_for_line(lines, i, text_width, tab_width)
-                } else {
-                    1  // No wrapping - each line is exactly 1 visual line
-                };
-                cursor_y += wrapped_lines;
-            }
+            // Calculate Y position for this cursor, accounting for filtered lines
+            let cursor_y_opt = calculate_cursor_y_position(
+                state,
+                lines,
+                cursor_line_abs,
+                text_width,
+                tab_width,
+                visible_lines,
+            );
+
+            let Some(mut cursor_y) = cursor_y_opt else {
+                continue; // Cursor not visible (scrolled off or filtered out)
+            };
 
             // Calculate X position
             let line_len = lines[cursor_line_abs].chars().count();
@@ -1155,19 +1287,22 @@ fn position_cursor(
     }
 
     let tab_width = state.settings.tab_width;
-    let mut cursor_y = 1u16;
 
-    // Calculate Y position based on wrapping mode
-    let wrapping_enabled = state.is_line_wrapping_enabled();
-    for i in 0..state.cursor_line {
-        let wrapped_lines = if wrapping_enabled {
-            calculate_wrapped_lines_for_line(lines, state.top_line + i, text_width, tab_width)
-        } else {
-            1  // No wrapping - each line is exactly 1 visual line
-        };
-        cursor_y += wrapped_lines;
-    }
+    // Calculate Y position based on wrapping mode and filtered lines
     let cursor_line_idx = state.absolute_line();
+    let cursor_y_opt = calculate_cursor_y_position(
+        state,
+        lines,
+        cursor_line_idx,
+        text_width,
+        tab_width,
+        visible_lines,
+    );
+
+    let Some(mut cursor_y) = cursor_y_opt else {
+        return Ok(()); // Cursor not visible (scrolled off or filtered out)
+    };
+
     let visual_col = if cursor_line_idx < lines.len() {
         visual_width_up_to(&lines[cursor_line_idx], state.cursor_col, tab_width)
     } else {

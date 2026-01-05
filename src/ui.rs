@@ -662,6 +662,7 @@ fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bo
         state.find_scope = None;
         state.search_hit_count = 0;
         state.search_current_hit = 0;
+        state.filter_active = false; // Also clear filter mode
         state.needs_redraw = true;
         return true;
     }
@@ -673,6 +674,7 @@ fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bo
         state.find_error = None;
         state.search_hit_count = 0;
         state.search_current_hit = 0;
+        state.filter_active = false; // Also clear filter mode
         state.needs_redraw = true;
         return true;
     }

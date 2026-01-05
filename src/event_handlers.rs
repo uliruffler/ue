@@ -425,27 +425,45 @@ pub(crate) fn handle_key_event(
 
     // Handle find (Ctrl+F)
     if settings.keybindings.find_matches(&code, &modifiers) {
-        // Save current search pattern to restore on Esc
-        state.saved_search_pattern = state.last_search_pattern.clone();
+        // If find mode is already active with a search pattern, toggle filter mode
+        if state.find_active && !state.find_pattern.is_empty() {
+            // Don't toggle - let find mode handle it
+            // This will be handled in the find input handler
+        } else if !state.find_active && state.last_search_pattern.is_some() {
+            // If there's an active search but not in find mode, toggle filter
+            state.filter_active = !state.filter_active;
 
-        // If there's a selection, use it as the search scope
-        if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
-            // Normalize selection to ensure start < end
-            let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
-                (start, end)
-            } else {
-                (end, start)
-            };
-            state.find_scope = Some(normalized);
+            // When enabling filter mode, ensure cursor is on a visible line
+            if state.filter_active {
+                ensure_cursor_on_visible_line(state, lines);
+            }
+
+            state.needs_redraw = true;
+            return Ok((false, false));
         } else {
-            state.find_scope = None;
-        }
+            // Normal find mode entry
+            // Save current search pattern to restore on Esc
+            state.saved_search_pattern = state.last_search_pattern.clone();
 
-        state.find_active = true;
-        state.find_pattern.clear();
-        state.find_cursor_pos = 0;
-        state.find_error = None;
-        state.needs_redraw = true;
+            // If there's a selection, use it as the search scope
+            if let (Some(start), Some(end)) = (state.selection_start, state.selection_end) {
+                // Normalize selection to ensure start < end
+                let normalized = if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+                    (start, end)
+                } else {
+                    (end, start)
+                };
+                state.find_scope = Some(normalized);
+            } else {
+                state.find_scope = None;
+            }
+
+            state.find_active = true;
+            state.find_pattern.clear();
+            state.find_cursor_pos = 0;
+            state.find_error = None;
+            state.needs_redraw = true;
+        }
         return Ok((false, false));
     }
 
@@ -940,6 +958,60 @@ fn handle_viewport_scroll(
     false
 }
 
+/// Ensure cursor is positioned on a visible line when filter mode is active
+fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) {
+    if !state.filter_active || state.last_search_pattern.is_none() {
+        return;
+    }
+
+    let pattern = state.last_search_pattern.as_ref().unwrap();
+    let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+
+    if filtered_lines.is_empty() {
+        return;
+    }
+
+    let absolute_line = state.absolute_line();
+
+    // Check if current cursor position is on a visible line
+    if !filtered_lines.contains(&absolute_line) {
+        // Cursor is on a filtered-out line, move to nearest visible line
+        // Try to find the next visible line first, then previous if not found
+        if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
+            // Move to next visible line
+            if next_line_idx >= state.top_line {
+                state.cursor_line = next_line_idx - state.top_line;
+            } else {
+                state.top_line = next_line_idx;
+                state.cursor_line = 0;
+            }
+            // Adjust cursor column to be within the line
+            if let Some(line) = lines.get(next_line_idx) {
+                state.cursor_col = state.cursor_col.min(line.len());
+            }
+        } else if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
+            // Move to previous visible line
+            if prev_line_idx >= state.top_line {
+                state.cursor_line = prev_line_idx - state.top_line;
+            } else {
+                state.top_line = prev_line_idx;
+                state.cursor_line = 0;
+            }
+            // Adjust cursor column to be within the line
+            if let Some(line) = lines.get(prev_line_idx) {
+                state.cursor_col = state.cursor_col.min(line.len());
+            }
+        } else if let Some(&first_line_idx) = filtered_lines.first() {
+            // No visible lines around cursor, jump to first visible line
+            state.top_line = first_line_idx;
+            state.cursor_line = 0;
+            if let Some(line) = lines.get(first_line_idx) {
+                state.cursor_col = state.cursor_col.min(line.len());
+            }
+        }
+    }
+}
+
 /// Handle moving up through wrapped lines
 fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_lines: usize) {
     use crate::coordinates::visual_width_up_to;
@@ -964,16 +1036,41 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
 
     // If wrapping is disabled, just move to previous logical line
     if !state.is_line_wrapping_enabled() {
-        if state.cursor_line > 0 {
-            state.cursor_line -= 1;
-            // Try to restore desired column position
-            let prev_line = &lines[state.absolute_line()];
-            state.cursor_col = state.desired_cursor_col.min(prev_line.len());
-        } else if state.top_line > 0 {
-            state.top_line -= 1;
-            // Try to restore desired column position
-            let prev_line = &lines[state.absolute_line()];
-            state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+        // In filter mode, jump to previous visible line
+        if state.filter_active && state.last_search_pattern.is_some() {
+            let pattern = state.last_search_pattern.as_ref().unwrap();
+            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+
+            if !filtered_lines.is_empty() {
+                // Find the previous visible line before the current cursor position
+                if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
+                    // Calculate new cursor_line and top_line to position cursor on prev_line_idx
+                    if prev_line_idx >= state.top_line {
+                        // Target line is at or after top_line - just update cursor_line
+                        state.cursor_line = prev_line_idx - state.top_line;
+                    } else {
+                        // Target line is before top_line - scroll up to it
+                        state.top_line = prev_line_idx;
+                        state.cursor_line = 0;
+                    }
+                    // Try to restore desired column position
+                    let prev_line = &lines[prev_line_idx];
+                    state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                }
+            }
+        } else {
+            // Normal mode - standard cursor movement
+            if state.cursor_line > 0 {
+                state.cursor_line -= 1;
+                // Try to restore desired column position
+                let prev_line = &lines[state.absolute_line()];
+                state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+            } else if state.top_line > 0 {
+                state.top_line -= 1;
+                // Try to restore desired column position
+                let prev_line = &lines[state.absolute_line()];
+                state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+            }
         }
         return;
     }
@@ -989,25 +1086,50 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         state.cursor_col = visual_col_to_char_index(line, target_visual_col, tab_width);
     } else {
         // We're on the first wrapped line, move to previous logical line
-        if state.cursor_line > 0 {
-            state.cursor_line -= 1;
+        // In filter mode, jump to previous visible line
+        if state.filter_active && state.last_search_pattern.is_some() {
+            let pattern = state.last_search_pattern.as_ref().unwrap();
+            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
 
-            // Move to the previous logical line, trying to preserve desired column
-            let prev_absolute = state.absolute_line();
-            if prev_absolute < lines.len() {
-                let prev_line = &lines[prev_absolute];
-                // Use desired_cursor_col instead of calculating from visual_col
-                state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+            if !filtered_lines.is_empty() {
+                // Find the previous visible line before the current cursor position
+                if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
+                    // Calculate new cursor_line and top_line to position cursor on prev_line_idx
+                    if prev_line_idx >= state.top_line {
+                        // Target line is at or after top_line - just update cursor_line
+                        state.cursor_line = prev_line_idx - state.top_line;
+                    } else {
+                        // Target line is before top_line - scroll up to it
+                        state.top_line = prev_line_idx;
+                        state.cursor_line = 0;
+                    }
+                    // Try to restore desired column position
+                    let prev_line = &lines[prev_line_idx];
+                    state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                }
             }
-        } else if state.top_line > 0 {
-            // Scroll up
-            state.top_line -= 1;
+        } else {
+            // Normal mode - standard wrapped line navigation
+            if state.cursor_line > 0 {
+                state.cursor_line -= 1;
 
-            // Move to the new top line, trying to preserve desired column
-            let new_top_absolute = state.top_line;
-            if new_top_absolute < lines.len() {
-                let new_top_line = &lines[new_top_absolute];
-                state.cursor_col = state.desired_cursor_col.min(new_top_line.len());
+                // Move to the previous logical line, trying to preserve desired column
+                let prev_absolute = state.absolute_line();
+                if prev_absolute < lines.len() {
+                    let prev_line = &lines[prev_absolute];
+                    // Use desired_cursor_col instead of calculating from visual_col
+                    state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                }
+            } else if state.top_line > 0 {
+                // Scroll up
+                state.top_line -= 1;
+
+                // Move to the new top line, trying to preserve desired column
+                let new_top_absolute = state.top_line;
+                if new_top_absolute < lines.len() {
+                    let new_top_line = &lines[new_top_absolute];
+                    state.cursor_col = state.desired_cursor_col.min(new_top_line.len());
+                }
             }
         }
     }
@@ -1040,16 +1162,44 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
 
     // If wrapping is disabled, just move to next logical line
     if !state.is_line_wrapping_enabled() {
-        if absolute_line + 1 < lines.len() {
-            state.cursor_line += 1;
-            // Check if we need to scroll
-            if state.cursor_line >= effective_visible_lines {
-                state.top_line += 1;
-                state.cursor_line = effective_visible_lines - 1;
+        // In filter mode, jump to next visible line
+        if state.filter_active && state.last_search_pattern.is_some() {
+            let pattern = state.last_search_pattern.as_ref().unwrap();
+            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+
+            if !filtered_lines.is_empty() {
+                // Find the next visible line after the current cursor position
+                if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
+                    // Calculate new cursor_line and top_line to position cursor on next_line_idx
+                    let new_cursor_line = next_line_idx.saturating_sub(state.top_line);
+
+                    if new_cursor_line >= effective_visible_lines {
+                        // Need to scroll down to show the next line
+                        state.top_line = next_line_idx.saturating_sub(effective_visible_lines - 1);
+                        state.cursor_line = effective_visible_lines - 1;
+                    } else {
+                        // Can fit in current viewport
+                        state.cursor_line = new_cursor_line;
+                    }
+
+                    // Try to restore desired column position
+                    let next_line = &lines[next_line_idx];
+                    state.cursor_col = state.desired_cursor_col.min(next_line.len());
+                }
             }
-            // Try to restore desired column position
-            let next_line = &lines[state.absolute_line()];
-            state.cursor_col = state.desired_cursor_col.min(next_line.len());
+        } else {
+            // Normal mode - standard cursor movement
+            if absolute_line + 1 < lines.len() {
+                state.cursor_line += 1;
+                // Check if we need to scroll
+                if state.cursor_line >= effective_visible_lines {
+                    state.top_line += 1;
+                    state.cursor_line = effective_visible_lines - 1;
+                }
+                // Try to restore desired column position
+                let next_line = &lines[state.absolute_line()];
+                state.cursor_col = state.desired_cursor_col.min(next_line.len());
+            }
         }
         return;
     }
@@ -1068,34 +1218,62 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         state.cursor_col = visual_col_to_char_index(line, target_visual_col, tab_width);
     } else {
         // We're on the last wrapped line, move to next logical line
-        if absolute_line + 1 < lines.len() {
-            // Check if we would go off-screen by moving cursor_line down
-            // Calculate visual lines from top_line to cursor_line + 1
-            let would_be_cursor_line = state.cursor_line + 1;
-            let saved_cursor_line = state.cursor_line;
-            state.cursor_line = would_be_cursor_line;
+        // In filter mode, jump to next visible line
+        if state.filter_active && state.last_search_pattern.is_some() {
+            let pattern = state.last_search_pattern.as_ref().unwrap();
+            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
 
-            let visual_lines_consumed =
-                calculate_visual_lines_to_cursor(lines, state, text_width as u16);
+            if !filtered_lines.is_empty() {
+                // Find the next visible line after the current cursor position
+                if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
+                    // Calculate new cursor_line and top_line to position cursor on next_line_idx
+                    let new_cursor_line = next_line_idx.saturating_sub(state.top_line);
 
-            let would_be_offscreen = visual_lines_consumed > effective_visible_lines;
-            state.cursor_line = saved_cursor_line; // Restore for now
+                    if new_cursor_line >= effective_visible_lines {
+                        // Need to scroll down to show the next line
+                        state.top_line = next_line_idx.saturating_sub(effective_visible_lines - 1);
+                        state.cursor_line = effective_visible_lines - 1;
+                    } else {
+                        // Can fit in current viewport
+                        state.cursor_line = new_cursor_line;
+                    }
 
-            if would_be_offscreen {
-                // Need to scroll instead of moving cursor
-                state.top_line += 1;
-                // cursor_line stays the same (we scroll the content, not the cursor position)
-            } else {
-                // Can move cursor without scrolling
-                state.cursor_line += 1;
+                    // Try to restore desired column position
+                    let next_line = &lines[next_line_idx];
+                    state.cursor_col = state.desired_cursor_col.min(next_line.len());
+                }
             }
+        } else {
+            // Normal mode - standard wrapped line navigation
+            if absolute_line + 1 < lines.len() {
+                // Check if we would go off-screen by moving cursor_line down
+                // Calculate visual lines from top_line to cursor_line + 1
+                let would_be_cursor_line = state.cursor_line + 1;
+                let saved_cursor_line = state.cursor_line;
+                state.cursor_line = would_be_cursor_line;
 
-            // Move to the next logical line, trying to preserve desired column
-            let next_absolute = state.absolute_line();
-            if next_absolute < lines.len() {
-                let next_line = &lines[next_absolute];
-                // Use desired_cursor_col instead of visual_col % text_width
-                state.cursor_col = state.desired_cursor_col.min(next_line.len());
+                let visual_lines_consumed =
+                    calculate_visual_lines_to_cursor(lines, state, text_width as u16);
+
+                let would_be_offscreen = visual_lines_consumed > effective_visible_lines;
+                state.cursor_line = saved_cursor_line; // Restore for now
+
+                if would_be_offscreen {
+                    // Need to scroll instead of moving cursor
+                    state.top_line += 1;
+                    // cursor_line stays the same (we scroll the content, not the cursor position)
+                } else {
+                    // Can move cursor without scrolling
+                    state.cursor_line += 1;
+                }
+
+                // Move to the next logical line, trying to preserve desired column
+                let next_absolute = state.absolute_line();
+                if next_absolute < lines.len() {
+                    let next_line = &lines[next_absolute];
+                    // Use desired_cursor_col instead of visual_col % text_width
+                    state.cursor_col = state.desired_cursor_col.min(next_line.len());
+                }
             }
         }
     }

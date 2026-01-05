@@ -186,39 +186,91 @@ pub(crate) fn visual_to_logical_position(
 
     let text_col = (column - line_num_width) as usize;
 
+    // Get filtered lines if filter mode is active
+    let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
+        let pattern = state.last_search_pattern.as_ref().unwrap();
+        crate::find::get_lines_with_matches(lines, pattern, state.find_scope)
+    } else {
+        Vec::new()
+    };
+
     // Find which logical line this visual line corresponds to
     let mut current_visual_line = 0;
-    let mut logical_line = state.top_line;
-
-    while logical_line < lines.len() {
-        let wrapping_enabled = state.is_line_wrapping_enabled();
-        let wrapped_lines = if wrapping_enabled {
-            calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width) as usize
-        } else {
-            1  // No wrapping - each line is exactly 1 visual line
-        };
-
-        if current_visual_line + wrapped_lines > visual_line {
-            // This is the logical line we're looking for
-            let line_offset = visual_line - current_visual_line;
-
-            // Calculate visual column in line, accounting for horizontal scroll
-            let visual_col_in_line = if wrapping_enabled {
-                // Wrapped mode: calculate based on which wrapped segment we're on
-                line_offset * (text_width as usize) + text_col
+    
+    if state.filter_active && !filtered_lines.is_empty() {
+        // Filter mode: iterate through filtered lines only
+        let mut filtered_index = 0;
+        
+        // Find starting position in filtered lines based on top_line
+        while filtered_index < filtered_lines.len() && filtered_lines[filtered_index] < state.top_line {
+            filtered_index += 1;
+        }
+        
+        while filtered_index < filtered_lines.len() {
+            let logical_line = filtered_lines[filtered_index];
+            let wrapping_enabled = state.is_line_wrapping_enabled();
+            let wrapped_lines = if wrapping_enabled {
+                calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width) as usize
             } else {
-                // Horizontal scroll mode: add scroll offset to screen column
-                state.horizontal_scroll_offset + text_col
+                1  // No wrapping - each line is exactly 1 visual line
             };
 
-            // Convert visual column to character index considering tabs
-            let line = &lines[logical_line];
-            let col_in_line = visual_col_to_char_index(line, visual_col_in_line, tab_width);
-            return Some((logical_line, col_in_line));
-        }
+            if current_visual_line + wrapped_lines > visual_line {
+                // This is the logical line we're looking for
+                let line_offset = visual_line - current_visual_line;
 
-        current_visual_line += wrapped_lines;
-        logical_line += 1;
+                // Calculate visual column in line, accounting for horizontal scroll
+                let visual_col_in_line = if wrapping_enabled {
+                    // Wrapped mode: calculate based on which wrapped segment we're on
+                    line_offset * (text_width as usize) + text_col
+                } else {
+                    // Horizontal scroll mode: add scroll offset to screen column
+                    state.horizontal_scroll_offset + text_col
+                };
+
+                // Convert visual column to character index considering tabs
+                let line = &lines[logical_line];
+                let col_in_line = visual_col_to_char_index(line, visual_col_in_line, tab_width);
+                return Some((logical_line, col_in_line));
+            }
+
+            current_visual_line += wrapped_lines;
+            filtered_index += 1;
+        }
+    } else {
+        // Normal mode: iterate through all lines
+        let mut logical_line = state.top_line;
+
+        while logical_line < lines.len() {
+            let wrapping_enabled = state.is_line_wrapping_enabled();
+            let wrapped_lines = if wrapping_enabled {
+                calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width) as usize
+            } else {
+                1  // No wrapping - each line is exactly 1 visual line
+            };
+
+            if current_visual_line + wrapped_lines > visual_line {
+                // This is the logical line we're looking for
+                let line_offset = visual_line - current_visual_line;
+
+                // Calculate visual column in line, accounting for horizontal scroll
+                let visual_col_in_line = if wrapping_enabled {
+                    // Wrapped mode: calculate based on which wrapped segment we're on
+                    line_offset * (text_width as usize) + text_col
+                } else {
+                    // Horizontal scroll mode: add scroll offset to screen column
+                    state.horizontal_scroll_offset + text_col
+                };
+
+                // Convert visual column to character index considering tabs
+                let line = &lines[logical_line];
+                let col_in_line = visual_col_to_char_index(line, visual_col_in_line, tab_width);
+                return Some((logical_line, col_in_line));
+            }
+
+            current_visual_line += wrapped_lines;
+            logical_line += 1;
+        }
     }
 
     None
@@ -553,6 +605,7 @@ mod tests {
             drag_target: None,
             last_save_time: None,
             find_active: false,
+            filter_active: false,
             find_pattern: String::new(),
             find_cursor_pos: 0,
             find_selection: None,
