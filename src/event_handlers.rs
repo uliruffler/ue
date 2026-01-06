@@ -1103,9 +1103,29 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
                         state.top_line = prev_line_idx;
                         state.cursor_line = 0;
                     }
-                    // Try to restore desired column position
+
+                    // Position cursor on the LAST wrapped line of the previous line
                     let prev_line = &lines[prev_line_idx];
-                    state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                    let num_wrapped = calculate_wrapped_lines_for_line(
+                        lines,
+                        prev_line_idx,
+                        text_width as u16,
+                        tab_width
+                    ) as usize;
+
+                    let target_wrap_line = num_wrapped.saturating_sub(1);
+                    let base_visual_col = target_wrap_line * text_width;
+
+                    let desired_col = state.desired_cursor_col.min(prev_line.len());
+                    let desired_visual_col = visual_width_up_to(prev_line, desired_col, tab_width);
+
+                    let target_visual_col = if desired_visual_col >= base_visual_col {
+                        desired_visual_col
+                    } else {
+                        base_visual_col + (desired_visual_col % text_width)
+                    };
+
+                    state.cursor_col = visual_col_to_char_index(prev_line, target_visual_col, tab_width);
                 }
             }
         } else {
@@ -1287,9 +1307,10 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                         state.cursor_line = new_cursor_line;
                     }
 
-                    // Try to restore desired column position
+                    // Position cursor on the FIRST wrapped line with correct column offset
                     let next_line = &lines[next_line_idx];
-                    state.cursor_col = state.desired_cursor_col.min(next_line.len());
+                    let desired_offset = state.desired_cursor_col % text_width;
+                    state.cursor_col = desired_offset.min(next_line.len());
                 }
             }
         } else {
