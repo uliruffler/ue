@@ -18,7 +18,7 @@ pub fn visual_width(s: &str, tab_width: usize) -> usize {
 }
 
 /// Calculate visual width up to a given character index in a string
-pub(crate) fn visual_width_up_to(s: &str, char_index: usize, tab_width: usize) -> usize {
+pub fn visual_width_up_to(s: &str, char_index: usize, tab_width: usize) -> usize {
     let mut width = 0;
     for (i, ch) in s.chars().enumerate() {
         if i >= char_index {
@@ -63,7 +63,7 @@ pub(crate) fn line_number_display_width(settings: &Settings, total_lines: usize)
     }
 }
 
-pub(crate) fn calculate_wrapped_lines_for_line(
+pub fn calculate_wrapped_lines_for_line(
     lines: &[String],
     line_index: usize,
     text_width: u16,

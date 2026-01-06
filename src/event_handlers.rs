@@ -1014,7 +1014,7 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
 
 /// Handle moving up through wrapped lines
 fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_lines: usize) {
-    use crate::coordinates::visual_width_up_to;
+    use crate::coordinates::{visual_width_up_to, calculate_wrapped_lines_for_line};
 
     // Initialize desired_cursor_col from cursor_col if this is the first vertical movement
     if state.desired_cursor_col == 0 && state.cursor_col > 0 {
@@ -1113,22 +1113,71 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
             if state.cursor_line > 0 {
                 state.cursor_line -= 1;
 
-                // Move to the previous logical line, trying to preserve desired column
+                // Move to the previous logical line
                 let prev_absolute = state.absolute_line();
                 if prev_absolute < lines.len() {
                     let prev_line = &lines[prev_absolute];
-                    // Use desired_cursor_col instead of calculating from visual_col
-                    state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+
+                    // Position cursor on the LAST wrapped line of the previous logical line
+                    // Calculate how many wrapped lines the previous line has
+                    let num_wrapped = calculate_wrapped_lines_for_line(
+                        lines,
+                        prev_absolute,
+                        text_width as u16,
+                        tab_width
+                    ) as usize;
+
+                    // Calculate the target visual column for the last wrapped line
+                    // We want to be on wrap line (num_wrapped - 1) at the desired column
+                    let target_wrap_line = num_wrapped.saturating_sub(1);
+                    let base_visual_col = target_wrap_line * text_width;
+
+                    // Add the desired cursor column (clamped to line length)
+                    let desired_col = state.desired_cursor_col.min(prev_line.len());
+                    let desired_visual_col = visual_width_up_to(prev_line, desired_col, tab_width);
+
+                    // If the desired visual column would be on the target wrap line, use it
+                    // Otherwise, place cursor at the beginning of the target wrap line plus offset
+                    let target_visual_col = if desired_visual_col >= base_visual_col {
+                        desired_visual_col
+                    } else {
+                        // Desired column is earlier in the line, so position at the same
+                        // relative offset within the last wrapped line
+                        base_visual_col + (desired_visual_col % text_width)
+                    };
+
+                    state.cursor_col = visual_col_to_char_index(prev_line, target_visual_col, tab_width);
                 }
             } else if state.top_line > 0 {
                 // Scroll up
                 state.top_line -= 1;
 
-                // Move to the new top line, trying to preserve desired column
+                // Move to the new top line
                 let new_top_absolute = state.top_line;
                 if new_top_absolute < lines.len() {
                     let new_top_line = &lines[new_top_absolute];
-                    state.cursor_col = state.desired_cursor_col.min(new_top_line.len());
+
+                    // Position cursor on the LAST wrapped line of the top line
+                    let num_wrapped = calculate_wrapped_lines_for_line(
+                        lines,
+                        new_top_absolute,
+                        text_width as u16,
+                        tab_width
+                    ) as usize;
+
+                    let target_wrap_line = num_wrapped.saturating_sub(1);
+                    let base_visual_col = target_wrap_line * text_width;
+
+                    let desired_col = state.desired_cursor_col.min(new_top_line.len());
+                    let desired_visual_col = visual_width_up_to(new_top_line, desired_col, tab_width);
+
+                    let target_visual_col = if desired_visual_col >= base_visual_col {
+                        desired_visual_col
+                    } else {
+                        base_visual_col + (desired_visual_col % text_width)
+                    };
+
+                    state.cursor_col = visual_col_to_char_index(new_top_line, target_visual_col, tab_width);
                 }
             }
         }
@@ -1138,7 +1187,7 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
 /// Handle moving down through wrapped lines
 fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible_lines: usize) {
     use crate::coordinates::{
-        calculate_visual_lines_to_cursor, calculate_wrapped_lines_for_line, visual_width_up_to,
+        calculate_wrapped_lines_for_line, visual_width_up_to,
     };
 
     // Initialize desired_cursor_col from cursor_col if this is the first vertical movement
@@ -1247,16 +1296,24 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
             // Normal mode - standard wrapped line navigation
             if absolute_line + 1 < lines.len() {
                 // Check if we would go off-screen by moving cursor_line down
-                // Calculate visual lines from top_line to cursor_line + 1
-                let would_be_cursor_line = state.cursor_line + 1;
-                let saved_cursor_line = state.cursor_line;
-                state.cursor_line = would_be_cursor_line;
+                // We need to check if adding ONE more visual line would fit
+                // (the first wrap of the next logical line)
 
-                let visual_lines_consumed =
-                    calculate_visual_lines_to_cursor(lines, state, text_width as u16);
+                // Calculate visual lines from top_line up to current cursor_line
+                let mut visual_lines_consumed = 0;
+                for i in state.top_line..=absolute_line {
+                    visual_lines_consumed += calculate_wrapped_lines_for_line(
+                        lines,
+                        i,
+                        text_width as u16,
+                        tab_width
+                    ) as usize;
+                }
+
+                // Add 1 for the first wrap of the next line
+                visual_lines_consumed += 1;
 
                 let would_be_offscreen = visual_lines_consumed > effective_visible_lines;
-                state.cursor_line = saved_cursor_line; // Restore for now
 
                 if would_be_offscreen {
                     // Need to scroll instead of moving cursor
@@ -1267,12 +1324,17 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                     state.cursor_line += 1;
                 }
 
-                // Move to the next logical line, trying to preserve desired column
+                // Move to the next logical line, positioning on the FIRST wrap
                 let next_absolute = state.absolute_line();
                 if next_absolute < lines.len() {
                     let next_line = &lines[next_absolute];
-                    // Use desired_cursor_col instead of visual_col % text_width
-                    state.cursor_col = state.desired_cursor_col.min(next_line.len());
+
+                    // Calculate the column offset within the wrap (not the absolute column)
+                    // This ensures we land on the first wrap of the next line
+                    let desired_offset = state.desired_cursor_col % text_width;
+
+                    // Clamp to line length
+                    state.cursor_col = desired_offset.min(next_line.len());
                 }
             }
         }
