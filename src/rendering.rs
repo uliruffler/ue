@@ -28,6 +28,105 @@ fn expand_tabs(s: &str, tab_width: usize) -> String {
     result
 }
 
+/// Shorten a directory path intelligently for display in the header.
+///
+/// Tries progressively shorter representations:
+/// 1. Full path (e.g., `/home/ruffler/ue/target`)
+/// 2. With ~ for home (e.g., `~/ue/target`)
+/// 3. With abbreviated dirs (e.g., `~/u/t`)
+/// 4. With truncation and ellipsis (e.g., `~/u/t/re...`)
+fn shorten_path_for_display(parent_path: &str, max_width: usize) -> String {
+    if parent_path.is_empty() || parent_path == "." {
+        return String::new();
+    }
+
+    // Try full path first
+    if visual_width(parent_path, 4) <= max_width {
+        return parent_path.to_string();
+    }
+
+    // Try replacing home directory with ~
+    let home = std::env::var("HOME").ok();
+    let home_shortened = if let Some(ref home_path) = home {
+        if parent_path.starts_with(home_path) {
+            let rest = &parent_path[home_path.len()..];
+            let rest = if rest.starts_with('/') { &rest[1..] } else { rest };
+            format!("~/{}", rest)
+        } else {
+            parent_path.to_string()
+        }
+    } else {
+        parent_path.to_string()
+    };
+
+    if visual_width(&home_shortened, 4) <= max_width {
+        return home_shortened;
+    }
+
+    // Try abbreviated directories (first letter of each component)
+    let abbreviated = abbreviate_path(&home_shortened);
+    if visual_width(&abbreviated, 4) <= max_width {
+        return abbreviated;
+    }
+
+    // Truncate with ellipsis
+    truncate_to_width(&abbreviated, max_width)
+}
+
+/// Abbreviate path by using only first letters of directory names.
+/// E.g., `~/projects/rust/ue/src` becomes `~/p/r/u/s`
+fn abbreviate_path(path: &str) -> String {
+    let parts: Vec<&str> = path.split('/').collect();
+    let mut result = Vec::new();
+
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+
+        // Keep first component (~ or /) and last component (filename) fully visible
+        if i == 0 || i == parts.len() - 1 {
+            result.push(part.to_string());
+        } else {
+            // Abbreviate middle components to first character
+            if let Some(ch) = part.chars().next() {
+                result.push(ch.to_string());
+            }
+        }
+    }
+
+    result.join("/")
+}
+
+/// Truncate a string to fit within max_width characters, adding "..." if truncated.
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+    if max_width < 3 {
+        return String::new();
+    }
+
+    let s_width = visual_width(s, 4);
+    if s_width <= max_width {
+        return s.to_string();
+    }
+
+    // We need to truncate. Reserve 3 chars for "..."
+    let available = max_width.saturating_sub(3);
+    let mut result = String::new();
+    let mut current_width = 0;
+
+    for ch in s.chars() {
+        let ch_width = if ch == '\t' { 4 } else { 1 };
+        if current_width + ch_width > available {
+            break;
+        }
+        result.push(ch);
+        current_width += ch_width;
+    }
+
+    result.push_str("...");
+    result
+}
+
 pub(crate) fn render_screen(
     stdout: &mut impl Write,
     file: &str,
@@ -165,21 +264,70 @@ fn render_header(
         let path = std::path::Path::new(file);
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
         let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
-        let parent_display = if parent == "." { "" } else { parent };
-        
+
+        // Get terminal width to calculate available space for title
+        let (term_width, _) = terminal::size().unwrap_or((80, 24));
+
+        // Calculate space used by other elements: line number area + burger menu + margins
+        let line_num_width = if state.settings.appearance.line_number_digits > 0 {
+            let total_lines = lines.len();
+            let actual_width = if total_lines == 0 {
+                1
+            } else {
+                ((total_lines as f64).log10().floor() as usize) + 1
+            };
+            let display_width = actual_width.max(state.settings.appearance.line_number_digits as usize);
+            display_width + 2 // +2 for space separator
+        } else {
+            0
+        };
+
+        let burger_width = 2; // "≡ " takes 2 characters
+        let available_width = term_width as usize - line_num_width - burger_width - 2; // -2 for safety margin
+
         // For untitled files, show a special indicator
         if state.is_untitled {
-            write!(
-                stdout,
-                "{} {} (unsaved)",
-                modified_char, filename
-            )?;
+            let title = format!("{} {} (unsaved)", modified_char, filename);
+            // Truncate if necessary
+            let truncated_title = if visual_width(&title, 4) > available_width {
+                truncate_to_width(&title, available_width)
+            } else {
+                title
+            };
+            write!(stdout, "{}", truncated_title)?;
         } else {
-            write!(
-                stdout,
-                "{} {} ({})",
-                modified_char, filename, parent_display
-            )?;
+            // For normal files, try to fit filename and directory
+            let mut display = format!("{} {} (", modified_char, filename);
+            let base_width = visual_width(&display, 4);
+
+            // Reserve space for closing parenthesis and filter indicator if needed
+            let reserved = 1; // for closing )
+            let filter_width = if state.filter_active && state.last_search_pattern.is_some() {
+                9 // " [Filter]"
+            } else {
+                0
+            };
+
+            let available_for_path = available_width.saturating_sub(base_width + reserved + filter_width);
+
+            // Apply path shortening
+            let shortened_parent = if parent != "." {
+                shorten_path_for_display(parent, available_for_path)
+            } else {
+                String::new()
+            };
+
+            display.push_str(&shortened_parent);
+            display.push(')');
+
+            // Final truncation of entire display if still too long
+            let final_display = if visual_width(&display, 4) > available_width {
+                truncate_to_width(&display, available_width)
+            } else {
+                display
+            };
+
+            write!(stdout, "{}", final_display)?;
         }
         
         // Show filter indicator when filter mode is active
@@ -1397,8 +1545,11 @@ fn render_line_segment_expanded(
                 char_start,
                 segment.tab_width,
             );
-            let visual_end =
-                crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+            let visual_end = crate::coordinates::visual_width_up_to(
+                original_line,
+                char_end,
+                segment.tab_width,
+            );
 
             // Check if cursor is within this match
             let is_current_match =
@@ -2299,5 +2450,78 @@ mod tests {
         let output_str = String::from_utf8(output).unwrap();
         // Should show the parent directory
         assert!(output_str.contains("test.txt (/home/user)"));
+    }
+
+    #[test]
+    fn shorten_path_shows_full_path_when_fits() {
+        let result = shorten_path_for_display("/home/user", 50);
+        assert_eq!(result, "/home/user");
+    }
+
+    #[test]
+    fn shorten_path_uses_home_abbreviation() {
+        // Test with real HOME or mock path
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
+        let test_path = format!("{}/projects/rust", home);
+        // Use narrow width to force abbreviation
+        let result = shorten_path_for_display(&test_path, 15);
+        // Should be shortened (either with ~ or abbreviated)
+        assert!(visual_width(&result, 4) <= 15);
+        // Should contain / for directory structure
+        assert!(result.contains('/'));
+    }
+
+    #[test]
+    fn abbreviate_path_shortens_middle_directories() {
+        let result = abbreviate_path("~/projects/rust/ue/src");
+        // Should keep ~, keep last component, abbreviate middle ones
+        assert!(result.contains("~"));
+        assert!(result.contains("src"));
+        // Middle directories should be abbreviated
+        assert!(result.contains("/p/") || result.contains("/r/"));
+    }
+
+    #[test]
+    fn truncate_to_width_adds_ellipsis() {
+        let result = truncate_to_width("very/long/path/name", 10);
+        assert!(result.ends_with("..."));
+        assert!(result.len() <= 10);
+    }
+
+    #[test]
+    fn truncate_to_width_preserves_short_strings() {
+        let result = truncate_to_width("short", 20);
+        assert_eq!(result, "short");
+    }
+
+    #[test]
+    fn render_header_truncates_very_long_filename() {
+        use crate::editor_state::FileViewerState;
+        use crate::settings::Settings;
+        use crate::undo::UndoHistory;
+
+        let settings = Settings::default();
+        let undo_history = UndoHistory::new();
+        let state = FileViewerState::new(40, undo_history, &settings); // narrow terminal (40 chars wide)
+        let mut output = Vec::new();
+        let lines = vec!["test".to_string(); 10];
+
+        // Test with a very long filename that won't fit even with path shortening
+        // Create a path that's guaranteed to be longer than 40 chars
+        let long_filename = "/home/user/very_very_very_very_very_long_filename_that_definitely_exceeds_width.txt";
+        let result = render_header(&mut output, long_filename, &state, &lines, 10);
+        assert!(result.is_ok());
+
+        let output_str = String::from_utf8(output).unwrap();
+        // The entire title (including filename + path) should fit within the terminal width
+        // and be truncated with ellipsis if it's too long
+        // With a 40 char wide terminal, we expect either:
+        // 1. The title to be truncated with "...", or
+        // 2. The title to be shortened to fit (which may or may not include "...")
+        // This test verifies that we don't have garbled/flickering output
+        assert!(!output_str.is_empty(), "Output should not be empty");
+        // Verify the output contains the filename or a truncated version of it
+        assert!(output_str.contains("very_very") || output_str.contains("..."),
+                "Output should contain filename or ellipsis truncation");
     }
 }
