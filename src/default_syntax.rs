@@ -31,24 +31,21 @@ fn get_default_syntax(extension: &str) -> Option<&'static str> {
         "js" => Some(SYNTAX_JS),
         "ts" => Some(SYNTAX_TS),
         "c" => Some(SYNTAX_C),
-        "cpp" | "cc" | "cxx" | "hpp" | "hxx" => Some(SYNTAX_CPP),
-        "h" => Some(SYNTAX_C), // .h files default to C (user can override with cpp version)
+        "cpp" => Some(SYNTAX_CPP),
         "go" => Some(SYNTAX_GO),
         "java" => Some(SYNTAX_JAVA),
-        "sh" | "bash" | "zsh" => Some(SYNTAX_SH),
-        "html" | "htm" => Some(SYNTAX_HTML),
+        "sh" => Some(SYNTAX_SH),
+        "html" => Some(SYNTAX_HTML),
         "css" => Some(SYNTAX_CSS),
-        "md" | "markdown" => Some(SYNTAX_MD),
+        "md" => Some(SYNTAX_MD),
         "json" => Some(SYNTAX_JSON),
         "xml" => Some(SYNTAX_XML),
         "toml" => Some(SYNTAX_TOML),
-        "yaml" | "yml" => Some(SYNTAX_YAML),
+        "yaml" => Some(SYNTAX_YAML),
         "sql" => Some(SYNTAX_SQL),
         "txt" => Some(SYNTAX_TXT),
         "ue-syntax" => Some(SYNTAX_UE_SYNTAX),
         "cs" => Some(SYNTAX_CS),
-        // Map project/solution files to XML highlighting
-        "csproj" | "sln" => Some(SYNTAX_XML),
         _ => None,
     }
 }
@@ -62,7 +59,7 @@ pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
     // Create directory if it doesn't exist
     fs::create_dir_all(&syntax_dir)?;
 
-    // List of all syntax files to deploy (extension, content)
+    // List of all canonical syntax files to deploy (extension, content)
     let syntax_files = [
         ("rs", SYNTAX_RS),
         ("py", SYNTAX_PY),
@@ -80,17 +77,13 @@ pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
         ("xml", SYNTAX_XML),
         ("toml", SYNTAX_TOML),
         ("yaml", SYNTAX_YAML),
-        ("yml", SYNTAX_YAML), // yml uses same as yaml
         ("sql", SYNTAX_SQL),
         ("txt", SYNTAX_TXT),
         ("ue-syntax", SYNTAX_UE_SYNTAX),
         ("cs", SYNTAX_CS),
-        // Project/solution files use XML syntax
-        ("csproj", SYNTAX_XML),
-        ("sln", SYNTAX_XML),
     ];
 
-    // Deploy each file if it doesn't exist
+    // Deploy each canonical file if it doesn't exist
     for (ext, content) in syntax_files {
         let file_path = syntax_dir.join(format!("{}.ue-syntax", ext));
 
@@ -100,7 +93,50 @@ pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    // Create symlinks for alias extensions (fall back to copy if symlink unsupported)
+    let alias_targets = [
+        ("cc", "cpp"),
+        ("cxx", "cpp"),
+        ("hpp", "cpp"),
+        ("hxx", "cpp"),
+        ("h", "c"),
+        ("bash", "sh"),
+        ("zsh", "sh"),
+        ("htm", "html"),
+        ("markdown", "md"),
+        ("yml", "yaml"),
+        ("csproj", "xml"),
+        ("sln", "xml"),
+    ];
+
+    for (alias, target) in alias_targets {
+        let _ = create_symlink_if_missing(&syntax_dir, alias, target);
+    }
+
     Ok(())
+}
+
+fn create_symlink_if_missing(
+    syntax_dir: &std::path::Path,
+    link_ext: &str,
+    target_ext: &str,
+) -> std::io::Result<()> {
+    let link_path = syntax_dir.join(format!("{}.ue-syntax", link_ext));
+    if link_path.exists() {
+        return Ok(());
+    }
+
+    let target_path = syntax_dir.join(format!("{}.ue-syntax", target_ext));
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target_path, &link_path)
+            .or_else(|_| std::fs::copy(&target_path, &link_path).map(|_| ()))
+    }
+    #[cfg(windows)]
+    {
+        std::os::windows::fs::symlink_file(&target_path, &link_path)
+            .or_else(|_| std::fs::copy(&target_path, &link_path).map(|_| ()))
+    }
 }
 
 /// Get syntax file content for a given extension.
@@ -138,7 +174,5 @@ mod tests {
     #[test]
     fn test_cpp_aliases() {
         assert!(get_default_syntax("cpp").is_some());
-        assert!(get_default_syntax("hpp").is_some());
-        assert!(get_default_syntax("h").is_some());
     }
 }
