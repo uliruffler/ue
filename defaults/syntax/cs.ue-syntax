@@ -1,0 +1,33 @@
+# C# syntax highlighting
+# Format: priority|color|regex
+
+# Comments
+10|dark_green|//.*$
+10|dark_green|/\*[\s\S]*?\*/
+
+# Strings (verbatim @"" and regular "")
+9|green|@"(?:"")*"  # verbatim strings allowing doubled quotes
+9|green|"(?:[^"\\]|\\.)*"
+9|green|\$(?:@)?"(?:[^"\\]|\\.)*"  # interpolated strings
+
+# Char literals
+8|green|'(?:[^'\\]|\\.)'
+
+# Numbers
+8|cyan|\b(?:0x[0-9A-Fa-f_]+|0b[01_]+|[0-9][0-9_]*(?:\.[0-9_]+)?(?:[eE][+-]?[0-9_]+)?)[uUlLfFdDmM]*\b
+
+# Keywords
+7|blue|\b(?:abstract|as|base|bool|break|byte|case|catch|char|checked|class|const|continue|decimal|default|delegate|do|double|else|enum|event|explicit|extern|false|finally|fixed|float|for|foreach|goto|if|implicit|in|int|interface|internal|is|lock|long|namespace|new|null|object|operator|out|override|params|private|protected|public|readonly|ref|return|sbyte|sealed|short|sizeof|stackalloc|static|string|struct|switch|this|throw|true|try|typeof|uint|ulong|unchecked|unsafe|ushort|using|virtual|void|volatile|while|var|dynamic|async|await|record|required|nint|nuint|when|with|yield)\b
+
+# Types (PascalCase identifiers)
+6|yellow|\b[A-Z][A-Za-z0-9_]*\b
+
+# Attributes
+5|dark_magenta|\[[A-Za-z_][A-Za-z0-9_.]*\]
+
+# Preprocessor directives
+5|dark_cyan|^\s*#(?:if|else|elif|endif|define|undef|warning|error|line|pragma|region|endregion)\b
+
+# Interpolation holes inside $ strings: { ... }
+4|magenta|\{[^{}]*\}
+

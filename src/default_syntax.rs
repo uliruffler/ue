@@ -21,6 +21,7 @@ const SYNTAX_YAML: &str = include_str!("../defaults/syntax/yaml.ue-syntax");
 const SYNTAX_SQL: &str = include_str!("../defaults/syntax/sql.ue-syntax");
 const SYNTAX_TXT: &str = include_str!("../defaults/syntax/txt.ue-syntax");
 const SYNTAX_UE_SYNTAX: &str = include_str!("../defaults/syntax/ue-syntax.ue-syntax");
+const SYNTAX_CS: &str = include_str!("../defaults/syntax/cs.ue-syntax");
 
 /// Get embedded default syntax content for a given extension
 fn get_default_syntax(extension: &str) -> Option<&'static str> {
@@ -45,6 +46,9 @@ fn get_default_syntax(extension: &str) -> Option<&'static str> {
         "sql" => Some(SYNTAX_SQL),
         "txt" => Some(SYNTAX_TXT),
         "ue-syntax" => Some(SYNTAX_UE_SYNTAX),
+        "cs" => Some(SYNTAX_CS),
+        // Map project/solution files to XML highlighting
+        "csproj" | "sln" => Some(SYNTAX_XML),
         _ => None,
     }
 }
@@ -80,6 +84,10 @@ pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
         ("sql", SYNTAX_SQL),
         ("txt", SYNTAX_TXT),
         ("ue-syntax", SYNTAX_UE_SYNTAX),
+        ("cs", SYNTAX_CS),
+        // Project/solution files use XML syntax
+        ("csproj", SYNTAX_XML),
+        ("sln", SYNTAX_XML),
     ];
 
     // Deploy each file if it doesn't exist
