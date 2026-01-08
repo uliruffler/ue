@@ -299,6 +299,7 @@ pub(crate) fn handle_key_event(
         }
     }
 
+
     // Ctrl+Arrow custom handling: word-wise (Left/Right) and paragraph-wise (Up/Down)
     if modifiers.contains(KeyModifiers::CONTROL) {
         let extend = modifiers.contains(KeyModifiers::SHIFT);
@@ -965,7 +966,13 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
     }
 
     let pattern = state.last_search_pattern.as_ref().unwrap();
-    let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+    let filtered_lines = crate::find::get_lines_with_matches_and_context(
+        lines,
+        pattern,
+        state.find_scope,
+        state.filter_context_before,
+        state.filter_context_after,
+    );
 
     if filtered_lines.is_empty() {
         return;
@@ -1039,7 +1046,13 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         // In filter mode, jump to previous visible line
         if state.filter_active && state.last_search_pattern.is_some() {
             let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+            let filtered_lines = crate::find::get_lines_with_matches_and_context(
+                lines,
+                pattern,
+                state.find_scope,
+                state.filter_context_before,
+                state.filter_context_after,
+            );
 
             if !filtered_lines.is_empty() {
                 // Find the previous visible line before the current cursor position
@@ -1089,7 +1102,13 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         // In filter mode, jump to previous visible line
         if state.filter_active && state.last_search_pattern.is_some() {
             let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+            let filtered_lines = crate::find::get_lines_with_matches_and_context(
+                lines,
+                pattern,
+                state.find_scope,
+                state.filter_context_before,
+                state.filter_context_after,
+            );
 
             if !filtered_lines.is_empty() {
                 // Find the previous visible line before the current cursor position
@@ -1234,7 +1253,13 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         // In filter mode, jump to next visible line
         if state.filter_active && state.last_search_pattern.is_some() {
             let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+            let filtered_lines = crate::find::get_lines_with_matches_and_context(
+                lines,
+                pattern,
+                state.find_scope,
+                state.filter_context_before,
+                state.filter_context_after,
+            );
 
             if !filtered_lines.is_empty() {
                 // Find the next visible line after the current cursor position
@@ -1290,7 +1315,13 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         // In filter mode, jump to next visible line
         if state.filter_active && state.last_search_pattern.is_some() {
             let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches(lines, pattern, state.find_scope);
+            let filtered_lines = crate::find::get_lines_with_matches_and_context(
+                lines,
+                pattern,
+                state.find_scope,
+                state.filter_context_before,
+                state.filter_context_after,
+            );
 
             if !filtered_lines.is_empty() {
                 // Find the next visible line after the current cursor position

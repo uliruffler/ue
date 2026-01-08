@@ -189,7 +189,13 @@ pub(crate) fn visual_to_logical_position(
     // Get filtered lines if filter mode is active
     let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
         let pattern = state.last_search_pattern.as_ref().unwrap();
-        crate::find::get_lines_with_matches(lines, pattern, state.find_scope)
+        crate::find::get_lines_with_matches_and_context(
+            lines,
+            pattern,
+            state.find_scope,
+            state.filter_context_before,
+            state.filter_context_after,
+        )
     } else {
         Vec::new()
     };
@@ -606,6 +612,8 @@ mod tests {
             last_save_time: None,
             find_active: false,
             filter_active: false,
+            filter_context_before: 0,
+            filter_context_after: 0,
             find_pattern: String::new(),
             find_cursor_pos: 0,
             find_selection: None,

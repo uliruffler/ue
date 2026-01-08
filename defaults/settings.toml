@@ -13,6 +13,10 @@ horizontal_auto_scroll_speed = 1
 horizontal_scroll_speed = 2
 # Maximum number of files to show in File menu before "..." entry
 max_menu_files = 5
+# Filter mode context: number of lines to show before/after each match
+# Can be overridden in filter mode with mouse (clicking up/down arrows)
+filter_context_before = 0
+filter_context_after = 0
 
 
 # Appearance settings

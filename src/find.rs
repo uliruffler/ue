@@ -861,13 +861,26 @@ pub fn get_lines_with_matches(
     pattern: &str,
     scope: Option<(Position, Position)>,
 ) -> Vec<usize> {
+    get_lines_with_matches_and_context(lines, pattern, scope, 0, 0)
+}
+
+/// Get all line indices that have search matches, including context lines
+/// Returns a sorted, deduplicated vector of line indices (0-based)
+/// - context_before: number of lines to include before each match
+/// - context_after: number of lines to include after each match
+pub fn get_lines_with_matches_and_context(
+    lines: &[String],
+    pattern: &str,
+    scope: Option<(Position, Position)>,
+    context_before: usize,
+    context_after: usize,
+) -> Vec<usize> {
     // Make search case-insensitive by default
     let pattern_with_flags = format!("(?i){}", pattern);
     let Ok(regex) = Regex::new(&pattern_with_flags) else {
         return Vec::new();
     };
 
-    let mut matching_lines = Vec::new();
 
     // Determine search boundaries
     let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
@@ -876,6 +889,8 @@ pub fn get_lines_with_matches(
         (0, lines.len().saturating_sub(1))
     };
 
+    // First, find all lines with actual matches
+    let mut hit_lines = Vec::new();
     for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
         let line = &lines[line_idx];
 
@@ -902,10 +917,35 @@ pub fn get_lines_with_matches(
         if search_start < search_end {
             let search_slice = &line[search_start..search_end];
             if regex.is_match(search_slice) {
-                matching_lines.push(line_idx);
+                hit_lines.push(line_idx);
             }
         }
     }
+
+    // Now add context lines around each hit
+    use std::collections::HashSet;
+    let mut all_lines: HashSet<usize> = HashSet::new();
+
+    for &hit_line in &hit_lines {
+        // Add the hit line itself
+        all_lines.insert(hit_line);
+
+        // Add context lines before
+        let start = hit_line.saturating_sub(context_before).max(min_line);
+        for i in start..hit_line {
+            all_lines.insert(i);
+        }
+
+        // Add context lines after
+        let end = (hit_line + context_after + 1).min(max_line + 1).min(lines.len());
+        for i in (hit_line + 1)..end {
+            all_lines.insert(i);
+        }
+    }
+
+    // Convert to sorted vector
+    let mut matching_lines: Vec<usize> = all_lines.into_iter().collect();
+    matching_lines.sort_unstable();
 
     matching_lines
 }

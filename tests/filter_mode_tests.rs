@@ -188,3 +188,122 @@ fn test_find_previous_visible_line() {
     assert_eq!(prev_from_2, Some(&0));
 }
 
+#[test]
+#[serial]
+fn test_filter_with_no_context() {
+    let lines = vec![
+        "line 0".to_string(),
+        "line 1 with match".to_string(),
+        "line 2".to_string(),
+        "line 3".to_string(),
+        "line 4 with match".to_string(),
+        "line 5".to_string(),
+    ];
+
+    let pattern = "match";
+
+    // Get lines with matches (no context)
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 0, 0);
+
+    // Should return only lines with matches
+    assert_eq!(matching_lines.len(), 2);
+    assert_eq!(matching_lines[0], 1);
+    assert_eq!(matching_lines[1], 4);
+}
+
+#[test]
+#[serial]
+fn test_filter_with_context_before() {
+    let lines = vec![
+        "line 0".to_string(),
+        "line 1".to_string(),
+        "line 2 with match".to_string(),
+        "line 3".to_string(),
+        "line 4".to_string(),
+    ];
+
+    let pattern = "match";
+
+    // Get lines with matches + 2 lines before
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 2, 0);
+
+    // Should return lines 0, 1, 2 (2 before + the match)
+    assert_eq!(matching_lines.len(), 3);
+    assert_eq!(matching_lines[0], 0);
+    assert_eq!(matching_lines[1], 1);
+    assert_eq!(matching_lines[2], 2);
+}
+
+#[test]
+#[serial]
+fn test_filter_with_context_after() {
+    let lines = vec![
+        "line 0".to_string(),
+        "line 1 with match".to_string(),
+        "line 2".to_string(),
+        "line 3".to_string(),
+        "line 4".to_string(),
+    ];
+
+    let pattern = "match";
+
+    // Get lines with matches + 2 lines after
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 0, 2);
+
+    // Should return lines 1, 2, 3 (the match + 2 after)
+    assert_eq!(matching_lines.len(), 3);
+    assert_eq!(matching_lines[0], 1);
+    assert_eq!(matching_lines[1], 2);
+    assert_eq!(matching_lines[2], 3);
+}
+
+#[test]
+#[serial]
+fn test_filter_with_context_both() {
+    let lines = vec![
+        "line 0".to_string(),
+        "line 1".to_string(),
+        "line 2 with match".to_string(),
+        "line 3".to_string(),
+        "line 4".to_string(),
+    ];
+
+    let pattern = "match";
+
+    // Get lines with matches + 1 before + 1 after
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 1, 1);
+
+    // Should return lines 1, 2, 3 (1 before + match + 1 after)
+    assert_eq!(matching_lines.len(), 3);
+    assert_eq!(matching_lines[0], 1);
+    assert_eq!(matching_lines[1], 2);
+    assert_eq!(matching_lines[2], 3);
+}
+
+#[test]
+#[serial]
+fn test_filter_with_overlapping_contexts() {
+    let lines = vec![
+        "line 0".to_string(),
+        "line 1 with match".to_string(),
+        "line 2".to_string(),
+        "line 3 with match".to_string(),
+        "line 4".to_string(),
+    ];
+
+    let pattern = "match";
+
+    // Get lines with matches + 1 before + 1 after
+    // Contexts should overlap at line 2
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 1, 1);
+
+    // Should return lines 0, 1, 2, 3, 4 (all lines due to overlapping contexts)
+    assert_eq!(matching_lines.len(), 5);
+    assert_eq!(matching_lines[0], 0);
+    assert_eq!(matching_lines[1], 1);
+    assert_eq!(matching_lines[2], 2);
+    assert_eq!(matching_lines[3], 3);
+    assert_eq!(matching_lines[4], 4);
+}
+
+

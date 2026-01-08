@@ -301,6 +301,62 @@ fn handle_footer_click(
     column: u16,
     visible_lines: usize,
 ) {
+    // Handle filter context spinners (if filter mode is active)
+    if state.filter_active && state.last_search_pattern.is_some() {
+        let digits = state.settings.appearance.line_number_digits as usize;
+        let line_num_offset = if digits > 0 { digits + 1 } else { 0 };
+
+        // Format in footer: "[digits] Filter: Before:X▲▼ After:Y▲▼  "
+        // Calculate positions accounting for "Filter: " prefix
+        let filter_label = "Filter: ";
+        let filter_label_len = filter_label.len();
+        
+        let before_label = "Before:";
+        let before_num_str = state.filter_context_before.to_string();
+        let after_label = " After:"; // Note: includes leading space
+        let after_num_str = state.filter_context_after.to_string();
+
+        // Position after line numbers and "Filter: " label
+        let content_start = line_num_offset + filter_label_len;
+        
+        // Calculate exact column positions in the rendered string "Before:X▲▼ After:Y▲▼  "
+        let before_label_start = content_start;
+        let before_num_start = before_label_start + before_label.len();
+        let before_arrow_start = before_num_start + before_num_str.len();
+        let before_arrow_end = before_arrow_start + 2; // ▲▼ is 2 characters
+
+        let after_label_start = before_arrow_end;
+        let after_num_start = after_label_start + after_label.len();
+        let after_arrow_start = after_num_start + after_num_str.len();
+
+        let click_col = column as usize;
+
+        // Check if clicked on "Before" up arrow (▲)
+        if click_col == before_arrow_start {
+            state.filter_context_before = state.filter_context_before.saturating_add(1).min(99);
+            state.needs_redraw = true;
+            return;
+        }
+        // Check if clicked on "Before" down arrow (▼)
+        if click_col == before_arrow_start + 1 {
+            state.filter_context_before = state.filter_context_before.saturating_sub(1);
+            state.needs_redraw = true;
+            return;
+        }
+        // Check if clicked on "After" up arrow (▲)
+        if click_col == after_arrow_start {
+            state.filter_context_after = state.filter_context_after.saturating_add(1).min(99);
+            state.needs_redraw = true;
+            return;
+        }
+        // Check if clicked on "After" down arrow (▼)
+        if click_col == after_arrow_start + 1 {
+            state.filter_context_after = state.filter_context_after.saturating_sub(1);
+            state.needs_redraw = true;
+            return;
+        }
+    }
+
     // Handle replace mode buttons
     if state.replace_active {
         let total_width = state.term_width as usize;

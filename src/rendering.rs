@@ -300,15 +300,10 @@ fn render_header(
             let mut display = format!("{} {} (", modified_char, filename);
             let base_width = visual_width(&display, 4);
 
-            // Reserve space for closing parenthesis and filter indicator if needed
+            // Reserve space for closing parenthesis
             let reserved = 1; // for closing )
-            let filter_width = if state.filter_active && state.last_search_pattern.is_some() {
-                9 // " [Filter]"
-            } else {
-                0
-            };
 
-            let available_for_path = available_width.saturating_sub(base_width + reserved + filter_width);
+            let available_for_path = available_width.saturating_sub(base_width + reserved);
 
             // Apply path shortening
             let shortened_parent = if parent != "." {
@@ -329,11 +324,7 @@ fn render_header(
 
             write!(stdout, "{}", final_display)?;
         }
-        
-        // Show filter indicator when filter mode is active
-        if state.filter_active && state.last_search_pattern.is_some() {
-            write!(stdout, " [Filter]")?;
-        }
+        // ...no filter indicator in header anymore...
     }
 
     // Clear rest of line (applies to both menu and filename modes)
@@ -702,7 +693,22 @@ fn render_footer(
     // Write space separator
     write!(stdout, " ")?;
 
-    let left_len = bottom_number_str.len() + 1; // +1 for the space separator
+    let mut left_len = bottom_number_str.len() + 1; // +1 for the space separator
+
+    // If filter mode is active, show "Filter: " label followed by context spinners
+    if state.filter_active && state.last_search_pattern.is_some() {
+        write!(stdout, "Filter: ")?;
+        left_len += 8; // "Filter: " is 8 characters
+
+        let spinner_text = format!(
+            "Before:{}▲▼ After:{}▲▼  ",
+            state.filter_context_before,
+            state.filter_context_after
+        );
+        write!(stdout, "{}", spinner_text)?;
+        left_len += spinner_text.len();
+    }
+
     let remaining_width = total_width.saturating_sub(left_len);
 
     // Show error/info message if present, otherwise show position
@@ -780,7 +786,13 @@ fn render_visible_lines(
     // Get filtered lines if filter mode is active
     let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
         let pattern = state.last_search_pattern.as_ref().unwrap();
-        crate::find::get_lines_with_matches(lines, pattern, state.find_scope)
+        crate::find::get_lines_with_matches_and_context(
+            lines,
+            pattern,
+            state.find_scope,
+            state.filter_context_before,
+            state.filter_context_after,
+        )
     } else {
         Vec::new()
     };
@@ -1156,10 +1168,16 @@ fn calculate_cursor_y_position(
     tab_width: usize,
     visible_lines: usize,
 ) -> Option<u16> {
-    // Get filtered lines if filter mode is active
+    // Get filtered lines if filter mode is active (includes context lines)
     let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
         let pattern = state.last_search_pattern.as_ref().unwrap();
-        crate::find::get_lines_with_matches(lines, pattern, state.find_scope)
+        crate::find::get_lines_with_matches_and_context(
+            lines,
+            pattern,
+            state.find_scope,
+            state.filter_context_before,
+            state.filter_context_after,
+        )
     } else {
         Vec::new()
     };
@@ -1168,7 +1186,7 @@ fn calculate_cursor_y_position(
     let mut cursor_y = 1u16; // Start at row 1 (after header)
 
     if state.filter_active && !filtered_lines.is_empty() {
-        // Filter mode: check if cursor line is in filtered results
+        // Filter mode: check if cursor line is in filtered results (including context)
         if !filtered_lines.contains(&cursor_line_abs) {
             return None; // Cursor is on a line that's filtered out
         }

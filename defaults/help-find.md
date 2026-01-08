@@ -78,6 +78,24 @@ After performing a search, press **{replace}** to enter replace mode:
 - **ESC after Enter**: Clears search highlights (first press)
 - **ESC ESC (double-tap)**: Exits editor immediately
 
+### Filter Mode
+
+Filter mode shows only matching lines (and optionally context lines around them), hiding all other lines:
+
+1. **Activate filter mode**: Press **{find}** again while viewing search results (or press **{find}** twice in find mode)
+2. **Adjust context lines**: Use spinners in footer
+   - **Mouse**: Click **▲** or **▼** arrows next to "Before" and "After" numbers to increase/decrease by 1
+   - **Default values**: Set in `~/.ue/settings.toml` with `filter_context_before` and `filter_context_after` (0-9)
+3. **Navigate**: Use arrow keys to move between visible lines (matching + context)
+4. **Exit filter mode**: Press **{find}** again to toggle back to normal view
+
+**Filter Mode Features:**
+- Shows `Filter: ` label in footer with context spinners
+- Footer displays: `Filter: Before:X▲▼ After:Y▲▼` (X and Y are number of context lines)
+- Context lines range from 0-9 with mouse control
+- Navigation automatically jumps between visible lines (including context)
+- All editing works normally on visible lines
+
 ### Case-Sensitive Search
 
 To perform case-sensitive search, use regex flag:

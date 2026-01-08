@@ -137,6 +137,10 @@ pub struct Settings {
     pub(crate) appearance: AppearanceSettings,
     #[serde(default = "default_max_menu_files")]
     pub(crate) max_menu_files: usize,
+    #[serde(default = "default_filter_context_before")]
+    pub(crate) filter_context_before: usize,
+    #[serde(default = "default_filter_context_after")]
+    pub(crate) filter_context_after: usize,
 }
 
 fn default_tab_width() -> usize {
@@ -166,6 +170,14 @@ fn default_horizontal_scroll_speed() -> usize {
 
 fn default_max_menu_files() -> usize {
     5
+}
+
+fn default_filter_context_before() -> usize {
+    0
+}
+
+fn default_filter_context_after() -> usize {
+    0
 }
 
 fn default_line_number_digits() -> u8 {

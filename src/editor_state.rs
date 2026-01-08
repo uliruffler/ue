@@ -47,6 +47,10 @@ pub struct FileViewerState<'a> {
     pub(crate) find_active: bool,
     /// Filter mode active (shows only lines with search hits)
     pub(crate) filter_active: bool,
+    /// Number of context lines to show before each match in filter mode
+    pub(crate) filter_context_before: usize,
+    /// Number of context lines to show after each match in filter mode
+    pub(crate) filter_context_after: usize,
     /// Current find pattern being entered
     pub(crate) find_pattern: String,
     /// Cursor position within find pattern (character index, not byte index)
@@ -168,6 +172,8 @@ impl<'a> FileViewerState<'a> {
             last_save_time: None,
             find_active: false,
             filter_active: false,
+            filter_context_before: settings.filter_context_before,
+            filter_context_after: settings.filter_context_after,
             find_pattern: String::new(),
             find_cursor_pos: 0,
             find_selection: None,
