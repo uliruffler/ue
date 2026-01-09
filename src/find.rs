@@ -5,6 +5,42 @@ use crate::editor_state::{FileViewerState, Position};
 
 const MAX_FIND_HISTORY: usize = 100;
 
+/// Convert a wildcard pattern (* = any characters, ? = any single character) to a regex pattern
+/// This escapes regex special characters and replaces wildcards with their regex equivalents
+pub(crate) fn wildcard_to_regex(pattern: &str) -> Result<String, Box<dyn std::error::Error>> {
+    let mut regex = String::new();
+    let mut chars = pattern.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        match ch {
+            '*' => regex.push_str(".*"),
+            '?' => regex.push('.'),
+            // Escape regex special characters
+            '.' | '^' | '$' | '+' | '|' | '(' | ')' | '[' | ']' | '{' | '}' | '\\' => {
+                regex.push('\\');
+                regex.push(ch);
+            }
+            _ => regex.push(ch),
+        }
+    }
+
+    Ok(regex)
+}
+
+/// Convert a pattern to a regex, applying case-insensitive flag and handling wildcard mode
+pub(crate) fn pattern_to_regex(pattern: &str, regex_mode: bool) -> Result<Regex, Box<dyn std::error::Error>> {
+    let regex_pattern = if regex_mode {
+        // Regex mode: use pattern as-is with case-insensitive flag
+        format!("(?i){}", pattern)
+    } else {
+        // Wildcard mode: convert wildcards to regex, then apply case-insensitive flag
+        let wildcard_regex = wildcard_to_regex(pattern)?;
+        format!("(?i){}", wildcard_regex)
+    };
+
+    Regex::new(&regex_pattern).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
+}
+
 /// Handle find mode key events
 /// Returns true if find mode should exit
 pub(crate) fn handle_find_input(
@@ -13,6 +49,7 @@ pub(crate) fn handle_find_input(
     key_event: KeyEvent,
     _visible_lines: usize,
 ) -> bool {
+
     let KeyEvent { code, modifiers, .. } = key_event;
 
     match code {
@@ -33,12 +70,12 @@ pub(crate) fn handle_find_input(
         KeyCode::Enter => {
             // Exit find mode and activate search highlighting (don't jump to match)
             if !state.find_pattern.is_empty() {
-                // Make search case-insensitive by default
-                let pattern = format!("(?i){}", state.find_pattern);
-                match Regex::new(&pattern) {
+                // Compile pattern with current find mode
+                match pattern_to_regex(&state.find_pattern, state.find_regex_mode) {
                     Ok(_regex) => {
                         // Set last_search_pattern for highlighting
                         state.last_search_pattern = Some(state.find_pattern.clone());
+                        state.last_search_regex_mode = state.find_regex_mode;
                         add_to_history(state, state.find_pattern.clone());
 
                         // Update hit count but don't jump to match
@@ -57,7 +94,7 @@ pub(crate) fn handle_find_input(
                         state.needs_redraw = true;
                     }
                     Err(e) => {
-                        state.find_error = Some(format!("Invalid regex: {}", e));
+                        state.find_error = Some(format!("Invalid pattern: {}", e));
                         state.needs_redraw = true;
                         return false;
                     }
@@ -180,8 +217,7 @@ pub(crate) fn handle_find_input(
                     state.filter_active = !state.filter_active;
 
                     // Exit find mode with the pattern as the search
-                    let pattern = format!("(?i){}", state.find_pattern);
-                    if let Ok(_regex) = Regex::new(&pattern) {
+                    if let Ok(_regex) = pattern_to_regex(&state.find_pattern, state.find_regex_mode) {
                         state.last_search_pattern = Some(state.find_pattern.clone());
                         add_to_history(state, state.find_pattern.clone());
                         update_search_hit_count(state, lines);
@@ -289,9 +325,8 @@ pub(crate) fn find_next_occurrence(
     visible_lines: usize,
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
-        // Make search case-insensitive by default
-        let pattern_with_flags = format!("(?i){}", pattern);
-        if let Ok(regex) = Regex::new(&pattern_with_flags) {
+        // Compile pattern with current find mode
+        if let Ok(regex) = pattern_to_regex(pattern, state.find_regex_mode) {
             if let Some(pos) = find_next(
                 lines,
                 state.current_position(),
@@ -334,9 +369,8 @@ pub(crate) fn find_prev_occurrence(
     visible_lines: usize,
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
-        // Make search case-insensitive by default
-        let pattern_with_flags = format!("(?i){}", pattern);
-        if let Ok(regex) = Regex::new(&pattern_with_flags) {
+        // Compile pattern with current find mode
+        if let Ok(regex) = pattern_to_regex(pattern, state.find_regex_mode) {
             if let Some(pos) = find_prev(
                 lines,
                 state.current_position(),
@@ -373,21 +407,20 @@ pub(crate) fn find_prev_occurrence(
 }
 
 /// Update live highlights based on current find pattern
-fn update_live_highlights(state: &mut FileViewerState) {
+pub(crate) fn update_live_highlights(state: &mut FileViewerState) {
     if state.find_pattern.is_empty() {
         // Clear highlights when pattern is empty
         state.last_search_pattern = None;
         state.search_hit_count = 0;
         state.search_current_hit = 0;
     } else {
-        // Try to compile as regex - if valid, update highlights
-        // Make search case-insensitive by default
-        let pattern_with_flags = format!("(?i){}", state.find_pattern);
-        if Regex::new(&pattern_with_flags).is_ok() {
+        // Try to compile as regex or wildcard - if valid, update highlights
+        if pattern_to_regex(&state.find_pattern, state.find_regex_mode).is_ok() {
             state.last_search_pattern = Some(state.find_pattern.clone());
+            state.last_search_regex_mode = state.find_regex_mode;
             state.find_error = None;
         } else {
-            // Invalid regex - don't update highlights but don't show error yet
+            // Invalid pattern - don't update highlights but don't show error yet
             // (let user finish typing)
         }
     }
@@ -722,11 +755,11 @@ pub(crate) fn calculate_search_hits(
     lines: &[String],
     cursor_pos: Position,
     pattern: &str,
+    regex_mode: bool,
     scope: Option<(Position, Position)>,
 ) -> (usize, usize) {
-    // Make search case-insensitive by default
-    let pattern_with_flags = format!("(?i){}", pattern);
-    let Ok(regex) = Regex::new(&pattern_with_flags) else {
+    // Compile pattern with the specified mode
+    let Ok(regex) = pattern_to_regex(pattern, regex_mode) else {
         return (0, 0);
     };
 
@@ -790,6 +823,7 @@ pub(crate) fn update_search_hit_count(state: &mut FileViewerState, lines: &[Stri
             lines,
             state.current_position(),
             pattern,
+            state.find_regex_mode,
             state.find_scope,
         );
         state.search_current_hit = current;
@@ -807,7 +841,7 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
     }
 
     let pattern = state.last_search_pattern.as_ref().unwrap();
-    let filtered_lines = get_lines_with_matches(lines, pattern, state.find_scope);
+    let filtered_lines = get_lines_with_matches(lines, pattern, state.find_regex_mode, state.find_scope);
 
     if filtered_lines.is_empty() {
         return;
@@ -859,9 +893,10 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
 pub fn get_lines_with_matches(
     lines: &[String],
     pattern: &str,
+    regex_mode: bool,
     scope: Option<(Position, Position)>,
 ) -> Vec<usize> {
-    get_lines_with_matches_and_context(lines, pattern, scope, 0, 0)
+    get_lines_with_matches_and_context(lines, pattern, regex_mode, scope, 0, 0)
 }
 
 /// Get all line indices that have search matches, including context lines
@@ -871,13 +906,13 @@ pub fn get_lines_with_matches(
 pub fn get_lines_with_matches_and_context(
     lines: &[String],
     pattern: &str,
+    regex_mode: bool,
     scope: Option<(Position, Position)>,
     context_before: usize,
     context_after: usize,
 ) -> Vec<usize> {
-    // Make search case-insensitive by default
-    let pattern_with_flags = format!("(?i){}", pattern);
-    let Ok(regex) = Regex::new(&pattern_with_flags) else {
+    // Compile pattern with the specified mode
+    let Ok(regex) = pattern_to_regex(pattern, regex_mode) else {
         return Vec::new();
     };
 
@@ -1687,28 +1722,28 @@ mod tests {
         ];
 
         // Test 1: Count all hits for "test"
-        let (current, total) = calculate_search_hits(&lines, (0, 0), "test", None);
+        let (current, total) = calculate_search_hits(&lines, (0, 0), "test", true, None);
         assert_eq!(total, 5); // Should find 5 occurrences
         assert_eq!(current, 0); // Cursor not on a match at (0, 0)
 
         // Test 2: Cursor at first occurrence
-        let (current, total) = calculate_search_hits(&lines, (0, 10), "test", None);
+        let (current, total) = calculate_search_hits(&lines, (0, 10), "test", true, None);
         assert_eq!(total, 5);
         assert_eq!(current, 1); // First hit
 
         // Test 3: Cursor at third occurrence
-        let (current, total) = calculate_search_hits(&lines, (2, 16), "test", None);
+        let (current, total) = calculate_search_hits(&lines, (2, 16), "test", true, None);
         assert_eq!(total, 5);
         assert_eq!(current, 3); // Third hit
 
         // Test 4: With scope - only count hits in range
         let scope = Some(((1, 0), (3, 25)));
-        let (current, total) = calculate_search_hits(&lines, (2, 16), "test", scope);
+        let (current, total) = calculate_search_hits(&lines, (2, 16), "test", true, scope);
         assert_eq!(total, 3); // Only 3 hits in lines 1-3
         assert_eq!(current, 2); // Second hit within scope
 
         // Test 5: Case insensitive
-        let (_current, total) = calculate_search_hits(&lines, (0, 0), "TEST", None);
+        let (_current, total) = calculate_search_hits(&lines, (0, 0), "TEST", true, None);
         assert_eq!(total, 5); // Should find all "test" case-insensitively
     }
 
@@ -1719,7 +1754,7 @@ mod tests {
             "The word test appears here".to_string(),
         ];
 
-        let (current, total) = calculate_search_hits(&lines, (0, 0), "nomatch", None);
+        let (current, total) = calculate_search_hits(&lines, (0, 0), "nomatch", true, None);
         assert_eq!(total, 0);
         assert_eq!(current, 0);
     }
@@ -1892,5 +1927,115 @@ mod tests {
 
         // No error message
         assert_eq!(state.find_error, None);
+    }
+
+    #[test]
+    fn test_wildcard_to_regex_star() {
+        // Test that * matches any number of characters
+        let regex = pattern_to_regex("hello*world", false).unwrap();
+
+        // All should match
+        assert!(regex.is_match("hello world"));
+        assert!(regex.is_match("helloworld"));
+        assert!(regex.is_match("hello123world"));
+    }
+
+    #[test]
+    fn test_wildcard_to_regex_question() {
+        // Test that ? matches any single character
+        let regex = pattern_to_regex("ca?", false).unwrap();
+
+        assert!(regex.is_match("cat"));
+        assert!(regex.is_match("car"));
+        assert!(!regex.is_match("bat"));
+        assert!(!regex.is_match("ca"));
+    }
+
+    #[test]
+    fn test_wildcard_escapes_regex_chars() {
+        // Test that regex special characters are properly escaped
+        // Pattern with literal dot (not regex "any character")
+        let regex = pattern_to_regex("test.txt", false).unwrap();
+
+        assert!(regex.is_match("test.txt"));
+        assert!(!regex.is_match("testXtxt")); // . is literal, not wildcard
+        assert!(!regex.is_match("test^txt"));
+    }
+
+    #[test]
+    fn test_wildcard_combined_patterns() {
+        // Test combination of * and ?
+        // Pattern: foo*?bar means: foo + (zero or more chars) + (exactly one char) + bar
+        let regex = pattern_to_regex("foo*?bar", false).unwrap();
+
+        assert!(!regex.is_match("foobar")); // No character to satisfy the ?
+        assert!(regex.is_match("foo123bar")); // 12 matches *, 3 matches ?
+        assert!(regex.is_match("foo1bar")); // empty matches *, 1 matches ?
+        assert!(regex.is_match("fooXbar")); // empty matches *, X matches ?
+        assert!(regex.is_match("foo12bar")); // 1 matches *, 2 matches ?
+
+        // Test simpler pattern: f*o matches f + (zero or more) + o
+        let regex2 = pattern_to_regex("f*o", false).unwrap();
+        assert!(regex2.is_match("fo"));
+        assert!(regex2.is_match("foo"));
+        assert!(regex2.is_match("f123o"));
+    }
+
+    #[test]
+    fn test_wildcard_case_insensitive() {
+        // Test that wildcard patterns are case-insensitive
+        let regex = pattern_to_regex("hello", false).unwrap();
+
+        assert!(regex.is_match("HELLO"));
+        assert!(regex.is_match("hello"));
+        assert!(regex.is_match("HeLLo"));
+    }
+
+    #[test]
+    fn test_wildcard_with_brackets() {
+        // Test that brackets are escaped properly
+        // Pattern with literal brackets (not regex character class)
+        let regex = pattern_to_regex("test[abc]", false).unwrap();
+
+        assert!(regex.is_match("test[abc]")); // matches literal
+        assert!(!regex.is_match("testa")); // doesn't match
+        assert!(!regex.is_match("testb")); // doesn't match
+    }
+
+    #[test]
+    fn test_regex_vs_wildcard_mode() {
+        // Test that regex mode and wildcard mode behave differently
+
+        // Regex mode: [abc] is a character class
+        let regex_mode = pattern_to_regex("test[abc]", true).unwrap();
+        assert!(regex_mode.is_match("testa")); // matches character class
+        assert!(regex_mode.is_match("testb")); // matches character class
+        assert!(regex_mode.is_match("testc")); // matches character class
+        assert!(!regex_mode.is_match("test[abc]")); // doesn't match literal
+
+        // Wildcard mode: [abc] is literal
+        let wildcard_mode = pattern_to_regex("test[abc]", false).unwrap();
+        assert!(!wildcard_mode.is_match("testa")); // doesn't match
+        assert!(!wildcard_mode.is_match("testb")); // doesn't match
+        assert!(!wildcard_mode.is_match("testc")); // doesn't match
+        assert!(wildcard_mode.is_match("test[abc]")); // matches literal
+
+        // Test . character
+        // Regex mode: . matches any character
+        let regex_dot = pattern_to_regex("test.txt", true).unwrap();
+        assert!(regex_dot.is_match("test.txt")); // matches
+        assert!(regex_dot.is_match("testXtxt")); // . matches X
+
+        // Wildcard mode: . is literal
+        let wildcard_dot = pattern_to_regex("test.txt", false).unwrap();
+        assert!(wildcard_dot.is_match("test.txt")); // matches
+        assert!(!wildcard_dot.is_match("testXtxt")); // doesn't match
+
+        // Test * character
+        // Regex mode: * is quantifier (needs something before it)
+        // Wildcard mode: * is "any characters"
+        let wildcard_star = pattern_to_regex("test*file", false).unwrap();
+        assert!(wildcard_star.is_match("testfile")); // zero chars
+        assert!(wildcard_star.is_match("test123file")); // multiple chars
     }
 }

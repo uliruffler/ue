@@ -400,13 +400,23 @@ fn render_footer(
         if digits > 0 {
             left_side.push_str(&format!("{:width$} ", "", width = digits));
         }
-        // Show "Filter" label if filter mode will be activated, otherwise "Find"
-        let find_label = if state.filter_active {
-            "Filter (regex): "
-        } else {
-            "Find (regex): "
-        };
-        left_side.push_str(find_label);
+
+        // Show mode label with clickable toggle buttons
+        let find_or_filter = if state.filter_active { "Filter " } else { "Find " };
+        left_side.push_str(find_or_filter);
+
+        // Add the toggle button format with ⇄: [⇄R]: or [⇄W]:
+        // Format is: "[" + "⇄" (1 char, 2 visual cols) + "R/W" (1 char) + "]" + ":" + " "
+        left_side.push('[');
+        left_side.push('\u{21C4}'); // ⇄ character
+        let mode_char = if state.find_regex_mode { 'R' } else { 'W' };
+        left_side.push(mode_char);
+        left_side.push(']');
+        left_side.push(':');
+        left_side.push(' ');
+
+        // pattern_start_col in CHARACTERS (not visual columns)
+        // This is correct for where text gets inserted in the buffer
         let pattern_start_col = left_side.len();
 
         // Build the right side (hit count + arrows + position)
@@ -425,7 +435,8 @@ fn render_footer(
             "(0) ↑↓".to_string()
         };
 
-        let right_side = format!("{}  {}", hit_display, position_info);
+        // Add trailing space for better right margin
+        let right_side = format!("{}  {} ", hit_display, position_info);
 
         // Render the footer
         write!(stdout, "\r")?;
@@ -446,8 +457,16 @@ fn render_footer(
             0
         };
 
-        // Write left side (prompt)
-        write!(stdout, "{}", left_side)?;
+        // Write left side (prompt + mode toggle buttons)
+        // Render the left side up to the mode buttons
+        let find_or_filter = if state.filter_active { "Filter " } else { "Find " };
+        write!(stdout, "{}", if digits > 0 { format!("{:width$} ", "", width = digits) } else { String::new() })?;
+        write!(stdout, "{}", find_or_filter)?;
+
+        // Render mode toggle with U+21C4 (⇄) character
+        // Format: "Find [⇄R]:" or "Find [⇄W]:"
+        let mode_char = if state.find_regex_mode { 'R' } else { 'W' };
+        write!(stdout, "[\u{21C4}{}]: ", mode_char)?;
 
         // Write find pattern with selection highlighting
         if let Some((sel_start, sel_end)) = state.find_selection {
@@ -471,7 +490,8 @@ fn render_footer(
         }
 
         // Update left_side length to account for the pattern we just wrote
-        let full_left_len = left_side.len() + state.find_pattern.chars().count();
+        // Add +1 because ⇄ character displays as 2 visual columns
+        let full_left_len = left_side.len() + state.find_pattern.chars().count() + 1;
 
         // Calculate right-aligned position (same method as normal mode)
         // In normal mode: remaining_width = total_width - left_len
@@ -503,7 +523,8 @@ fn render_footer(
         };
         let chars: Vec<char> = state.find_pattern.chars().collect();
         let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
-        let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
+        // Adjust for visual positioning - test with -2
+        let cursor_x = (error_offset + pattern_start_col + cursor_offset - 2) as u16;
         execute!(stdout, cursor::MoveTo(cursor_x, footer_row))?;
         apply_cursor_shape(stdout, state.settings)?;
         execute!(stdout, cursor::Show)?;
@@ -531,7 +552,8 @@ fn render_footer(
 
         // Show buttons for replace operations
         let buttons = "[replace occurrence] [replace all]";
-        let right_side = format!("{}  {}", buttons, position_info);
+        // Add trailing space for better right margin
+        let right_side = format!("{}  {} ", buttons, position_info);
 
         // Render the footer
         write!(stdout, "\r")?;
@@ -603,6 +625,7 @@ fn render_footer(
     };
 
     // Build position string with hit count first (if active search), then position
+    // Add trailing space for better right margin
     let position_info = if state.last_search_pattern.is_some() {
         let hit_display = if state.search_hit_count > 0 {
             if state.search_current_hit > 0 {
@@ -613,9 +636,9 @@ fn render_footer(
         } else {
             "(0) ↑↓".to_string()
         };
-        format!("{}  {}", hit_display, position_info)
+        format!("{}  {} ", hit_display, position_info)
     } else {
-        position_info
+        format!("{} ", position_info)
     };
 
     let total_width = state.term_width as usize;
@@ -789,6 +812,7 @@ fn render_visible_lines(
         crate::find::get_lines_with_matches_and_context(
             lines,
             pattern,
+            state.find_regex_mode,
             state.find_scope,
             state.filter_context_before,
             state.filter_context_after,
@@ -1065,7 +1089,7 @@ thread_local! {
 }
 
 /// Get character ranges for search matches in a line (with caching)
-fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
+fn get_search_matches(line: &str, pattern: &str, regex_mode: bool) -> Vec<(usize, usize)> {
     if pattern.is_empty() {
         return vec![];
     }
@@ -1074,30 +1098,35 @@ fn get_search_matches(line: &str, pattern: &str) -> Vec<(usize, usize)> {
     SEARCH_REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
 
+        // Create a cache key that includes both pattern and mode
+        let cache_key = format!("{}:{}", if regex_mode { "R" } else { "W" }, pattern);
+
         // Check if we need to compile a new regex
-        let regex = if let Some((cached_pattern, cached_regex)) = cache.as_ref() {
-            if cached_pattern == pattern {
+        let regex = if let Some((cached_key, cached_regex)) = cache.as_ref() {
+            if cached_key == &cache_key {
                 cached_regex
             } else {
-                // Pattern changed, compile new regex
-                let pattern_with_flags = format!("(?i){}", pattern);
-                match regex::Regex::new(&pattern_with_flags) {
+                // Pattern or mode changed, compile new regex
+                match crate::find::pattern_to_regex(pattern, regex_mode) {
                     Ok(regex) => {
-                        *cache = Some((pattern.to_string(), regex));
+                        *cache = Some((cache_key, regex));
                         &cache.as_ref().unwrap().1
                     }
-                    Err(_) => return vec![],
+                    Err(_) => {
+                        return vec![];
+                    }
                 }
             }
         } else {
             // No cached regex, compile new one
-            let pattern_with_flags = format!("(?i){}", pattern);
-            match regex::Regex::new(&pattern_with_flags) {
+            match crate::find::pattern_to_regex(pattern, regex_mode) {
                 Ok(regex) => {
-                    *cache = Some((pattern.to_string(), regex));
+                    *cache = Some((cache_key, regex));
                     &cache.as_ref().unwrap().1
                 }
-                Err(_) => return vec![],
+                Err(_) => {
+                    return vec![];
+                }
             }
         };
 
@@ -1174,6 +1203,7 @@ fn calculate_cursor_y_position(
         crate::find::get_lines_with_matches_and_context(
             lines,
             pattern,
+            state.find_regex_mode,
             state.find_scope,
             state.filter_context_before,
             state.filter_context_after,
@@ -1538,7 +1568,7 @@ fn render_line_segment_expanded(
     // Apply search match highlighting - compute once and cache current match range
     let mut current_match_range: Option<(usize, usize)> = None; // Visual column range
     if let Some(ref pattern) = ctx.state.last_search_pattern {
-        let matches = get_search_matches(original_line, pattern);
+        let matches = get_search_matches(original_line, pattern, ctx.state.last_search_regex_mode);
         let cursor_pos = ctx.state.current_position();
         let is_cursor_line = segment.line_index == cursor_pos.0;
         let cursor_col = if is_cursor_line {
@@ -1764,7 +1794,7 @@ fn render_line_segment_with_selection_expanded(
         let is_cursor_line = segment.line_index == cursor_pos.0;
 
         if is_cursor_line {
-            let matches = get_search_matches(original_line, pattern);
+            let matches = get_search_matches(original_line, pattern, ctx.state.last_search_regex_mode);
             let cursor_col = cursor_pos.1;
 
             for (char_start, char_end) in matches {
@@ -2221,20 +2251,20 @@ mod tests {
 
     #[test]
     fn get_search_matches_empty_pattern_returns_empty() {
-        let matches = get_search_matches("hello world", "");
+        let matches = get_search_matches("hello world", "", true);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn get_search_matches_simple_literal() {
-        let matches = get_search_matches("hello world", "world");
+        let matches = get_search_matches("hello world", "world", true);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], (6, 11)); // "world" starts at char 6, ends at 11
     }
 
     #[test]
     fn get_search_matches_multiple_occurrences() {
-        let matches = get_search_matches("hello hello", "hello");
+        let matches = get_search_matches("hello hello", "hello", true);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0], (0, 5));
         assert_eq!(matches[1], (6, 11));
@@ -2242,7 +2272,7 @@ mod tests {
 
     #[test]
     fn get_search_matches_regex_pattern() {
-        let matches = get_search_matches("test123 test456", r"\d+");
+        let matches = get_search_matches("test123 test456", r"\d+", true);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0], (4, 7)); // "123"
         assert_eq!(matches[1], (12, 15)); // "456"
@@ -2250,19 +2280,19 @@ mod tests {
 
     #[test]
     fn get_search_matches_no_match_returns_empty() {
-        let matches = get_search_matches("hello world", "xyz");
+        let matches = get_search_matches("hello world", "xyz", true);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn get_search_matches_invalid_regex_returns_empty() {
-        let matches = get_search_matches("hello world", "[invalid");
+        let matches = get_search_matches("hello world", "[invalid", true);
         assert!(matches.is_empty());
     }
 
     #[test]
     fn get_search_matches_handles_multibyte_chars() {
-        let matches = get_search_matches("hello 世界 world", "世界");
+        let matches = get_search_matches("hello 世界 world", "世界", true);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], (6, 8)); // Character positions, not bytes
     }
@@ -2270,18 +2300,18 @@ mod tests {
     #[test]
     fn get_search_matches_case_insensitive() {
         // Lowercase pattern should match all case variations
-        let matches = get_search_matches("Hello WORLD hello", "hello");
+        let matches = get_search_matches("Hello WORLD hello", "hello", true);
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0], (0, 5)); // "Hello"
         assert_eq!(matches[1], (12, 17)); // "hello"
 
         // Search for "world" should match "WORLD" case-insensitively
-        let matches = get_search_matches("Hello WORLD hello", "world");
+        let matches = get_search_matches("Hello WORLD hello", "world", true);
         assert_eq!(matches.len(), 1);
         assert_eq!(matches[0], (6, 11)); // "WORLD"
 
         // Verify all case variations are found
-        let matches = get_search_matches("Hello hello HELLO HeLLo", "hello");
+        let matches = get_search_matches("Hello hello HELLO HeLLo", "hello", true);
         assert_eq!(matches.len(), 4);
     }
 
@@ -2386,22 +2416,22 @@ mod tests {
     #[test]
     fn regex_cache_reuses_same_pattern() {
         // First call should compile and cache
-        let matches1 = get_search_matches("hello world", "world");
+        let matches1 = get_search_matches("hello world", "world", true);
         assert_eq!(matches1.len(), 1);
         assert_eq!(matches1[0], (6, 11));
 
         // Second call with same pattern should use cache (no recompilation)
-        let matches2 = get_search_matches("goodbye world", "world");
+        let matches2 = get_search_matches("goodbye world", "world", true);
         assert_eq!(matches2.len(), 1);
         assert_eq!(matches2[0], (8, 13));
 
         // Third call with different pattern should recompile and re-cache
-        let matches3 = get_search_matches("hello world", "hello");
+        let matches3 = get_search_matches("hello world", "hello", true);
         assert_eq!(matches3.len(), 1);
         assert_eq!(matches3[0], (0, 5));
 
         // Fourth call with original pattern should recompile again (cache was replaced)
-        let matches4 = get_search_matches("world hello world", "world");
+        let matches4 = get_search_matches("world hello world", "world", true);
         assert_eq!(matches4.len(), 2);
         assert_eq!(matches4[0], (0, 5));
         assert_eq!(matches4[1], (12, 17));
@@ -2409,21 +2439,21 @@ mod tests {
 
     #[test]
     fn regex_cache_handles_empty_pattern() {
-        let matches = get_search_matches("hello world", "");
+        let matches = get_search_matches("hello world", "", true);
         assert!(matches.is_empty());
 
         // Should still work after empty pattern
-        let matches2 = get_search_matches("hello world", "hello");
+        let matches2 = get_search_matches("hello world", "hello", true);
         assert_eq!(matches2.len(), 1);
     }
 
     #[test]
     fn regex_cache_handles_invalid_regex() {
-        let matches = get_search_matches("hello world", "[invalid");
+        let matches = get_search_matches("hello world", "[invalid", true);
         assert!(matches.is_empty());
 
         // Should recover and work with valid pattern
-        let matches2 = get_search_matches("hello world", "hello");
+        let matches2 = get_search_matches("hello world", "hello", true);
         assert_eq!(matches2.len(), 1);
     }
 

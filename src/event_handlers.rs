@@ -468,6 +468,20 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
+    // Handle toggle find mode (regex vs wildcard) - Ctrl+Alt+X
+    if settings.keybindings.toggle_find_mode_matches(&code, &modifiers) {
+        if state.find_active {
+            // Toggle between regex and wildcard mode while in find mode
+            state.find_regex_mode = !state.find_regex_mode;
+            state.find_error = None;
+            // Update highlights with the new mode - CRITICAL!
+            crate::find::update_live_highlights(state);
+            crate::find::update_search_hit_count(state, lines);
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
+    }
+
     // Handle open dialog (configurable keybinding, default Ctrl+O)
     if settings.keybindings.open_dialog_matches(&code, &modifiers) {
         state.pending_menu_action = Some(crate::menu::MenuAction::FileOpenDialog);
@@ -969,6 +983,7 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
     let filtered_lines = crate::find::get_lines_with_matches_and_context(
         lines,
         pattern,
+        state.find_regex_mode,
         state.find_scope,
         state.filter_context_before,
         state.filter_context_after,
@@ -1049,6 +1064,7 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
             let filtered_lines = crate::find::get_lines_with_matches_and_context(
                 lines,
                 pattern,
+                state.find_regex_mode,
                 state.find_scope,
                 state.filter_context_before,
                 state.filter_context_after,
@@ -1105,6 +1121,7 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
             let filtered_lines = crate::find::get_lines_with_matches_and_context(
                 lines,
                 pattern,
+                state.find_regex_mode,
                 state.find_scope,
                 state.filter_context_before,
                 state.filter_context_after,
@@ -1256,6 +1273,7 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
             let filtered_lines = crate::find::get_lines_with_matches_and_context(
                 lines,
                 pattern,
+                state.find_regex_mode,
                 state.find_scope,
                 state.filter_context_before,
                 state.filter_context_after,
@@ -1318,6 +1336,7 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
             let filtered_lines = crate::find::get_lines_with_matches_and_context(
                 lines,
                 pattern,
+                state.find_regex_mode,
                 state.find_scope,
                 state.filter_context_before,
                 state.filter_context_after,

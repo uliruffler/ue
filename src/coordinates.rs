@@ -192,6 +192,7 @@ pub(crate) fn visual_to_logical_position(
         crate::find::get_lines_with_matches_and_context(
             lines,
             pattern,
+            state.find_regex_mode,
             state.find_scope,
             state.filter_context_before,
             state.filter_context_after,
@@ -611,6 +612,7 @@ mod tests {
             drag_target: None,
             last_save_time: None,
             find_active: false,
+            find_regex_mode: true,
             filter_active: false,
             filter_context_before: 0,
             filter_context_after: 0,
@@ -621,6 +623,7 @@ mod tests {
             find_history: Vec::new(),
             find_history_index: None,
             last_search_pattern: None,
+            last_search_regex_mode: true,
             saved_search_pattern: None,
             search_wrapped: false,
             wrap_warning_pending: None,

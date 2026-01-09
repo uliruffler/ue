@@ -25,6 +25,8 @@ pub(crate) struct KeyBindings {
     pub(crate) replace_current: String,
     #[serde(default = "default_replace_all")]
     pub(crate) replace_all: String,
+    #[serde(default = "default_toggle_find_mode")]
+    pub(crate) toggle_find_mode: String,
     pub(crate) goto_line: String,
     #[serde(default = "default_help")]
     pub(crate) help: String,
@@ -80,6 +82,10 @@ fn default_replace_current() -> String {
 
 fn default_replace_all() -> String {
     "Ctrl+Alt+r".into()
+}
+
+fn default_toggle_find_mode() -> String {
+    "Ctrl+Alt+x".into()
 }
 
 fn default_save_and_quit() -> String {
@@ -301,6 +307,9 @@ impl KeyBindings {
     pub fn replace_all_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.replace_all, code, modifiers)
     }
+    pub fn toggle_find_mode_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.toggle_find_mode, code, modifiers)
+    }
     pub fn goto_line_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.goto_line, code, modifiers)
     }
@@ -449,6 +458,7 @@ mod tests {
             replace: "Ctrl+Shift+h".into(),
             replace_current: "Ctrl+r".into(),
             replace_all: "Ctrl+Alt+r".into(),
+            toggle_find_mode: "Ctrl+Alt+x".into(),
             goto_line: "Ctrl+g".into(),
             help: "F1".into(),
             save_and_quit: "Ctrl+q".into(),

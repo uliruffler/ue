@@ -2,13 +2,31 @@
 
 Press **{help}** or **ESC** to close this help.
 
-## Find Mode - Search with Regular Expressions (Case-Insensitive by Default)
+## Find Mode - Search with Regular Expressions or Wildcards (Case-Insensitive by Default)
+
+### Search Modes
+
+**Toggle between two search modes using the ⇄ button:**
+
+- **⇄R (Regex Mode)**: Full regex pattern matching (default)
+  - Click the `[⇄R]` button or press **{toggle_find_mode}** to switch modes
+  - Footer shows: `Find [⇄R]: `
+  - Supports advanced patterns: `\d+`, `\w+`, `.*`, `^start`, `end$`, etc.
+  
+- **⇄W (Wildcard Mode)**: Simple wildcard matching (like shell patterns)
+  - Click the `[⇄W]` button or press **{toggle_find_mode}** to switch modes
+  - Footer shows: `Find [⇄W]: `
+  - `*` matches any number of characters (including zero)
+  - `?` matches exactly one character
+  - Special characters (`.`, `[`, `]`, etc.) are treated as literals
+  - Example: `test*.txt` matches `test.txt`, `test123.txt`, `testfile.txt`
 
 ### Basic Usage
 
 | Key | Action |
 |-----|--------|
-| **Type pattern** | Enter search pattern (supports regex) |
+| **Type pattern** | Enter search pattern (regex or wildcard) |
+| **{toggle_find_mode}** or **Click mode** | Toggle between regex and wildcard mode |
 | **Enter** | Search forward and close find mode |
 | **ESC** | Cancel and close find mode |
 | **{find_next}** | Find next occurrence |
@@ -49,11 +67,13 @@ After performing a search, press **{replace}** to enter replace mode:
 
 ### Search Behavior
 
-- Searches are **case-INSENSITIVE** by default
-- Pattern supports regex: `\d+` (digits), `\w+` (words), `.*` (any), etc.
+- Searches are **case-INSENSITIVE** by default in both modes
+- **Regex mode**: Full pattern support (`\d+`, `\w+`, `.*`, etc.)
+- **Wildcard mode**: Simple patterns (`*`, `?`, literal characters)
 - Live highlighting shows matches as you type
 - Search wraps around file automatically (no confirmation needed)
 - If text is selected, search is scoped to selection only
+- Mode toggle button (**[⇄R]** or **[⇄W]**) shows active mode
 - **Hit counter** shows `(X/Y) ↑↓  line:col` format
   - Always visible when search is active (even with 0 matches)
   - Format: `(current/total) ↑↓  line:col`
@@ -102,6 +122,19 @@ To perform case-sensitive search, use regex flag:
 - **Syntax:** `(?-i)pattern`
 - **Example:** `(?-i)Hello` matches only 'Hello', not 'hello' or 'HELLO'
 
+### Wildcard Examples
+
+**Wildcard mode treats special regex characters as literals:**
+
+| Pattern | Matches | Doesn't Match |
+|---------|---------|---------------|
+| `*.txt` | `file.txt`, `test.txt`, `abc123.txt` | `file.doc`, `txt` |
+| `test?` | `test1`, `testa`, `test!` | `test`, `test12` |
+| `foo*bar` | `foobar`, `foo123bar`, `foo_test_bar` | `fobar`, `foobaz` |
+| `test.txt` | `test.txt` (literal dot) | `testXtxt` |
+| `[abc]` | `[abc]` (literal brackets) | `a`, `b`, `c` |
+| `file*.?` | `file.x`, `file123.a` | `file.`, `file.ab` |
+
 ### Regex Examples
 
 | Pattern | Matches |
@@ -114,6 +147,8 @@ To perform case-sensitive search, use regex flag:
 | `(cat\|dog)` | cat OR dog |
 | `^start` | 'start' at beginning of line |
 | `end$` | 'end' at end of line |
+| `test.txt` | matches `testXtxt` (. = any char) |
+| `[abc]` | matches `a`, `b`, or `c` |
 
 ### Tips
 

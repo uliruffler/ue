@@ -45,6 +45,8 @@ pub struct FileViewerState<'a> {
     pub(crate) last_save_time: Option<Instant>,
     /// Find mode active
     pub(crate) find_active: bool,
+    /// Find mode: true = regex, false = wildcard (* and ? only)
+    pub(crate) find_regex_mode: bool,
     /// Filter mode active (shows only lines with search hits)
     pub(crate) filter_active: bool,
     /// Number of context lines to show before each match in filter mode
@@ -65,6 +67,8 @@ pub struct FileViewerState<'a> {
     pub(crate) find_history_index: Option<usize>,
     /// Last successful search pattern (for F3/Shift+F3)
     pub(crate) last_search_pattern: Option<String>,
+    /// Whether the last search pattern used regex mode (true) or wildcard mode (false)
+    pub(crate) last_search_regex_mode: bool,
     /// Search pattern saved before entering find mode (to restore on Esc)
     pub(crate) saved_search_pattern: Option<String>,
     /// Whether we've wrapped around in search
@@ -171,6 +175,7 @@ impl<'a> FileViewerState<'a> {
             drag_target: None,
             last_save_time: None,
             find_active: false,
+            find_regex_mode: true,
             filter_active: false,
             filter_context_before: settings.filter_context_before,
             filter_context_after: settings.filter_context_after,
@@ -181,6 +186,7 @@ impl<'a> FileViewerState<'a> {
             find_history: Vec::new(),
             find_history_index: None,
             last_search_pattern: None,
+            last_search_regex_mode: true,
             saved_search_pattern: None,
             search_wrapped: false,
             wrap_warning_pending: None,

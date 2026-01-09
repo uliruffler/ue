@@ -301,6 +301,37 @@ fn handle_footer_click(
     column: u16,
     visible_lines: usize,
 ) {
+    // Handle mode toggle button in find mode (⇄ character)
+    if state.find_active || state.replace_active {
+        let digits = state.settings.appearance.line_number_digits as usize;
+        let line_num_offset = if digits > 0 { digits + 1 } else { 0 };
+
+        // Calculate positions of mode toggle button
+        // Format: "[digits] Find [⇄R]: " or "[digits] Find [⇄W]: "
+        let find_or_filter_label = if state.filter_active { "Filter " } else { "Find " };
+        let find_or_filter_len = find_or_filter_label.len();
+
+        // Button is [⇄R] or [⇄W]
+        // In characters: '[' + '⇄' + 'R/W' + ']' = 4 chars
+        // In visual columns: '[' + '⇄' (2 cols) + 'R/W' + ']' = 5 cols
+        let toggle_start = line_num_offset + find_or_filter_len; // Position of '['
+        let toggle_len = 5; // Visual width: '[' + '⇄' (2) + 'R/W' + ']'
+        let toggle_end = toggle_start + toggle_len;
+
+        let click_col = column as usize;
+
+        // Check if clicked on toggle button area
+        if click_col >= toggle_start && click_col < toggle_end {
+            // Toggle the mode
+            state.find_regex_mode = !state.find_regex_mode;
+            state.find_error = None;
+            // Update highlights with new mode
+            crate::find::update_live_highlights(state);
+            crate::find::update_search_hit_count(state, lines);
+            state.needs_redraw = true;
+            return;
+        }
+    }
     // Handle filter context spinners (if filter mode is active)
     if state.filter_active && state.last_search_pattern.is_some() {
         let digits = state.settings.appearance.line_number_digits as usize;

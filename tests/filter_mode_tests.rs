@@ -14,7 +14,7 @@ fn test_filter_mode_shows_only_matching_lines() {
     let pattern = "match";
 
     // Get lines with matches 
-    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // Should return indices 0, 2, 4
     assert_eq!(matching_lines.len(), 3);
@@ -40,7 +40,7 @@ fn test_filter_mode_with_scope() {
     let scope = Some(((1, 0), (3, 20)));
 
     // Get lines with matches within scope
-    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, scope);
+    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, true, scope);
 
     // Should only return lines 2 and 3 (within scope range)
     assert_eq!(matching_lines.len(), 2);
@@ -61,7 +61,7 @@ fn test_filter_mode_case_insensitive() {
     let pattern = "match";
 
     // Get lines with matches (should be case-insensitive by default)
-    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // Should find all three variants
     assert_eq!(matching_lines.len(), 3);
@@ -81,7 +81,7 @@ fn test_filter_mode_empty_pattern() {
     let pattern = "nomatch";
 
     // Get lines with matches
-    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // Should return empty vec
     assert_eq!(matching_lines.len(), 0);
@@ -100,7 +100,7 @@ fn test_filter_mode_regex_pattern() {
     let pattern = r"test\d+";
 
     // Get lines with matches (regex pattern)
-    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let matching_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // Should match lines with test followed by digits
     assert_eq!(matching_lines.len(), 2);
@@ -122,7 +122,7 @@ fn test_filtered_lines_exclude_non_matches() {
     ];
 
     let pattern = "hit";
-    let filtered_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let filtered_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // Should return only lines 0, 2, 4 (matching lines)
     assert_eq!(filtered_lines.len(), 3);
@@ -149,7 +149,7 @@ fn test_find_next_visible_line() {
     ];
 
     let pattern = "hit";
-    let filtered_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let filtered_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // From line 0, next visible should be 2
     let next_from_0 = filtered_lines.iter().find(|&&idx| idx > 0);
@@ -177,7 +177,7 @@ fn test_find_previous_visible_line() {
     ];
 
     let pattern = "hit";
-    let filtered_lines = ue::find::get_lines_with_matches(&lines, pattern, None);
+    let filtered_lines = ue::find::get_lines_with_matches(&lines, pattern, true, None);
 
     // From line 4, previous visible should be 2
     let prev_from_4 = filtered_lines.iter().rev().find(|&&idx| idx < 4);
@@ -203,7 +203,7 @@ fn test_filter_with_no_context() {
     let pattern = "match";
 
     // Get lines with matches (no context)
-    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 0, 0);
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, true, None, 0, 0);
 
     // Should return only lines with matches
     assert_eq!(matching_lines.len(), 2);
@@ -225,7 +225,7 @@ fn test_filter_with_context_before() {
     let pattern = "match";
 
     // Get lines with matches + 2 lines before
-    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 2, 0);
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, true, None, 2, 0);
 
     // Should return lines 0, 1, 2 (2 before + the match)
     assert_eq!(matching_lines.len(), 3);
@@ -248,7 +248,7 @@ fn test_filter_with_context_after() {
     let pattern = "match";
 
     // Get lines with matches + 2 lines after
-    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 0, 2);
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, true, None, 0, 2);
 
     // Should return lines 1, 2, 3 (the match + 2 after)
     assert_eq!(matching_lines.len(), 3);
@@ -271,7 +271,7 @@ fn test_filter_with_context_both() {
     let pattern = "match";
 
     // Get lines with matches + 1 before + 1 after
-    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 1, 1);
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, true, None, 1, 1);
 
     // Should return lines 1, 2, 3 (1 before + match + 1 after)
     assert_eq!(matching_lines.len(), 3);
@@ -295,7 +295,7 @@ fn test_filter_with_overlapping_contexts() {
 
     // Get lines with matches + 1 before + 1 after
     // Contexts should overlap at line 2
-    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, None, 1, 1);
+    let matching_lines = ue::find::get_lines_with_matches_and_context(&lines, pattern, true, None, 1, 1);
 
     // Should return lines 0, 1, 2, 3, 4 (all lines due to overlapping contexts)
     assert_eq!(matching_lines.len(), 5);
