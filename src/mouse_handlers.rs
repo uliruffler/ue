@@ -162,6 +162,32 @@ fn handle_mouse_click_multiclick(
     state.last_click_pos = Some(current_click_pos);
 }
 
+/// Convert a visual scroll position to the corresponding logical line
+/// Used when line wrapping is enabled to find which logical line should be at top_line
+fn convert_visual_scroll_to_logical_line(
+    lines: &[String],
+    state: &FileViewerState,
+    text_width: u16,
+    target_visual_scroll: usize,
+) -> usize {
+    let mut cumulative_visual = 0;
+
+    for i in 0..lines.len() {
+        let line_visual_height = crate::coordinates::calculate_wrapped_lines_for_line(
+            lines, i, text_width, state.settings.tab_width
+        ) as usize;
+
+        if cumulative_visual + line_visual_height > target_visual_scroll {
+            return i;
+        }
+
+        cumulative_visual += line_visual_height;
+    }
+
+    // If we've gone through all lines, return the last line
+    lines.len().saturating_sub(1)
+}
+
 /// Handle mouse click on scrollbar
 fn handle_scrollbar_click(
     state: &mut FileViewerState,
@@ -170,20 +196,47 @@ fn handle_scrollbar_click(
     row: u16,
     visible_lines: usize,
 ) {
-    if lines.len() <= visible_lines {
+    // Calculate text width and total visual lines (accounting for wrapping)
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
+
+    // Only show scrollbar if there are more visual lines than visible
+    if total_visual_lines <= visible_lines {
         return; // No scrolling needed
     }
 
     // Calculate scrollbar dimensions (same as in rendering.rs)
-    let total_lines = lines.len();
+    // Determine if we actually have wrapping (visual lines != logical lines)
+    let has_actual_wrapping = total_visual_lines != lines.len();
     let scrollbar_height = visible_lines;
-    let bar_height = (visible_lines * visible_lines / total_lines).max(1);
 
-    let max_scroll = total_lines.saturating_sub(visible_lines);
-    let scroll_progress = if max_scroll == 0 {
-        0.0
+    // Calculate bar height and scroll progress
+    let (bar_height, max_scroll, scroll_progress) = if has_actual_wrapping {
+        // For wrapped mode with actual wrapping, calculate visual position
+        let visual_lines_before_top = crate::coordinates::calculate_total_visual_lines_before(lines, state, text_width);
+        let max_visual_scroll = total_visual_lines.saturating_sub(visible_lines);
+        let bar_height = if total_visual_lines > 0 {
+            (visible_lines * visible_lines / total_visual_lines).max(1)
+        } else {
+            1
+        };
+        let scroll_progress = if max_visual_scroll == 0 {
+            0.0
+        } else {
+            visual_lines_before_top as f64 / max_visual_scroll as f64
+        };
+        (bar_height, max_visual_scroll, scroll_progress)
     } else {
-        state.top_line as f64 / max_scroll as f64
+        // For unwrapped mode, use logical lines
+        let total_lines = lines.len();
+        let bar_height = (visible_lines * visible_lines / total_lines).max(1);
+        let max_scroll = total_lines.saturating_sub(visible_lines);
+        let scroll_progress = if max_scroll == 0 {
+            0.0
+        } else {
+            state.top_line as f64 / max_scroll as f64
+        };
+        (bar_height, max_scroll, scroll_progress)
     };
 
     let bar_position = ((scrollbar_height - bar_height) as f64 * scroll_progress) as usize;
@@ -203,16 +256,54 @@ fn handle_scrollbar_click(
     } else {
         // Click in scrollbar background - jump to that position
         let target_scroll_progress = visual_line as f64 / scrollbar_height as f64;
-        let new_top_line = (target_scroll_progress * max_scroll as f64) as usize;
-        let new_top_line = new_top_line.min(max_scroll);
 
-        if new_top_line != state.top_line {
-            state.top_line = new_top_line;
-            // Adjust cursor if it goes off screen
-            if state.cursor_line >= visible_lines {
-                state.cursor_line = visible_lines.saturating_sub(1);
+        if has_actual_wrapping {
+            // For wrapped mode with actual wrapping, calculate target visual position and find corresponding logical line
+            let target_visual_line = (target_scroll_progress * max_scroll as f64) as usize;
+
+            // Find the logical line that contains this visual line
+            let mut cumulative_visual = 0;
+            let mut new_top_line = 0;
+
+            for i in 0..lines.len() {
+                let line_visual_height = crate::coordinates::calculate_wrapped_lines_for_line(
+                    lines, i, text_width, state.settings.tab_width
+                ) as usize;
+
+                if cumulative_visual + line_visual_height > target_visual_line {
+                    new_top_line = i;
+                    break;
+                }
+
+                cumulative_visual += line_visual_height;
+
+                if cumulative_visual >= max_scroll {
+                    new_top_line = i;
+                    break;
+                }
             }
-            state.needs_redraw = true;
+
+            if new_top_line != state.top_line {
+                state.top_line = new_top_line;
+                // Adjust cursor if it goes off screen
+                if state.cursor_line >= visible_lines {
+                    state.cursor_line = visible_lines.saturating_sub(1);
+                }
+                state.needs_redraw = true;
+            }
+        } else {
+            // For unwrapped mode, use logical lines directly
+            let new_top_line = (target_scroll_progress * max_scroll as f64) as usize;
+            let new_top_line = new_top_line.min(max_scroll);
+
+            if new_top_line != state.top_line {
+                state.top_line = new_top_line;
+                // Adjust cursor if it goes off screen
+                if state.cursor_line >= visible_lines {
+                    state.cursor_line = visible_lines.saturating_sub(1);
+                }
+                state.needs_redraw = true;
+            }
         }
     }
 }
@@ -224,14 +315,39 @@ fn handle_scrollbar_drag(
     row: u16,
     visible_lines: usize,
 ) {
-    if !state.scrollbar_dragging || lines.len() <= visible_lines {
+    if !state.scrollbar_dragging {
         return;
     }
 
-    let total_lines = lines.len();
-    let max_scroll = total_lines.saturating_sub(visible_lines);
+    // Calculate text width and total visual lines (accounting for wrapping)
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
+
+    // Only handle dragging if there's actual scrolling needed
+    if total_visual_lines <= visible_lines {
+        return;
+    }
+
+    // Determine if we actually have wrapping (visual lines != logical lines)
+    let has_actual_wrapping = total_visual_lines != lines.len();
     let scrollbar_height = visible_lines;
-    let bar_height = (visible_lines * visible_lines / total_lines).max(1);
+
+    // Calculate bar height and max scroll
+    let (bar_height, max_scroll) = if has_actual_wrapping {
+        let max_visual_scroll = total_visual_lines.saturating_sub(visible_lines);
+        let bar_height = if total_visual_lines > 0 {
+            (visible_lines * visible_lines / total_visual_lines).max(1)
+        } else {
+            1
+        };
+        (bar_height, max_visual_scroll)
+    } else {
+        // No actual wrapping - use logical line counts
+        let total_lines = lines.len();
+        let bar_height = (visible_lines * visible_lines / total_lines).max(1);
+        let max_scroll = total_lines.saturating_sub(visible_lines);
+        (bar_height, max_scroll)
+    };
 
     // Convert mouse row to visual line (accounting for header)
     let mouse_visual_line = (row as usize).saturating_sub(1);
@@ -239,20 +355,20 @@ fn handle_scrollbar_drag(
     // For very small bars (1 character), position the bar directly at mouse position
     if bar_height == 1 {
         // For 1-character bars, calculate scroll position so that the bar renders at mouse position
-        // We need to work backwards: if bar should be at mouse_visual_line, what scroll position gives us that?
         let available_scroll_space = visible_lines.saturating_sub(bar_height);
         let target_bar_position = mouse_visual_line.min(available_scroll_space);
 
-        // Calculate the top_line that will render the bar at target_bar_position
-        // Rendering: bar_position = ((scrollbar_height - bar_height) * (top_line / max_scroll)) as usize
-        // We want: target_bar_position <= (available_scroll_space * (top_line / max_scroll)) < target_bar_position + 1
-        // So: top_line >= (target_bar_position * max_scroll) / available_scroll_space
-        // And: top_line < ((target_bar_position + 1) * max_scroll) / available_scroll_space
-        // To ensure we get exactly target_bar_position when rounded down, we use the lower bound
+        // Use integer arithmetic with ceiling division for precision (matches rendering logic)
         let new_top_line = if available_scroll_space > 0 && max_scroll > 0 {
-            // Use the minimum top_line that will render to target_bar_position
-            let min_top_line = (target_bar_position * max_scroll).div_ceil(available_scroll_space);
-            min_top_line.min(max_scroll)
+            if has_actual_wrapping {
+                // For wrapped mode with actual wrapping, calculate visual scroll and convert to logical line
+                let target_visual_scroll = (target_bar_position * max_scroll).div_ceil(available_scroll_space);
+                convert_visual_scroll_to_logical_line(lines, state, text_width, target_visual_scroll)
+            } else {
+                // No actual wrapping - use direct logical line calculation
+                let top_line = (target_bar_position * max_scroll).div_ceil(available_scroll_space);
+                top_line.min(max_scroll)
+            }
         } else {
             0
         };
@@ -279,9 +395,17 @@ fn handle_scrollbar_drag(
             0.0
         };
 
-        // Convert scroll progress to actual top_line
-        let new_top_line = (scroll_progress * max_scroll as f64) as usize;
-        let new_top_line = new_top_line.min(max_scroll);
+        // Convert scroll progress to scroll position
+        let target_scroll = (scroll_progress * max_scroll as f64) as usize;
+
+        // Convert scroll position to top_line
+        let new_top_line = if has_actual_wrapping {
+            // For wrapped mode with actual wrapping, find logical line for target visual scroll position
+            convert_visual_scroll_to_logical_line(lines, state, text_width, target_scroll)
+        } else {
+            // No actual wrapping - scroll position IS the top_line
+            target_scroll.min(max_scroll)
+        };
 
         if new_top_line != state.top_line {
             let absolute_cursor = state.absolute_line();
@@ -658,7 +782,11 @@ pub(crate) fn handle_mouse_event(
     let visual_line = (row as usize).saturating_sub(1);
     // Ignore clicks beyond visible content, but allow scrollbar events to reach the boundary
     let scrollbar_column = state.term_width - 1;
-    let scrollbar_visible = lines.len() > visible_lines;
+    
+    // Calculate scrollbar visibility accounting for wrapped lines
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
+    let scrollbar_visible = total_visual_lines > visible_lines;
     let is_scrollbar_event = scrollbar_visible && column == scrollbar_column;
 
     if visual_line >= visible_lines && !is_scrollbar_event {

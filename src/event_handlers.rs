@@ -815,6 +815,12 @@ pub(crate) fn handle_key_event(
 
     let did_edit = handle_editing_keys(state, lines, &code, &modifiers, visible_lines, filename);
     let moved = handle_navigation(state, lines, code, visible_lines);
+
+    // After editing or navigation, ensure cursor is visible (handles line wrapping auto-scroll)
+    if did_edit || moved {
+        ensure_cursor_visible_after_edit(state, lines, visible_lines);
+    }
+
     update_selection_state(state, moved, is_shift, is_navigation);
     update_redraw_flags(state, did_edit, moved);
 
@@ -866,6 +872,71 @@ fn update_redraw_flags(state: &mut FileViewerState, did_edit: bool, moved: bool)
     }
     if did_edit {
         state.modified = true;
+    }
+}
+
+/// Ensure cursor is visible after editing or navigation
+/// This handles auto-scrolling when line wrapping causes cursor to move off-screen
+/// Also scrolls proactively when cursor is at the last visible line to maintain context
+fn ensure_cursor_visible_after_edit(
+    state: &mut FileViewerState,
+    lines: &[String],
+    visible_lines: usize,
+) {
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
+
+    // Calculate cursor's visual position
+    use crate::coordinates::calculate_cursor_visual_line;
+    let absolute_line = state.absolute_line();
+    if absolute_line >= lines.len() {
+        return;
+    }
+
+    let cursor_visual_line = calculate_cursor_visual_line(lines, state, text_width);
+
+    // Scroll if cursor is at or beyond the last visible line
+    // This provides proactive scrolling to maintain context
+    if cursor_visual_line >= effective_visible_lines {
+        // We want the cursor to end up at the last visible line (effective_visible_lines - 1)
+        // Calculate how many visual lines we need to scroll
+        let target_visual_line = effective_visible_lines - 1;
+        let visual_lines_to_scroll = cursor_visual_line - target_visual_line;
+
+        // Advance top_line by enough logical lines to free up visual_lines_to_scroll visual lines
+        let mut visual_lines_scrolled = 0;
+        let mut logical_lines_to_advance = 0;
+
+        while visual_lines_scrolled < visual_lines_to_scroll
+              && state.top_line + logical_lines_to_advance < lines.len() {
+            let line_height = crate::coordinates::calculate_wrapped_lines_for_line(
+                lines,
+                state.top_line + logical_lines_to_advance,
+                text_width,
+                state.settings.tab_width,
+            ) as usize;
+
+            visual_lines_scrolled += line_height;
+            logical_lines_to_advance += 1;
+        }
+
+        // Advance top_line
+        state.top_line += logical_lines_to_advance;
+
+        // Ensure top_line doesn't exceed document bounds
+        if state.top_line >= lines.len() {
+            state.top_line = lines.len().saturating_sub(1);
+        }
+
+        // Recalculate cursor_line relative to new top_line
+        // cursor_line is the logical line offset from top_line
+        state.cursor_line = absolute_line.saturating_sub(state.top_line);
+
+        // Ensure cursor_line is within valid range
+        // This should not normally be needed but is a safety check
+        if state.top_line + state.cursor_line >= lines.len() {
+            state.cursor_line = lines.len().saturating_sub(state.top_line + 1);
+        }
     }
 }
 

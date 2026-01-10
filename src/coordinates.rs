@@ -164,6 +164,52 @@ pub(crate) fn calculate_visual_lines_to_cursor(
     visual_lines
 }
 
+/// Calculate total visual lines for the entire document, accounting for line wrapping
+/// This is used to determine if scrollbar should be shown
+pub fn calculate_total_visual_lines(
+    lines: &[String],
+    state: &FileViewerState,
+    text_width: u16,
+) -> usize {
+    let tab_width = state.settings.tab_width;
+    let wrapping_enabled = state.is_line_wrapping_enabled();
+    let mut total_visual_lines = 0;
+
+    for i in 0..lines.len() {
+        if wrapping_enabled {
+            total_visual_lines += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width) as usize;
+        } else {
+            total_visual_lines += 1;
+        }
+    }
+
+    total_visual_lines
+}
+
+/// Calculate total visual lines before top_line (for scrollbar positioning)
+pub fn calculate_total_visual_lines_before(
+    lines: &[String],
+    state: &FileViewerState,
+    text_width: u16,
+) -> usize {
+    let tab_width = state.settings.tab_width;
+    let wrapping_enabled = state.is_line_wrapping_enabled();
+    let mut visual_lines_before = 0;
+
+    for i in 0..state.top_line {
+        if i >= lines.len() {
+            break;
+        }
+        if wrapping_enabled {
+            visual_lines_before += calculate_wrapped_lines_for_line(lines, i, text_width, tab_width) as usize;
+        } else {
+            visual_lines_before += 1;
+        }
+    }
+
+    visual_lines_before
+}
+
 pub(crate) fn visual_to_logical_position(
     state: &FileViewerState,
     lines: &[String],
@@ -331,14 +377,19 @@ pub(crate) fn adjust_view_for_resize(
 }
 
 /// Calculate the text width available for content, accounting for line numbers and scrollbar
-/// Scrollbar takes 1 column when there are more lines than fit on screen
-pub(crate) fn calculate_text_width(
+/// Note: This uses a simple heuristic for scrollbar width. For accurate calculations,
+/// check if total_visual_lines > visible_lines using calculate_total_visual_lines()
+pub fn calculate_text_width(
     state: &FileViewerState,
     lines: &[String],
     visible_lines: usize,
 ) -> u16 {
     let line_num_width = line_number_width(state.settings);
+
+    // Simple heuristic: assume scrollbar if more logical lines than fit
+    // This may be conservative when line wrapping causes more visual lines
     let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+
     state
         .term_width
         .saturating_sub(line_num_width)

@@ -1978,26 +1978,32 @@ fn render_scrollbar(
     use crossterm::cursor::{RestorePosition, SavePosition};
     use crossterm::style::{ResetColor, SetBackgroundColor};
 
-    // Only show scrollbar if there are more lines than visible
-    if lines.len() <= visible_lines {
+    // Calculate text width and total visual lines (accounting for wrapping)
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
+
+    // Only show scrollbar if there are more visual lines than visible
+    if total_visual_lines <= visible_lines {
         return Ok(());
     }
 
     // Save current cursor position to restore later
     execute!(stdout, SavePosition)?;
 
-    // Calculate scrollbar dimensions
-    let total_lines = lines.len();
+    // Calculate scrollbar dimensions using visual line counts
     let scrollbar_height = visible_lines;
-    let bar_height = (visible_lines * visible_lines / total_lines).max(1);
+    let bar_height = (visible_lines * visible_lines / total_visual_lines).max(1);
 
-    // Calculate scroll progress (handle case when total_lines <= visible_lines)
-    let max_scroll = total_lines.saturating_sub(visible_lines);
+    // Calculate scroll progress based on visual lines
+    // We need to calculate how many visual lines are before top_line
+    let visual_lines_before_top = crate::coordinates::calculate_total_visual_lines_before(lines, state, text_width);
+
+    let max_scroll = total_visual_lines.saturating_sub(visible_lines);
     let scroll_progress = if max_scroll == 0 {
         0.0
     } else {
-        // Clamp to 1.0 in case top_line exceeds max_scroll (e.g., last line at top)
-        (state.top_line as f64 / max_scroll as f64).min(1.0)
+        // Clamp to 1.0 in case visual scroll exceeds max (e.g., last line at top)
+        (visual_lines_before_top as f64 / max_scroll as f64).min(1.0)
     };
 
     let bar_position = ((scrollbar_height - bar_height) as f64 * scroll_progress) as usize;
