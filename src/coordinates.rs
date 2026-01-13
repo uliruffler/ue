@@ -375,10 +375,8 @@ pub(crate) fn adjust_view_for_resize(
     let rel_cursor = absolute_cursor_line.saturating_sub(new_top);
     (new_top, rel_cursor)
 }
-
-/// Calculate the text width available for content, accounting for line numbers and scrollbar
-/// Note: This uses a simple heuristic for scrollbar width. For accurate calculations,
-/// check if total_visual_lines > visible_lines using calculate_total_visual_lines()
+/// Calculate text width available for displaying content (terminal width minus line numbers and scrollbar)
+/// This accounts for line wrapping: if wrapping causes more visual lines than fit, scrollbar space is reserved.
 pub fn calculate_text_width(
     state: &FileViewerState,
     lines: &[String],
@@ -386,14 +384,21 @@ pub fn calculate_text_width(
 ) -> u16 {
     let line_num_width = line_number_width(state.settings);
 
-    // Simple heuristic: assume scrollbar if more logical lines than fit
-    // This may be conservative when line wrapping causes more visual lines
-    let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    // First pass: calculate width assuming no scrollbar
+    let width_without_scrollbar = state.term_width.saturating_sub(line_num_width);
 
-    state
-        .term_width
-        .saturating_sub(line_num_width)
-        .saturating_sub(scrollbar_width)
+    // Check if scrollbar will actually be needed by calculating total visual lines
+    // (accounting for line wrapping with the width we have)
+    if !lines.is_empty() {
+        let total_visual = calculate_total_visual_lines(lines, state, width_without_scrollbar);
+        if total_visual > visible_lines {
+            // Scrollbar needed, so reduce width by 1
+            return width_without_scrollbar.saturating_sub(1);
+        }
+    }
+
+    // No scrollbar needed
+    width_without_scrollbar
 }
 
 #[cfg(test)]

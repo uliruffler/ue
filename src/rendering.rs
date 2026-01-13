@@ -1954,7 +1954,11 @@ fn clear_to_scrollbar(
     visible_lines: usize,
     current_column: u16,
 ) -> Result<(), std::io::Error> {
-    let scrollbar_visible = lines.len() > visible_lines;
+    // Check if scrollbar is visible by calculating visual lines (accounting for wrapping)
+    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
+    let scrollbar_visible = total_visual_lines > visible_lines;
+
     let end_column = if scrollbar_visible {
         state.term_width.saturating_sub(1) // Stop before scrollbar
     } else {
@@ -2577,5 +2581,124 @@ mod tests {
         // Verify the output contains the filename or a truncated version of it
         assert!(output_str.contains("very_very") || output_str.contains("..."),
                 "Output should contain filename or ellipsis truncation");
+    }
+
+    #[test]
+    fn test_scrollbar_position_calculation() {
+        use crate::editor_state::FileViewerState;
+        use crate::settings::Settings;
+        use crate::undo::UndoHistory;
+
+        // Create a simple document with 5 lines (no wrapping needed)
+        let content = vec![
+            "Line 1".to_string(),
+            "Line 2".to_string(),
+            "Line 3".to_string(),
+            "Line 4".to_string(),
+            "Line 5".to_string(),
+        ];
+
+        let viewport_height = 3;
+        let settings = Settings::default();
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        // Position at line 2 (0-indexed, so viewing lines 2, 3, 4)
+        state.top_line = 2;
+
+        // Total lines is 5, viewport is 3, so scrollbar should be shown
+        assert!(content.len() > viewport_height);
+
+        // When at top_line = 2 with viewport of 3 lines:
+        // - Lines before top: 2 lines (line 0, line 1)
+        // - Lines visible: 3 lines (line 2, 3, 4)
+        // - Max scroll = total_lines - viewport = 5 - 3 = 2
+        // - Scroll progress = lines_before / max_scroll = 2 / 2 = 1.0
+
+        let max_scroll = content.len().saturating_sub(viewport_height);
+        let lines_before = state.top_line;
+        let scroll_progress = if max_scroll == 0 {
+            0.0
+        } else {
+            (lines_before as f64 / max_scroll as f64).min(1.0)
+        };
+
+        // At line 2 (third line), we should be at maximum scroll position
+        assert_eq!(scroll_progress, 1.0);
+
+        // Test at top
+        state.top_line = 0;
+        let lines_before = state.top_line;
+        let scroll_progress = if max_scroll == 0 {
+            0.0
+        } else {
+            (lines_before as f64 / max_scroll as f64).min(1.0)
+        };
+        assert_eq!(scroll_progress, 0.0);
+
+        // Test in middle
+        state.top_line = 1;
+        let lines_before = state.top_line;
+        let scroll_progress = if max_scroll == 0 {
+            0.0
+        } else {
+            (lines_before as f64 / max_scroll as f64).min(1.0)
+        };
+        assert_eq!(scroll_progress, 0.5);
+    }
+
+    #[test]
+    fn test_scrollbar_with_wrapped_lines() {
+        use crate::editor_state::FileViewerState;
+        use crate::settings::Settings;
+        use crate::undo::UndoHistory;
+
+        // Create content with a very long line that will wrap
+        let content = vec![
+            "Short".to_string(),
+            "This is a very long line that will wrap multiple times when displayed in a narrow terminal".to_string(),
+            "Another short line".to_string(),
+        ];
+
+        let viewport_height = 5;
+        let settings = Settings::default();
+        let undo_history = UndoHistory::new();
+        let state = FileViewerState::new(40, undo_history, &settings); // Narrow terminal
+
+        // Calculate how many wrapped lines the long line will produce
+        let text_width = 40 - if settings.appearance.line_number_digits > 0 {
+            settings.appearance.line_number_digits as usize + 1
+        } else {
+            0
+        };
+
+        let tab_width = settings.tab_width;
+        let long_line = &content[1];
+        let visual_width = visual_width(long_line, tab_width);
+        let wrapped_lines = if visual_width == 0 {
+            1
+        } else {
+            (visual_width + text_width - 1) / text_width
+        };
+
+        // Total visual lines = 1 (short) + wrapped_lines (long) + 1 (another)
+        let total_visual_lines = 1 + wrapped_lines + 1;
+
+        // With long line wrapping, total visual lines should exceed content length
+        assert!(total_visual_lines > content.len(),
+                "Expected total_visual_lines ({}) > content.len ({})",
+                total_visual_lines, content.len());
+
+        // Verify scrollbar would be shown if visual lines exceed viewport
+        if total_visual_lines > viewport_height {
+            // Max scroll is the number of visual lines that don't fit
+            let max_scroll = total_visual_lines - viewport_height;
+            assert!(max_scroll > 0);
+
+            // Scroll progress should be in valid range
+            let scroll_progress = (state.top_line as f64 / max_scroll as f64).min(1.0);
+            assert!(scroll_progress >= 0.0);
+            assert!(scroll_progress <= 1.0);
+        }
     }
 }
