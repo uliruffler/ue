@@ -714,6 +714,7 @@ mod tests {
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
             is_untitled: false,
+            pending_split_action: None,
         }
     }
 

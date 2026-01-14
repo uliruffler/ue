@@ -142,6 +142,8 @@ pub struct FileViewerState<'a> {
     pub(crate) menu_bar: crate::menu::MenuBar,
     /// Pending menu action to execute
     pub(crate) pending_menu_action: Option<crate::menu::MenuAction>,
+    /// Pending split action (split direction for new pane)
+    pub(crate) pending_split_action: Option<crate::split_pane::SplitDirection>,
     /// Whether this is an untitled file that hasn't been saved to disk yet
     pub(crate) is_untitled: bool,
 }
@@ -220,6 +222,7 @@ impl<'a> FileViewerState<'a> {
             last_drag_position: None,
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
+            pending_split_action: None,
             is_untitled: false,
         }
     }
@@ -984,4 +987,6 @@ impl<'a> FileViewerState<'a> {
         self.top_line = line;
     }
 }
+
+
 

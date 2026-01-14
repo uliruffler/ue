@@ -10,6 +10,7 @@ use crate::coordinates::{
     line_number_width, visual_width, visual_width_up_to,
 };
 use crate::editor_state::{FileViewerState, Position};
+use crate::split_pane::{Pane, Rect, SplitDirection};
 
 /// Expand tabs in a string to spaces, considering tab stops
 fn expand_tabs(s: &str, tab_width: usize) -> String {
@@ -2672,4 +2673,193 @@ mod tests {
             assert!(scroll_progress <= 1.0);
         }
     }
+}
+/// Render multiple panes in split layout
+pub(crate) fn render_split_screen(
+    stdout: &mut impl Write,
+    pane: &Pane,
+    focus_x: u16,
+    focus_y: u16,
+) -> Result<(), std::io::Error> {
+    execute!(stdout, cursor::Hide)?;
+    execute!(stdout, crossterm::terminal::Clear(ClearType::All))?;
+    render_pane(stdout, pane, focus_x, focus_y)?;
+    render_dividers(stdout, pane)?;
+    stdout.flush()?;
+    Ok(())
+}
+fn render_pane(
+    stdout: &mut impl Write,
+    pane: &Pane,
+    focus_x: u16,
+    focus_y: u16,
+) -> Result<(), std::io::Error> {
+    match pane {
+        Pane::Leaf { state, lines, filename, rect } => {
+            let is_focused = rect.contains(focus_x, focus_y);
+            render_pane_content(stdout, state, lines, filename, *rect, is_focused)?;
+        }
+        Pane::Split { first, second, .. } => {
+            render_pane(stdout, first, focus_x, focus_y)?;
+            render_pane(stdout, second, focus_x, focus_y)?;
+        }
+    }
+    Ok(())
+}
+fn render_pane_content(
+    stdout: &mut impl Write,
+    state: &FileViewerState,
+    lines: &[String],
+    filename: &str,
+    rect: Rect,
+    is_focused: bool,
+) -> Result<(), std::io::Error> {
+    let visible_lines = rect.height.saturating_sub(2) as usize;
+    render_pane_header(stdout, filename, state, rect, is_focused)?;
+    render_pane_lines(stdout, lines, state, rect, visible_lines)?;
+    render_pane_footer(stdout, state, lines, rect)?;
+    if is_focused {
+        position_pane_cursor(stdout, state, rect)?;
+    }
+    Ok(())
+}
+fn render_pane_header(
+    stdout: &mut impl Write,
+    filename: &str,
+    state: &FileViewerState,
+    rect: Rect,
+    is_focused: bool,
+) -> Result<(), std::io::Error> {
+    use crossterm::cursor::MoveTo;
+    execute!(stdout, MoveTo(rect.x, rect.y))?;
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
+        execute!(stdout, SetBackgroundColor(color))?;
+    }
+    let focus_indicator = if is_focused { "●" } else { "○" };
+    let display_name = std::path::Path::new(filename)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(filename);
+    let modified_indicator = if state.modified { " *" } else { "" };
+    let header_text = format!("{} {}{}", focus_indicator, display_name, modified_indicator);
+    let max_width = rect.width as usize;
+    let truncated = if header_text.len() > max_width {
+        format!("{}...", &header_text[..max_width.saturating_sub(3)])
+    } else {
+        format!("{:width$}", header_text, width = max_width)
+    };
+    write!(stdout, "{}", truncated)?;
+    execute!(stdout, ResetColor)?;
+    Ok(())
+}
+fn render_pane_lines(
+    stdout: &mut impl Write,
+    lines: &[String],
+    state: &FileViewerState,
+    rect: Rect,
+    visible_lines: usize,
+) -> Result<(), std::io::Error> {
+    use crossterm::cursor::MoveTo;
+    let content_start_y = rect.y + 1;
+    let line_num_width = if state.settings.appearance.line_number_digits > 0 {
+        line_number_width(state.settings) as usize
+    } else {
+        0
+    };
+    for i in 0..visible_lines {
+        let line_idx = state.top_line + i;
+        let screen_y = content_start_y + i as u16;
+        execute!(stdout, MoveTo(rect.x, screen_y))?;
+        if line_idx < lines.len() {
+            if line_num_width > 0 {
+                if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg) {
+                    execute!(stdout, SetBackgroundColor(color))?;
+                }
+                write!(stdout, "{:width$} ", line_idx + 1, width = line_num_width)?;
+                execute!(stdout, ResetColor)?;
+            }
+            let available_width = (rect.width as usize).saturating_sub(line_num_width + 1);
+            let line_content = &lines[line_idx];
+            let truncated = if line_content.len() > available_width {
+                &line_content[..available_width]
+            } else {
+                line_content
+            };
+            write!(stdout, "{}", truncated)?;
+            let remaining = available_width.saturating_sub(truncated.len());
+            write!(stdout, "{}", " ".repeat(remaining))?;
+        } else {
+            write!(stdout, "{}", " ".repeat(rect.width as usize))?;
+        }
+    }
+    Ok(())
+}
+fn render_pane_footer(
+    stdout: &mut impl Write,
+    state: &FileViewerState,
+    lines: &[String],
+    rect: Rect,
+) -> Result<(), std::io::Error> {
+    use crossterm::cursor::MoveTo;
+    let footer_y = rect.y + rect.height - 1;
+    execute!(stdout, MoveTo(rect.x, footer_y))?;
+    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
+        execute!(stdout, SetBackgroundColor(color))?;
+    }
+    let absolute_line = state.top_line + state.cursor_line;
+    let total_lines = lines.len();
+    let footer_text = format!(" {}:{} / {} ", absolute_line + 1, state.cursor_col + 1, total_lines);
+    let max_width = rect.width as usize;
+    let truncated = if footer_text.len() > max_width {
+        format!("{}...", &footer_text[..max_width.saturating_sub(3)])
+    } else {
+        format!("{:width$}", footer_text, width = max_width)
+    };
+    write!(stdout, "{}", truncated)?;
+    execute!(stdout, ResetColor)?;
+    Ok(())
+}
+fn position_pane_cursor(
+    stdout: &mut impl Write,
+    state: &FileViewerState,
+    rect: Rect,
+) -> Result<(), std::io::Error> {
+    use crossterm::cursor::{MoveTo, Show};
+    let line_num_width = if state.settings.appearance.line_number_digits > 0 {
+        line_number_width(state.settings)
+    } else {
+        0
+    };
+    let cursor_x = rect.x + line_num_width + state.cursor_col as u16 + 1;
+    let cursor_y = rect.y + 1 + state.cursor_line as u16;
+    execute!(stdout, MoveTo(cursor_x, cursor_y), Show)?;
+    Ok(())
+}
+fn render_dividers(
+    stdout: &mut impl Write,
+    pane: &Pane,
+) -> Result<(), std::io::Error> {
+    match pane {
+        Pane::Leaf { .. } => {}
+        Pane::Split { direction, first, second, rect, ratio } => {
+            use crossterm::cursor::MoveTo;
+            match direction {
+                SplitDirection::Horizontal => {
+                    let divider_x = rect.x + (rect.width as f32 * ratio) as u16;
+                    for y in rect.y..rect.y + rect.height {
+                        execute!(stdout, MoveTo(divider_x, y))?;
+                        write!(stdout, "│")?;
+                    }
+                }
+                SplitDirection::Vertical => {
+                    let divider_y = rect.y + (rect.height as f32 * ratio) as u16;
+                    execute!(stdout, MoveTo(rect.x, divider_y))?;
+                    write!(stdout, "{}", "─".repeat(rect.width as usize))?;
+                }
+            }
+            render_dividers(stdout, first)?;
+            render_dividers(stdout, second)?;
+        }
+    }
+    Ok(())
 }

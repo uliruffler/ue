@@ -46,6 +46,14 @@ pub(crate) struct KeyBindings {
     pub(crate) cursor_right: String,
     #[serde(default = "default_numpad_enter")]
     pub(crate) numpad_enter: String,
+    #[serde(default = "default_split_left")]
+    pub(crate) split_left: String,
+    #[serde(default = "default_split_right")]
+    pub(crate) split_right: String,
+    #[serde(default = "default_split_up")]
+    pub(crate) split_up: String,
+    #[serde(default = "default_split_down")]
+    pub(crate) split_down: String,
 }
 
 fn default_new_file() -> String {
@@ -106,6 +114,19 @@ fn default_file_selector() -> String {
 
 fn default_open_dialog() -> String {
     "Ctrl+o".into()
+}
+
+fn default_split_left() -> String {
+    "Ctrl+Alt+Left".into()
+}
+fn default_split_right() -> String {
+    "Ctrl+Alt+Right".into()
+}
+fn default_split_up() -> String {
+    "Ctrl+Alt+Up".into()
+}
+fn default_split_down() -> String {
+    "Ctrl+Alt+Down".into()
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -351,6 +372,19 @@ impl KeyBindings {
     pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.file_selector, code, modifiers)
     }
+
+    pub fn split_left_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.split_left, code, modifiers)
+    }
+    pub fn split_right_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.split_right, code, modifiers)
+    }
+    pub fn split_up_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.split_up, code, modifiers)
+    }
+    pub fn split_down_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.split_down, code, modifiers)
+    }
 }
 
 fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
@@ -373,6 +407,10 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
         KeyCode::Tab => key == "tab",
         KeyCode::Backspace => key == "backspace",
         KeyCode::Delete => key == "delete" || key == "del",
+        KeyCode::Left => key == "left",
+        KeyCode::Right => key == "right",
+        KeyCode::Up => key == "up",
+        KeyCode::Down => key == "down",
         KeyCode::F(n) => {
             // Match F1-F12 keys
             if let Some(num_str) = key.strip_prefix('f') {
@@ -469,6 +507,10 @@ mod tests {
             cursor_left: "Alt+h".into(),
             cursor_right: "Alt+l".into(),
             numpad_enter: "Ctrl+j".into(),
+            split_left: "Ctrl+Alt+Left".into(),
+            split_right: "Ctrl+Alt+Right".into(),
+            split_up: "Ctrl+Alt+Up".into(),
+            split_down: "Ctrl+Alt+Down".into(),
         }
     }
 

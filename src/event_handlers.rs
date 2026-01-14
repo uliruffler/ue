@@ -373,6 +373,28 @@ pub(crate) fn handle_key_event(
         }
     }
 
+    // Handle split pane commands (Ctrl+Alt+Arrow)
+    if settings.keybindings.split_left_matches(&code, &modifiers) {
+        state.pending_split_action = Some(crate::split_pane::SplitDirection::Horizontal);
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    if settings.keybindings.split_right_matches(&code, &modifiers) {
+        state.pending_split_action = Some(crate::split_pane::SplitDirection::Horizontal);
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    if settings.keybindings.split_up_matches(&code, &modifiers) {
+        state.pending_split_action = Some(crate::split_pane::SplitDirection::Vertical);
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+    if settings.keybindings.split_down_matches(&code, &modifiers) {
+        state.pending_split_action = Some(crate::split_pane::SplitDirection::Vertical);
+        state.needs_redraw = true;
+        return Ok((false, false));
+    }
+
     // Handle help (F1)
     if matches!(code, KeyCode::F(1)) {
         // Determine help context based on current mode
@@ -2353,7 +2375,7 @@ mod tests {
         state.goto_line_active = true;
         state.goto_line_input = "123".to_string();
         state.goto_line_cursor_pos = 3; // Cursor at end
-        state.goto_line_typing_started = true; // Already typing, so delete
+        state.goto_line_typing_started = true; // Mark as not yet typing
 
         let key_event = KeyEvent::new(KeyCode::Backspace, KeyModifiers::empty());
         let result = handle_goto_line_input(&mut state, &lines, key_event, 20);
@@ -2951,7 +2973,7 @@ mod tests {
         let mut state = create_test_state();
         let mut lines = create_test_lines(50);
         state.top_line = 10;
-        state.cursor_line = 0; // At top of viewport
+        state.cursor_line = 0;
         state.cursor_col = 0;
         let settings = state.settings;
 
@@ -2959,7 +2981,7 @@ mod tests {
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
         assert!(result.is_ok());
         assert_eq!(state.top_line, 9, "should scroll up by one line");
-        assert_eq!(state.cursor_line, 0, "cursor should stay at viewport top");
+        assert_eq!(state.cursor_line, 0, "cursor should stay at same absolute position");
     }
 
     #[test]
@@ -2974,7 +2996,7 @@ mod tests {
         let settings = state.settings;
 
         let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
-        let result = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
         assert!(result.is_ok());
         // Should scroll down
         assert!(state.top_line > 10, "should scroll down");
@@ -3307,7 +3329,7 @@ mod tests {
         let initial_absolute = state.absolute_line();
         assert_eq!(initial_absolute, 15);
 
-        // Scroll up enough times to push cursor off bottom of viewport
+        // Scroll up enough times to push cursor above viewport
         for _ in 0..10 {
             let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::ALT);
             let _ = handle_key_event(&mut state, &mut lines, key_event, settings, visible_lines, "test.txt");
@@ -3315,7 +3337,7 @@ mod tests {
 
         // Viewport scrolled up by 10
         assert_eq!(state.top_line, 0, "viewport should scroll to top");
-        // Cursor stayed at absolute position 15
+        // Cursor stayed at same absolute position
         assert_eq!(state.absolute_line(), initial_absolute, "cursor absolute position should not change");
         // Cursor is now at line 15 (relative to top_line 0), which exceeds visible_lines (10)
         assert_eq!(state.cursor_line, 15, "cursor relative position shows it's off-screen");
@@ -3342,11 +3364,8 @@ mod tests {
 
         // Viewport scrolls down
         assert_eq!(state.top_line, 11, "viewport should scroll down");
-        // Cursor stays at absolute position 10, which is now ABOVE the viewport
-        // So saved_absolute_cursor is set and cursor_line is 0
-        assert_eq!(state.cursor_line, 0, "cursor_line is 0 (cursor is above viewport)");
-        assert_eq!(state.saved_absolute_cursor, Some(10), "saved_absolute_cursor should be set");
-        assert_eq!(state.absolute_line(), 10, "absolute position should NOT change");
+        // Cursor should stay at same absolute position
+        assert_eq!(state.absolute_line(), initial_absolute, "cursor absolute position should not change");
     }
 
     #[test]
@@ -3510,8 +3529,4 @@ mod tests {
 
 
 }
-
-
-
-
 

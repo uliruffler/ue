@@ -34,6 +34,7 @@ pub mod recent;
 pub mod rendering;
 pub mod session;
 pub mod settings;
+pub mod split_pane;
 pub mod syntax;
 pub mod ui;
 pub mod undo;

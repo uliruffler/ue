@@ -953,6 +953,24 @@ fn editing_session(
                     return Ok((state.modified, None, false, true));
                 }
 
+                // Handle pending split action
+                if let Some(direction) = state.pending_split_action.take() {
+
+                    // Save current state before switching to split mode
+                    persist_editor_state(&mut state, file);
+
+                    // Enter split mode - this will create a new session with SplitContainer
+                    let split_result = editing_session_with_splits(
+                        file,
+                        lines.join("\n"),
+                        direction,
+                        settings
+                    )?;
+
+                    // Return the result from split session
+                    return Ok(split_result);
+                }
+
                 // Handle pending menu action (e.g., FileOpenRecent or ViewFileSelector)
                 if let Some(action) = state.pending_menu_action.take() {
                     match action {
@@ -1277,6 +1295,177 @@ fn editing_session(
                         }
                     }
                 }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Editing session with split panes support
+fn editing_session_with_splits(
+    initial_file: &str,
+    initial_content: String,
+    initial_split: crate::split_pane::SplitDirection,
+    settings: &Settings,
+) -> std::io::Result<(bool, Option<String>, bool, bool)> {
+    use crate::split_pane::{Pane, Rect, SplitContainer};
+    use crossterm::event::MouseEventKind;
+
+    let mut stdout = io::stdout();
+    let (term_width, term_height) = size()?;
+
+    // Create initial split container with current file
+    let initial_rect = Rect {
+        x: 0,
+        y: 0,
+        width: term_width,
+        height: term_height,
+    };
+
+    let mut container = SplitContainer::new(
+        initial_file.to_string(),
+        initial_content,
+        settings,
+        initial_rect
+    );
+
+    // Perform the initial split
+    if !container.split_focused(initial_split, settings) {
+        // Fall back to regular editing if split fails
+        return Ok((false, None, false, false));
+    }
+
+    let mut visible_lines = (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT);
+    let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
+    let mut needs_redraw = true;
+
+    loop {
+        // Only render when needed to avoid flickering
+        if needs_redraw {
+            crate::rendering::render_split_screen(
+                &mut stdout,
+                &container.root,
+                container.focus_x,
+                container.focus_y
+            )?;
+            needs_redraw = false;
+        }
+
+        if !event::poll(Duration::from_millis(50))? {
+            continue;
+        }
+
+        match event::read()? {
+            Event::Key(key_event) => {
+                let key_event = crate::event_handlers::normalize_key_event(key_event, settings);
+
+                // Handle double-Esc to exit
+                match last_esc.process_key(&key_event) {
+                    EscResult::Double => {
+                        // Save all panes before exiting
+                        container.root.visit_leaves_mut(&mut |state, _lines, filename, _rect| {
+                            let abs = state.top_line + state.cursor_line;
+                            state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                            let _ = state.undo_history.save(filename.as_str());
+                        });
+                        return Ok((false, None, true, false));
+                    }
+                    EscResult::First => {
+                        continue;
+                    }
+                    EscResult::None => {}
+                }
+
+                // Get focused pane and handle key event
+                if let Some(focused) = container.focused_pane() {
+                    if let Pane::Leaf { state, lines, filename, .. } = focused {
+                        // Handle split commands
+                        if settings.keybindings.split_left_matches(&key_event.code, &key_event.modifiers) {
+                            container.split_focused(crate::split_pane::SplitDirection::Horizontal, settings);
+                            needs_redraw = true;
+                            continue;
+                        }
+                        if settings.keybindings.split_right_matches(&key_event.code, &key_event.modifiers) {
+                            container.split_focused(crate::split_pane::SplitDirection::Horizontal, settings);
+                            needs_redraw = true;
+                            continue;
+                        }
+                        if settings.keybindings.split_up_matches(&key_event.code, &key_event.modifiers) {
+                            container.split_focused(crate::split_pane::SplitDirection::Vertical, settings);
+                            needs_redraw = true;
+                            continue;
+                        }
+                        if settings.keybindings.split_down_matches(&key_event.code, &key_event.modifiers) {
+                            container.split_focused(crate::split_pane::SplitDirection::Vertical, settings);
+                            needs_redraw = true;
+                            continue;
+                        }
+
+                        // Handle close (Ctrl+W)
+                        if settings.keybindings.close_matches(&key_event.code, &key_event.modifiers) {
+                            let pane_count_before = container.count_panes();
+                            container.close_focused(settings);
+                            let pane_count_after = container.count_panes();
+
+                            // If we're down to one pane, exit split mode
+                            if pane_count_after == 1 {
+                                // Save the last pane before exiting
+                                if let Pane::Leaf { state, lines: _, filename, .. } = &mut container.root {
+                                    let abs = state.top_line + state.cursor_line;
+                                    state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                                    let _ = state.undo_history.save(filename.as_str());
+                                }
+                                return Ok((false, None, false, false));
+                            }
+
+                            if pane_count_after < pane_count_before {
+                                needs_redraw = true;
+                            }
+                            continue;
+                        }
+
+                        // Handle normal editing in focused pane
+                        let (should_quit, should_close) = handle_key_event(
+                            state,
+                            lines,
+                            key_event,
+                            settings,
+                            visible_lines,
+                            filename
+                        )?;
+
+                        if should_quit {
+                            return Ok((false, None, true, false));
+                        }
+                        if should_close {
+                            return Ok((false, None, false, true));
+                        }
+
+                        // Redraw after key event if state changed
+                        if state.needs_redraw {
+                            needs_redraw = true;
+                            state.needs_redraw = false;
+                        }
+                    }
+                }
+            }
+            Event::Mouse(mouse_event) => {
+                // Only set focus on mouse click, not on move
+                if matches!(mouse_event.kind, MouseEventKind::Down(_)) {
+                    if container.set_focus(mouse_event.column, mouse_event.row) {
+                        needs_redraw = true;
+                    }
+                }
+            }
+            Event::Resize(w, h) => {
+                visible_lines = (h as usize).saturating_sub(STATUS_LINE_HEIGHT);
+                container.set_rect(Rect {
+                    x: 0,
+                    y: 0,
+                    width: w,
+                    height: h,
+                });
+                needs_redraw = true;
             }
             _ => {}
         }
