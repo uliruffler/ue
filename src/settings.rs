@@ -73,7 +73,7 @@ fn default_numpad_enter() -> String {
 }
 
 fn default_replace() -> String {
-    "Ctrl+h".into()
+    "Ctrl+r".into()
 }
 
 fn default_replace_current() -> String {
@@ -225,6 +225,7 @@ impl Settings {
         // Read config (either existing or just created)
         let content = fs::read_to_string(&config_path)?;
         let settings: Settings = toml::from_str(&content)?;
+
         Ok(settings)
     }
 
@@ -395,7 +396,7 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
     // Check if modifiers match
     let has_ctrl = modifiers.contains(KeyModifiers::CONTROL);
     let has_alt = modifiers.contains(KeyModifiers::ALT);
-    let has_shift = modifiers.contains(KeyModifiers::SHIFT);
+    let mut has_shift = modifiers.contains(KeyModifiers::SHIFT);
 
     let needs_ctrl = modifier_parts.iter().any(|m| {
         let m_lower = m.to_lowercase();
@@ -403,6 +404,18 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
     });
     let needs_alt = modifier_parts.iter().any(|m| m.to_lowercase() == "alt");
     let needs_shift = modifier_parts.iter().any(|m| m.to_lowercase() == "shift");
+
+    // Special case: For Ctrl+Shift+letter combinations, terminals often send the uppercase letter
+    // without the SHIFT modifier (e.g., Ctrl+Shift+h sends Char('H') with only CONTROL modifier).
+    // If the binding needs Shift and we have an uppercase letter, treat the uppercase as implicit shift.
+    if needs_shift && !has_shift {
+        if let KeyCode::Char(c) = code {
+            if c.is_ascii_alphabetic() && c.is_uppercase() && key == c.to_lowercase().to_string() {
+                // The uppercase character implies shift was pressed
+                has_shift = true;
+            }
+        }
+    }
 
     has_ctrl == needs_ctrl && has_alt == needs_alt && has_shift == needs_shift
 }
@@ -455,7 +468,7 @@ mod tests {
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
             find_previous: "Shift+F3".into(),
-            replace: "Ctrl+Shift+h".into(),
+            replace: "Ctrl+r".into(),
             replace_current: "Ctrl+r".into(),
             replace_all: "Ctrl+Alt+r".into(),
             toggle_find_mode: "Ctrl+Alt+x".into(),
@@ -497,6 +510,26 @@ mod tests {
         assert!(kb.copy_matches(&KeyCode::Char('c'), &mods));
         let missing_shift = KeyModifiers::CONTROL;
         assert!(!kb.copy_matches(&KeyCode::Char('c'), &missing_shift));
+    }
+
+    #[test]
+    fn ctrl_alt_r_replace_all() {
+        // Test that Ctrl+Alt+r (replace_all) works correctly
+        let (_tmp, _guard) = set_temp_home();
+        let kb = create_test_keybindings();
+
+        // Test replace keybinding (Ctrl+r)
+        assert!(kb.replace_matches(&KeyCode::Char('r'), &KeyModifiers::CONTROL));
+
+        // Test replace_all keybinding (Ctrl+Alt+r)
+        let mods = KeyModifiers::CONTROL | KeyModifiers::ALT;
+        assert!(kb.replace_all_matches(&KeyCode::Char('r'), &mods));
+
+        // Ctrl+r alone should NOT match replace_all
+        assert!(!kb.replace_all_matches(&KeyCode::Char('r'), &KeyModifiers::CONTROL));
+
+        // Ctrl+Alt+other key should NOT match
+        assert!(!kb.replace_all_matches(&KeyCode::Char('x'), &mods));
     }
 
     #[test]

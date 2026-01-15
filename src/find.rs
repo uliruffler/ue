@@ -56,6 +56,7 @@ pub(crate) fn handle_find_input(
         KeyCode::Esc => {
             // Exit find mode and restore previous search highlights
             state.find_active = false;
+            state.find_via_replace = false; // Clear the flag
             state.find_pattern.clear();
             state.find_error = None;
             state.find_history_index = None;
@@ -90,6 +91,13 @@ pub(crate) fn handle_find_input(
                         // Note: Don't clear selection - keep it visible to show the search scope
                         // Note: Don't clear find_scope - keep it so highlighting remains scoped
 
+                        // If find mode was entered via replace keybinding, automatically enter replace mode
+                        if state.find_via_replace {
+                            state.find_via_replace = false; // Clear the flag
+                            state.replace_active = true;
+                            state.replace_pattern.clear();
+                            state.replace_cursor_pos = 0;
+                        }
 
                         state.needs_redraw = true;
                     }
@@ -102,6 +110,7 @@ pub(crate) fn handle_find_input(
             } else {
                 // Empty search - clear highlights and scope
                 state.find_active = false;
+                state.find_via_replace = false; // Clear the flag
                 state.find_error = None;
                 state.find_history_index = None;
                 state.wrap_warning_pending = None;

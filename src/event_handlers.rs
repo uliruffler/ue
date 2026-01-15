@@ -42,6 +42,7 @@ pub(crate) fn handle_key_event(
         code, modifiers, ..
     } = key_event;
 
+
     // Update menu checkable states before rendering
     state.menu_bar.update_checkable(
         crate::menu::MenuAction::ViewLineWrap,
@@ -460,6 +461,7 @@ pub(crate) fn handle_key_event(
             }
 
             state.find_active = true;
+            state.find_via_replace = false; // Clear flag - this is normal find mode
             state.find_pattern.clear();
             state.find_cursor_pos = 0;
             state.find_error = None;
@@ -524,20 +526,30 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
-    // Handle replace mode entry (Ctrl+Shift+H) - only when we have an active search pattern
-    if settings.keybindings.replace_matches(&code, &modifiers)
-        && !state.replace_active
-        && state.last_search_pattern.is_some()
-    {
-        // Enter replace mode
-        state.replace_active = true;
-        state.replace_pattern.clear();
-        state.replace_cursor_pos = 0;
-        state.needs_redraw = true;
-        return Ok((false, false));
+    // Handle replace mode entry (Ctrl+r by default)
+    // If no search pattern exists yet, enter find mode first
+    // If search pattern exists, enter replace mode
+    if settings.keybindings.replace_matches(&code, &modifiers) && !state.replace_active {
+        if state.last_search_pattern.is_none() {
+            // No search yet - enter find mode first (will auto-enter replace mode after search)
+            state.find_active = true;
+            state.find_via_replace = true; // Mark that this was entered via replace
+            state.find_pattern.clear();
+            state.find_cursor_pos = 0;
+            state.find_scope = None;
+            state.needs_redraw = true;
+            return Ok((false, false));
+        } else {
+            // Search pattern exists - enter replace mode
+            state.replace_active = true;
+            state.replace_pattern.clear();
+            state.replace_cursor_pos = 0;
+            state.needs_redraw = true;
+            return Ok((false, false));
+        }
     }
 
-    // Handle replace current occurrence (Ctrl+R) - works even if not in replace mode
+    // Handle replace current occurrence - works even if not in replace mode
     // Requires both a search pattern and a replacement pattern
     if settings.keybindings.replace_current_matches(&code, &modifiers) {
         if state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
@@ -3490,7 +3502,7 @@ mod tests {
     }
 
     #[test]
-    fn ctrl_shift_h_triggers_replace_with_active_search() {
+    fn ctrl_r_triggers_replace_with_active_search() {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
         let mut lines = vec!["hello world".to_string()];
@@ -3499,8 +3511,8 @@ mod tests {
         // Set up active search
         state.last_search_pattern = Some("hello".to_string());
 
-        // Press Ctrl+Shift+H (new replace keybinding)
-        let key_event = KeyEvent::new(KeyCode::Char('h'), KeyModifiers::CONTROL | KeyModifiers::SHIFT);
+        // Press Ctrl+r (new replace keybinding)
+        let key_event = KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL);
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
 
         assert!(result.is_ok());

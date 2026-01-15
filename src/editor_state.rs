@@ -47,6 +47,8 @@ pub struct FileViewerState<'a> {
     pub(crate) find_active: bool,
     /// Find mode: true = regex, false = wildcard (* and ? only)
     pub(crate) find_regex_mode: bool,
+    /// True if find mode was entered via replace keybinding (auto-enter replace after search)
+    pub(crate) find_via_replace: bool,
     /// Filter mode active (shows only lines with search hits)
     pub(crate) filter_active: bool,
     /// Number of context lines to show before each match in filter mode
@@ -176,6 +178,7 @@ impl<'a> FileViewerState<'a> {
             last_save_time: None,
             find_active: false,
             find_regex_mode: true,
+            find_via_replace: false,
             filter_active: false,
             filter_context_before: settings.filter_context_before,
             filter_context_after: settings.filter_context_after,

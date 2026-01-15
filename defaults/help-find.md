@@ -35,20 +35,22 @@ Press **{help}** or **ESC** to close this help.
 
 ### Replace Mode
 
-After performing a search, press **{replace}** to enter replace mode:
+Press **{replace}** to enter find-and-replace workflow:
+- Automatically enters find mode first
+- After typing search pattern and pressing Enter, automatically enters replace mode
 
 | Key | Action |
 |-----|--------|
 | **Type text** | Enter replacement text |
 | **Enter** | Show replace buttons (doesn't execute) |
 | **ESC** | Exit replace mode (return to normal edit mode) |
-| **{replace_current}** | Replace current match and jump to next |
-| **{replace_all}** | Replace all matches and exit replace mode |
+| **{replace_current}** | Replace current match and jump to next (Ctrl+r) |
+| **{replace_all}** | Replace all matches and exit replace mode (Ctrl+Alt+r) |
 | **Click button** | Click `[replace occurrence]` or `[replace all]` |
 
 **Replace Workflow:**
-1. Press **{find}** and search for pattern
-2. Press **{replace}** to enter replace mode
+1. Press **{replace}** (automatically enters find mode)
+2. Type your search pattern and press **Enter** (automatically enters replace mode)
 3. Type replacement text
 4. Press **Enter** to see buttons (or use keyboard shortcuts)
 5. Use **{replace_current}** to replace one at a time, or **{replace_all}** to replace all at once

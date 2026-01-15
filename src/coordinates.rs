@@ -669,6 +669,7 @@ mod tests {
             last_save_time: None,
             find_active: false,
             find_regex_mode: true,
+            find_via_replace: false,
             filter_active: false,
             filter_context_before: 0,
             filter_context_after: 0,
