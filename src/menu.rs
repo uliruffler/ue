@@ -434,7 +434,7 @@ pub(crate) fn render_dropdown_menu(
     let line_num_width = crate::coordinates::line_number_display_width(state.settings, lines.len()) as usize;
     let mut menu_x = line_num_width + 2; // line numbers + burger icon "≡ "
     for i in 0..menu_bar.selected_menu_index {
-        menu_x += menu_bar.menus[i].label.len(); // Menu label length
+        menu_x += menu_bar.menus[i].label.len() + 2; // Menu label length + 2 spaces (matching rendering)
     }
 
     // Find longest item label for menu width
@@ -645,7 +645,8 @@ fn handle_menu_label_click(
     let mut x = start_x;
 
     for (idx, menu) in menu_bar.menus.iter().enumerate() {
-        if col >= x && col < x + menu.label.len() {
+        // Include both the label and the trailing 2 spaces in the clickable region
+        if col >= x - 1 && col < x + menu.label.len() + 1 {
             if menu_bar.selected_menu_index == idx {
                 // Toggle dropdown on same menu
                 menu_bar.dropdown_open = !menu_bar.dropdown_open;
@@ -661,7 +662,7 @@ fn handle_menu_label_click(
             }
             return (None, true);
         }
-        x += menu.label.len(); // Just menu label length, no extra spacing
+        x += menu.label.len() + 2; // Menu label length + 2 spaces (matching rendering)
     }
 
     // Clicked outside menu labels - close menu
@@ -727,7 +728,7 @@ pub(crate) fn is_point_in_dropdown(
     let line_num_width = line_number_width as usize;
     let mut menu_x = line_num_width + 2; // line numbers + burger icon "≡ "
     for i in 0..menu_bar.selected_menu_index {
-        menu_x += menu_bar.menus[i].label.len(); // Menu label length
+        menu_x += menu_bar.menus[i].label.len() + 2; // Menu label length + 2 spaces (matching rendering)
     }
 
     // Find longest item label for menu width
