@@ -221,8 +221,8 @@ pub(crate) fn visual_to_logical_position(
     let text_width = calculate_text_width(state, lines, visible_lines);
     let tab_width = state.settings.tab_width;
 
-    // Convert column to text column (excluding line numbers and scrollbar)
-    let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    // Always reserve space for scrollbar to prevent text jumping
+    let scrollbar_width = 1;
     let text_start = line_num_width;
     let text_end = state.term_width.saturating_sub(scrollbar_width);
 
@@ -376,29 +376,18 @@ pub(crate) fn adjust_view_for_resize(
     (new_top, rel_cursor)
 }
 /// Calculate text width available for displaying content (terminal width minus line numbers and scrollbar)
-/// This accounts for line wrapping: if wrapping causes more visual lines than fit, scrollbar space is reserved.
+/// The scrollbar is always visible to prevent text jumping, so we always reserve 1 column for it.
 pub fn calculate_text_width(
     state: &FileViewerState,
-    lines: &[String],
-    visible_lines: usize,
+    _lines: &[String],
+    _visible_lines: usize,
 ) -> u16 {
     let line_num_width = line_number_width(state.settings);
 
-    // First pass: calculate width assuming no scrollbar
-    let width_without_scrollbar = state.term_width.saturating_sub(line_num_width);
-
-    // Check if scrollbar will actually be needed by calculating total visual lines
-    // (accounting for line wrapping with the width we have)
-    if !lines.is_empty() {
-        let total_visual = calculate_total_visual_lines(lines, state, width_without_scrollbar);
-        if total_visual > visible_lines {
-            // Scrollbar needed, so reduce width by 1
-            return width_without_scrollbar.saturating_sub(1);
-        }
-    }
-
-    // No scrollbar needed
-    width_without_scrollbar
+    // Always reserve space for scrollbar (1 column) to prevent text jumping
+    state.term_width
+        .saturating_sub(line_num_width)
+        .saturating_sub(1)
 }
 
 #[cfg(test)]
@@ -900,8 +889,8 @@ mod tests {
         let lines = vec!["line1".to_string()]; // Only 1 line, fits in 20 visible
 
         let width = calculate_text_width(&state, &lines, 20);
-        // 80 - line_number_width (default 4 for 3 digits + separator) = 76
-        assert_eq!(width, 76);
+        // 80 - line_number_width (default 4 for 3 digits + separator) - scrollbar (1) = 75
+        assert_eq!(width, 75);
     }
 
     #[test]
@@ -925,8 +914,8 @@ mod tests {
         let lines = vec!["line1".to_string()];
 
         let width = calculate_text_width(&state, &lines, 20);
-        // 80 - 0 (no line numbers) = 80
-        assert_eq!(width, 80);
+        // 80 - 0 (no line numbers) - scrollbar (1) = 79
+        assert_eq!(width, 79);
     }
 
     // Tests for visual_to_logical_position function

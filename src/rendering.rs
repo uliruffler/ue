@@ -1960,20 +1960,12 @@ fn render_line_segment_with_selection_expanded(
 fn clear_to_scrollbar(
     stdout: &mut impl Write,
     state: &FileViewerState,
-    lines: &[String],
-    visible_lines: usize,
+    _lines: &[String],
+    _visible_lines: usize,
     current_column: u16,
 ) -> Result<(), std::io::Error> {
-    // Check if scrollbar is visible by calculating visual lines (accounting for wrapping)
-    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
-    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
-    let scrollbar_visible = total_visual_lines > visible_lines;
-
-    let end_column = if scrollbar_visible {
-        state.term_width.saturating_sub(1) // Stop before scrollbar
-    } else {
-        state.term_width // Clear entire line if no scrollbar
-    };
+    // Always reserve space for scrollbar to prevent text jumping
+    let end_column = state.term_width.saturating_sub(1); // Stop before scrollbar
 
     // Fill with spaces from current position to end_column
     let spaces_needed = end_column.saturating_sub(current_column);
@@ -1996,31 +1988,8 @@ fn render_scrollbar(
     let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
     let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
 
-    // Only show scrollbar if there are more visual lines than visible
-    if total_visual_lines <= visible_lines {
-        return Ok(());
-    }
-
     // Save current cursor position to restore later
     execute!(stdout, SavePosition)?;
-
-    // Calculate scrollbar dimensions using visual line counts
-    let scrollbar_height = visible_lines;
-    let bar_height = (visible_lines * visible_lines / total_visual_lines).max(1);
-
-    // Calculate scroll progress based on visual lines
-    // We need to calculate how many visual lines are before top_line
-    let visual_lines_before_top = crate::coordinates::calculate_total_visual_lines_before(lines, state, text_width);
-
-    let max_scroll = total_visual_lines.saturating_sub(visible_lines);
-    let scroll_progress = if max_scroll == 0 {
-        0.0
-    } else {
-        // Clamp to 1.0 in case visual scroll exceeds max (e.g., last line at top)
-        (visual_lines_before_top as f64 / max_scroll as f64).min(1.0)
-    };
-
-    let bar_position = ((scrollbar_height - bar_height) as f64 * scroll_progress) as usize;
 
     // Get colors - use same blue as header/footer for background, light blue for bar
     let bg_color = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
@@ -2033,31 +2002,60 @@ fn render_scrollbar(
 
     let scrollbar_column = state.term_width - 1;
 
-    // Render scrollbar efficiently in segments with minimal color changes
+    // Always render scrollbar background to prevent text jumping
+    // Only show the actual bar if there are more visual lines than visible
+    if total_visual_lines > visible_lines {
+        // Calculate scrollbar dimensions using visual line counts
+        let scrollbar_height = visible_lines;
+        let bar_height = (visible_lines * visible_lines / total_visual_lines).max(1);
 
-    // Top background segment
-    if bar_position > 0 {
-        execute!(stdout, SetBackgroundColor(bg_color))?;
-        for i in 0..bar_position {
-            execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
-            write!(stdout, " ")?;
+        // Calculate scroll progress based on visual lines
+        // We need to calculate how many visual lines are before top_line
+        let visual_lines_before_top = crate::coordinates::calculate_total_visual_lines_before(lines, state, text_width);
+
+        let max_scroll = total_visual_lines.saturating_sub(visible_lines);
+        let scroll_progress = if max_scroll == 0 {
+            0.0
+        } else {
+            // Clamp to 1.0 in case visual scroll exceeds max (e.g., last line at top)
+            (visual_lines_before_top as f64 / max_scroll as f64).min(1.0)
+        };
+
+        let bar_position = ((scrollbar_height - bar_height) as f64 * scroll_progress) as usize;
+
+        // Render scrollbar efficiently in segments with minimal color changes
+
+        // Top background segment
+        if bar_position > 0 {
+            execute!(stdout, SetBackgroundColor(bg_color))?;
+            for i in 0..bar_position {
+                execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
+                write!(stdout, " ")?;
+            }
         }
-    }
 
-    // Scrollbar bar segment
-    if bar_height > 0 {
-        execute!(stdout, SetBackgroundColor(bar_color))?;
-        for i in bar_position..(bar_position + bar_height) {
-            execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
-            write!(stdout, " ")?;
+        // Scrollbar bar segment
+        if bar_height > 0 {
+            execute!(stdout, SetBackgroundColor(bar_color))?;
+            for i in bar_position..(bar_position + bar_height) {
+                execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
+                write!(stdout, " ")?;
+            }
         }
-    }
 
-    // Bottom background segment
-    let bottom_start = bar_position + bar_height;
-    if bottom_start < visible_lines {
+        // Bottom background segment
+        let bottom_start = bar_position + bar_height;
+        if bottom_start < visible_lines {
+            execute!(stdout, SetBackgroundColor(bg_color))?;
+            for i in bottom_start..visible_lines {
+                execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
+                write!(stdout, " ")?;
+            }
+        }
+    } else {
+        // No scrolling needed, but render background to reserve space
         execute!(stdout, SetBackgroundColor(bg_color))?;
-        for i in bottom_start..visible_lines {
+        for i in 0..visible_lines {
             execute!(stdout, cursor::MoveTo(scrollbar_column, (i + 1) as u16))?;
             write!(stdout, " ")?;
         }
@@ -2108,7 +2106,7 @@ fn render_horizontal_scrollbar(
 
     // Calculate horizontal scrollbar dimensions
     let line_num_width = line_number_width(state.settings) as usize;
-    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let v_scrollbar_width = 1; // Always reserve space for scrollbar
 
     // H-scrollbar extends from after line numbers to before vertical scrollbar
     // (Footer status is on a different row, doesn't affect scrollbar width)

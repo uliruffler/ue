@@ -653,7 +653,7 @@ pub(crate) fn handle_continuous_auto_scroll(
     };
 
     let line_num_width = crate::coordinates::line_number_width(state.settings);
-    let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let scrollbar_width = 1; // Always reserve space for scrollbar
     let text_end = state.term_width.saturating_sub(scrollbar_width);
     let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
 
@@ -783,11 +783,8 @@ pub(crate) fn handle_mouse_event(
     // Ignore clicks beyond visible content, but allow scrollbar events to reach the boundary
     let scrollbar_column = state.term_width - 1;
     
-    // Calculate scrollbar visibility accounting for wrapped lines
-    let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
-    let total_visual_lines = crate::coordinates::calculate_total_visual_lines(lines, state, text_width);
-    let scrollbar_visible = total_visual_lines > visible_lines;
-    let is_scrollbar_event = scrollbar_visible && column == scrollbar_column;
+    // Scrollbar is always visible now, so it's always clickable
+    let is_scrollbar_event = column == scrollbar_column;
 
     if visual_line >= visible_lines && !is_scrollbar_event {
         return;
@@ -974,7 +971,7 @@ fn handle_mouse_drag(
     // Handle horizontal auto-scroll and selection when dragging in horizontal scroll mode
     if !state.is_line_wrapping_enabled() {
         let line_num_width = crate::coordinates::line_number_width(state.settings);
-        let scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+        let scrollbar_width = 1; // Always reserve space for scrollbar
         let text_end = state.term_width.saturating_sub(scrollbar_width);
         let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines) as usize;
 
@@ -2559,7 +2556,7 @@ fn is_horizontal_scrollbar_click(
 
     // Check if click is within horizontal scrollbar area
     let line_num_width = crate::coordinates::line_number_width(state.settings);
-    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let v_scrollbar_width = 1; // Always reserve space for scrollbar
     let h_scrollbar_start = line_num_width;
     let h_scrollbar_end = state.term_width.saturating_sub(v_scrollbar_width);
 
@@ -2571,7 +2568,7 @@ fn handle_horizontal_scrollbar_click(
     state: &mut FileViewerState,
     lines: &[String],
     column: u16,
-    visible_lines: usize,
+    _visible_lines: usize,
 ) {
     // Calculate scrollbar dimensions
     let tab_width = state.settings.tab_width;
@@ -2581,7 +2578,7 @@ fn handle_horizontal_scrollbar_click(
         .unwrap_or(0);
 
     let line_num_width = crate::coordinates::line_number_width(state.settings) as usize;
-    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let v_scrollbar_width = 1; // Always reserve space for scrollbar
     let available_width = (state.term_width as usize)
         .saturating_sub(line_num_width)
         .saturating_sub(v_scrollbar_width);
@@ -2626,7 +2623,7 @@ fn handle_horizontal_scrollbar_drag(
     state: &mut FileViewerState,
     lines: &[String],
     column: u16,
-    visible_lines: usize,
+    _visible_lines: usize,
 ) {
     if !state.h_scrollbar_dragging {
         return;
@@ -2640,7 +2637,7 @@ fn handle_horizontal_scrollbar_drag(
         .unwrap_or(0);
 
     let line_num_width = crate::coordinates::line_number_width(state.settings) as usize;
-    let v_scrollbar_width = if lines.len() > visible_lines { 1 } else { 0 };
+    let v_scrollbar_width = 1; // Always reserve space for scrollbar
     let available_width = (state.term_width as usize)
         .saturating_sub(line_num_width)
         .saturating_sub(v_scrollbar_width);
