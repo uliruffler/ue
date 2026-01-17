@@ -1302,35 +1302,42 @@ fn position_cursor(
     // If in goto_line mode, position cursor in the footer at the line number position
     if state.goto_line_active {
         let col_num = state.cursor_col + 1;
-        let position_info = format!("{}:{}", state.goto_line_input, col_num);
+        // We display "input:column" but only want cursor in the "input" part
+        let input_display_len = state.goto_line_input.chars().count();
+        let colon_and_col = format!(":{}", col_num);
+        let position_info = format!("{}{}", state.goto_line_input, colon_and_col);
 
-        // Calculate where the position info is on screen
+        // Calculate the visible width available for the position info
+        // This must match the footer rendering logic exactly
         let total_width = state.term_width as usize;
         let digits = state.settings.appearance.line_number_digits as usize;
-        let left_len = if digits > 0 { digits + 1 } else { 0 };
+
+        // Calculate left_len exactly as footer does
+        let left_len = if digits > 0 {
+            // Footer renders: bottom_number_str (digits width) + space
+            digits + 1
+        } else {
+            0
+        };
+
         let remaining_width = total_width.saturating_sub(left_len);
 
-        // Cursor should be at goto_line_cursor_pos within the line number part
+        // Cursor should be within the goto_line_input part (before the colon)
+        let cursor_offset = state.goto_line_cursor_pos.min(input_display_len) - 1;
+
+        // Match the actual rendering:
+        // - If truncated, position_info starts at column left_len
+        // - If not truncated, position_info starts at column (left_len + pad)
         let cursor_x = if position_info.len() >= remaining_width {
-            // Truncated case - need to calculate differently
+            // Truncated case: string starts at left_len
             let truncated = &position_info[position_info.len() - remaining_width..];
-            if let Some(colon_pos) = truncated.find(':') {
-                // Calculate cursor position relative to start of truncated string
-                let cursor_pos_in_truncated = state.goto_line_cursor_pos.min(colon_pos);
-                (left_len + cursor_pos_in_truncated) as u16
-            } else {
-                (left_len + state.goto_line_cursor_pos.min(truncated.len())) as u16
-            }
+            let chars_truncated = position_info.chars().count() - truncated.chars().count();
+            let rel_offset = cursor_offset.saturating_sub(chars_truncated);
+            (left_len + rel_offset) as u16
         } else {
-            // Normal case - position info is padded and right-aligned
+            // Padded case: string starts at (left_len + pad)
             let pad = remaining_width - position_info.len();
-            // Find the colon position in the position_info
-            if let Some(colon_pos) = position_info.find(':') {
-                let cursor_offset = state.goto_line_cursor_pos.min(colon_pos);
-                (left_len + pad + cursor_offset) as u16
-            } else {
-                (left_len + pad + state.goto_line_cursor_pos.min(position_info.len())) as u16
-            }
+            (left_len + pad + cursor_offset) as u16
         };
 
         let cursor_y = (visible_lines + 1) as u16;
@@ -1833,12 +1840,16 @@ fn render_line_segment_with_selection_expanded(
         if visual_i >= expanded_chars.len() {
             break;
         }
+
         let ch = expanded_chars[visual_i];
         let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
         let is_search_match = visual_to_search_match
             .get(visual_i)
             .copied()
             .unwrap_or(false);
+
+        // Determine syntax highlight color for this position
+        let desired_color = visual_to_color.get(visual_i).copied().flatten();
 
         // Check if this position is in the current match (using cached range)
         let is_current_match = if let Some((start, end)) = current_match_range {
@@ -1898,7 +1909,6 @@ fn render_line_segment_with_selection_expanded(
             current_bg = desired_bg;
         }
 
-        let desired_color = visual_to_color.get(visual_i).copied().flatten();
 
         // Change foreground color if needed
         if desired_color != current_color {

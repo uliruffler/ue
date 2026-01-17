@@ -344,7 +344,7 @@ pub(crate) fn find_next_occurrence(
                 state.find_scope,
             ) {
                 // Found a match without wrapping
-                move_to_position(state, pos, lines.len(), visible_lines);
+                move_to_position(state, pos, lines.len(), lines, visible_lines);
                 state.search_wrapped = false;
                 state.wrap_warning_pending = None;
                 state.find_error = None;
@@ -358,7 +358,7 @@ pub(crate) fn find_next_occurrence(
                     true,
                     state.find_scope,
                 ) {
-                    move_to_position(state, pos, lines.len(), visible_lines);
+                    move_to_position(state, pos, lines.len(), lines, visible_lines);
                     state.search_wrapped = true;
                     state.wrap_warning_pending = None;
                     state.find_error = None;
@@ -388,7 +388,7 @@ pub(crate) fn find_prev_occurrence(
                 state.find_scope,
             ) {
                 // Found a match without wrapping
-                move_to_position(state, pos, lines.len(), visible_lines);
+                move_to_position(state, pos, lines.len(), lines, visible_lines);
                 state.search_wrapped = false;
                 state.wrap_warning_pending = None;
                 state.find_error = None;
@@ -402,7 +402,7 @@ pub(crate) fn find_prev_occurrence(
                     true,
                     state.find_scope,
                 ) {
-                    move_to_position(state, pos, lines.len(), visible_lines);
+                    move_to_position(state, pos, lines.len(), lines, visible_lines);
                     state.search_wrapped = true;
                     state.wrap_warning_pending = None;
                     state.find_error = None;
@@ -726,6 +726,7 @@ fn move_to_position(
     state: &mut FileViewerState,
     pos: Position,
     total_lines: usize,
+    lines: &[String],
     visible_lines: usize,
 ) {
     let (target_line, target_col) = pos;
@@ -734,28 +735,8 @@ fn move_to_position(
         return;
     }
 
-    // Clear any off-screen saved cursor
-    state.saved_absolute_cursor = None;
-    state.saved_scroll_state = None;
-
-    // Update cursor position
-    state.cursor_col = target_col;
-
-    // Check if we need to scroll the viewport
-    if target_line < state.top_line {
-        // Target is above viewport - scroll up
-        state.top_line = target_line;
-        state.cursor_line = 0;
-    } else if target_line >= state.top_line + visible_lines {
-        // Target is below viewport - scroll down
-        state.top_line = target_line.saturating_sub(visible_lines / 2);
-        state.cursor_line = target_line - state.top_line;
-    } else {
-        // Target is within viewport
-        state.cursor_line = target_line - state.top_line;
-    }
-
-    state.needs_redraw = true;
+    // Use helper function to set cursor position with proper bounds checking and viewport adjustment
+    state.set_cursor_position(target_line, target_col, lines, visible_lines);
 }
 
 /// Calculate the total number of search hits and determine the current hit index
@@ -871,9 +852,7 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
                 state.cursor_line = 0;
             }
             // Adjust cursor column to be within the line
-            if let Some(line) = lines.get(next_line_idx) {
-                state.cursor_col = state.cursor_col.min(line.len());
-            }
+            state.clamp_cursor_to_line_bounds(lines);
         } else if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
             // Move to previous visible line
             if prev_line_idx >= state.top_line {
@@ -883,16 +862,12 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
                 state.cursor_line = 0;
             }
             // Adjust cursor column to be within the line
-            if let Some(line) = lines.get(prev_line_idx) {
-                state.cursor_col = state.cursor_col.min(line.len());
-            }
+            state.clamp_cursor_to_line_bounds(lines);
         } else if let Some(&first_line_idx) = filtered_lines.first() {
             // No visible lines around cursor, jump to first visible line
             state.top_line = first_line_idx;
             state.cursor_line = 0;
-            if let Some(line) = lines.get(first_line_idx) {
-                state.cursor_col = state.cursor_col.min(line.len());
-            }
+            state.clamp_cursor_to_line_bounds(lines);
         }
     }
 }

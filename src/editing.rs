@@ -141,7 +141,7 @@ pub(crate) fn handle_paste(
             }
             // Position cursor at selection start for paste
             state.cursor_line = s_line.saturating_sub(state.top_line);
-            state.cursor_col = s_col;
+            state.set_cursor_col(s_col, lines);
         }
         state.clear_selection();
     }
@@ -204,8 +204,7 @@ pub(crate) fn handle_paste(
         });
         lines.insert(idx + paste_lines.len() - 1, final_line);
         state.cursor_line = (idx + paste_lines.len() - 1).saturating_sub(state.top_line);
-        state.cursor_col = last_paste_line.len();
-        state.desired_cursor_col = state.cursor_col;
+        state.set_cursor_col(last_paste_line.len(), lines);
         state.modified = true;
     }
 
@@ -221,6 +220,10 @@ pub(crate) fn handle_paste(
         lines.clone(),
     );
     save_undo_with_timestamp(state, filename);
+
+    // Validate cursor after paste operation (debug only)
+    state.validate_cursor_invariants(lines);
+
     true
 }
 
@@ -477,6 +480,11 @@ pub(crate) fn insert_char(
             .undo_history
             .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
         save_undo_with_timestamp(state, filename);
+
+        // Ensure cursor is within bounds and validate invariants (debug only)
+        state.clamp_cursor_to_line_bounds(lines);
+        state.validate_cursor_invariants(lines);
+
         true
     } else {
         false
@@ -638,6 +646,11 @@ pub(crate) fn delete_backward(
             lines.clone(),
         );
         save_undo_with_timestamp(state, filename);
+
+        // Ensure cursor is within bounds and validate invariants (debug only)
+        state.clamp_cursor_to_line_bounds(lines);
+        state.validate_cursor_invariants(lines);
+
         true
     } else {
         false
@@ -679,6 +692,11 @@ pub(crate) fn delete_forward(
             .undo_history
             .update_state(state.top_line, idx, state.cursor_col, lines.clone());
         save_undo_with_timestamp(state, filename);
+
+        // Ensure cursor is within bounds and validate invariants (debug only)
+        state.clamp_cursor_to_line_bounds(lines);
+        state.validate_cursor_invariants(lines);
+
         true
     } else {
         false

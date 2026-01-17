@@ -114,7 +114,7 @@ fn cursor_visibility_with_long_lines_wrapping_off() {
 
     // Test cursor visibility as we move down through the document
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Cursor at line 0 (the long line) should be visible
     state.set_cursor_line(0);
@@ -161,7 +161,7 @@ fn cursor_visibility_long_line_at_line_2() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Move through lines - cursor should remain visible until line 19
     for line in 0..19 {
@@ -202,7 +202,7 @@ fn visual_lines_calculation_with_wrapping_off() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // When wrapping is off, moving down 18 lines should consume exactly 18 visual lines
     // (not more, even though some lines are very long)
@@ -232,7 +232,7 @@ fn cursor_visibility_long_line_position_1_bug_scenario() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Cursor should remain visible through line 18 (last visible with h-scrollbar)
     // Bug was: cursor would vanish 1 line before h-scrollbar
@@ -265,7 +265,7 @@ fn cursor_visibility_long_line_position_2_bug_scenario() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Bug was: cursor would vanish 1 line before h-scrollbar, take 2 downs to reappear
     for line in 0..19 {
@@ -299,7 +299,7 @@ fn cursor_visibility_long_line_position_3_bug_scenario() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Bug was: cursor would vanish 1 line before h-scrollbar, take 3 downs to reappear
     for line in 0..19 {
@@ -330,7 +330,7 @@ fn cursor_visibility_triple_wrap_line_bug_scenario() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Bug was: cursor would vanish 2 lines before h-scrollbar, take 2 downs to reappear
     // Now: should remain visible through line 18
@@ -365,7 +365,7 @@ fn wrapping_disabled_ignores_line_length_for_visibility() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Despite wildly varying line lengths, each should count as exactly 1 visual line
     // So line 18 (19th line) should still be visible
@@ -403,7 +403,7 @@ fn cursor_visibility_multiple_long_lines_scattered() {
     let text_width = 70;
 
     state.set_top_line(0);
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
 
     // Even with multiple long lines, cursor should be visible through line 18
     for line in 0..19 {
@@ -435,38 +435,38 @@ fn cursor_hidden_when_scrolled_off_horizontally() {
     state.set_cursor_line(0);
 
     // Cursor at beginning (column 0) with no scroll - should be visible
-    state.set_cursor_col(0);
+    state.set_cursor_col_test(0);
     state.set_horizontal_scroll_offset(0);
     assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
             "Cursor at column 0 with no scroll should be visible");
 
     // Cursor at column 10 with scroll offset 20 - scrolled off to the left
-    state.set_cursor_col(10);
+    state.set_cursor_col_test(10);
     state.set_horizontal_scroll_offset(20);
     assert!(!state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
             "Cursor at column 10 with scroll offset 20 should be hidden (off to left)");
 
     // Cursor at column 50 with scroll offset 20 - should be visible (within 20-90 range)
-    state.set_cursor_col(50);
+    state.set_cursor_col_test(50);
     state.set_horizontal_scroll_offset(20);
     assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
             "Cursor at column 50 with scroll offset 20 should be visible");
 
     // Cursor at column 100 with scroll offset 20 - scrolled off to the right
     // (visible range is 20 to 20+70=90, cursor at 100 is beyond)
-    state.set_cursor_col(100);
+    state.set_cursor_col_test(100);
     state.set_horizontal_scroll_offset(20);
     assert!(!state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
             "Cursor at column 100 with scroll offset 20 should be hidden (off to right)");
 
     // Cursor at column 89 with scroll offset 20 - at right edge, should be visible
-    state.set_cursor_col(89);
+    state.set_cursor_col_test(89);
     state.set_horizontal_scroll_offset(20);
     assert!(state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
             "Cursor at column 89 (right edge of visible range) should be visible");
 
     // Cursor at column 90 with scroll offset 20 - just beyond right edge
-    state.set_cursor_col(90);
+    state.set_cursor_col_test(90);
     state.set_horizontal_scroll_offset(20);
     assert!(!state.is_cursor_visible_for_test(&lines, visible_lines, text_width),
             "Cursor at column 90 (just beyond right edge) should be hidden");
@@ -491,7 +491,7 @@ fn cursor_visibility_not_affected_by_horizontal_scroll_when_wrapping_on() {
 
     state.set_top_line(0);
     state.set_cursor_line(0);
-    state.set_cursor_col(50);
+    state.set_cursor_col_test(50);
 
     // Even if horizontal_scroll_offset is set, it shouldn't affect visibility when wrapping is on
     state.set_horizontal_scroll_offset(100);

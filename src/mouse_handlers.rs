@@ -927,9 +927,9 @@ fn handle_mouse_click(
         && logical_line < lines.len()
     {
         restore_cursor_to_screen(state);
-        state.cursor_line = logical_line.saturating_sub(state.top_line);
-        state.cursor_col = col.min(lines[logical_line].len());
-        state.desired_cursor_col = state.cursor_col;
+        
+        // Use helper to set cursor position with proper bounds checking
+        state.set_cursor_position(logical_line, col, lines, visible_lines);
 
         // Reset horizontal scroll if clicking on empty/short line in horizontal scroll mode
         if !state.is_line_wrapping_enabled() {
@@ -942,7 +942,7 @@ fn handle_mouse_click(
 
         state.clear_selection();
         state.mouse_dragging = true;
-        state.needs_redraw = true;
+        // needs_redraw is set by set_cursor_position
     }
 }
 /// Handle mouse drag for text selection

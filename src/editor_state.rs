@@ -582,6 +582,171 @@ impl<'a> FileViewerState<'a> {
             false
         }
     }
+
+    // ===== Cursor Movement Helpers =====
+    // These functions encapsulate common cursor movement patterns and ensure
+    // invariants are maintained (bounds checking, desired_cursor_col updates, etc.)
+    
+    /// Move cursor right by one character, handling line boundaries
+    /// Returns true if cursor moved
+    pub(crate) fn move_cursor_right(&mut self, lines: &[String], visible_lines: usize) -> bool {
+        let absolute_line = self.absolute_line();
+
+        if let Some(line) = lines.get(absolute_line) {
+            if self.cursor_col < line.len() {
+                // Move right within current line
+                self.cursor_col += 1;
+                self.desired_cursor_col = self.cursor_col;
+                return true;
+            }
+
+            // At end of line - try to move to next line
+            if absolute_line + 1 < lines.len() {
+                let effective_visible_lines = self.effective_visible_lines(lines, visible_lines);
+                self.cursor_line += 1;
+                self.cursor_col = 0;
+                self.desired_cursor_col = 0;
+
+                // Check if we need to scroll
+                if self.cursor_line >= effective_visible_lines {
+                    self.top_line += 1;
+                    self.cursor_line = effective_visible_lines - 1;
+                }
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Move cursor left by one character, handling line boundaries
+    /// Returns true if cursor moved
+    pub(crate) fn move_cursor_left(&mut self, lines: &[String]) -> bool {
+        if self.cursor_col > 0 {
+            // Move left within current line
+            self.cursor_col -= 1;
+            self.desired_cursor_col = self.cursor_col;
+            return true;
+        }
+
+        // At start of line - try to move to previous line
+        let absolute_line = self.absolute_line();
+        if absolute_line > 0 {
+            if self.cursor_line > 0 {
+                self.cursor_line -= 1;
+            } else if self.top_line > 0 {
+                self.top_line -= 1;
+            }
+
+            let new_absolute = self.absolute_line();
+            if let Some(line) = lines.get(new_absolute) {
+                self.cursor_col = line.len();
+                self.desired_cursor_col = self.cursor_col;
+            }
+            return true;
+        }
+        false
+    }
+
+    /// Set cursor to a specific position with bounds checking and viewport adjustment
+    /// This is the safe way to jump to a position (used by find, goto, etc.)
+    pub(crate) fn set_cursor_position(
+        &mut self,
+        target_line: usize,
+        target_col: usize,
+        lines: &[String],
+        visible_lines: usize,
+    ) {
+        // Clamp line to valid range
+        let target_line = target_line.min(lines.len().saturating_sub(1));
+
+        // Clamp column to line length
+        let target_col = if target_line < lines.len() {
+            target_col.min(lines[target_line].len())
+        } else {
+            0
+        };
+
+        // Clear any off-screen state
+        self.saved_absolute_cursor = None;
+        self.saved_scroll_state = None;
+
+        // Adjust viewport if target is outside visible area
+        if target_line < self.top_line {
+            // Target is above viewport - scroll up
+            self.top_line = target_line;
+            self.cursor_line = 0;
+        } else if target_line >= self.top_line + visible_lines {
+            // Target is below viewport - scroll down to center target
+            self.top_line = target_line.saturating_sub(visible_lines / 2);
+            self.cursor_line = target_line - self.top_line;
+        } else {
+            // Target is within viewport - just adjust cursor_line
+            self.cursor_line = target_line - self.top_line;
+        }
+
+        // Set cursor column
+        self.cursor_col = target_col;
+        self.desired_cursor_col = target_col;
+
+        self.needs_redraw = true;
+    }
+
+    /// Ensure cursor column is within bounds for current line
+    /// Call this after any operation that might leave cursor past end of line
+    pub(crate) fn clamp_cursor_to_line_bounds(&mut self, lines: &[String]) {
+        let absolute_line = self.absolute_line();
+        if let Some(line) = lines.get(absolute_line) {
+            if self.cursor_col > line.len() {
+                self.cursor_col = line.len();
+                self.desired_cursor_col = self.cursor_col;
+            }
+        }
+    }
+
+    /// Set cursor column within current line with bounds checking
+    /// Does NOT move between lines - use move_cursor_right/left for that
+    /// Updates both cursor_col and desired_cursor_col
+    pub(crate) fn set_cursor_col(&mut self, col: usize, lines: &[String]) {
+        let absolute_line = self.absolute_line();
+        if let Some(line) = lines.get(absolute_line) {
+            let clamped_col = col.min(line.len());
+            self.cursor_col = clamped_col;
+            self.desired_cursor_col = clamped_col;
+        }
+    }
+
+    /// Debug-only validation of cursor invariants
+    /// In debug builds, call this after cursor mutations to catch bugs early
+    #[cfg(debug_assertions)]
+    pub(crate) fn validate_cursor_invariants(&self, lines: &[String]) {
+        let abs = self.absolute_line();
+
+        // Check absolute line is in bounds
+        assert!(
+            abs < lines.len() || lines.is_empty(),
+            "Cursor absolute line {} out of bounds (total lines: {})",
+            abs,
+            lines.len()
+        );
+
+        // Check cursor column is in bounds
+        if abs < lines.len() {
+            assert!(
+                self.cursor_col <= lines[abs].len(),
+                "Cursor col {} out of bounds for line {} (len: {})",
+                self.cursor_col,
+                abs,
+                lines[abs].len()
+            );
+        }
+    }
+
+    /// No-op in release builds
+    #[cfg(not(debug_assertions))]
+    #[inline]
+    pub(crate) fn validate_cursor_invariants(&self, _lines: &[String]) {
+        // Debug-only, no-op in release
+    }
 }
 
 #[cfg(test)]
@@ -933,9 +1098,9 @@ impl<'a> FileViewerState<'a> {
         self.cursor_col
     }
 
-    /// Set cursor column (for testing)
+    /// Set cursor column (for testing) - direct mutation without bounds checking
     #[allow(dead_code)]
-    pub fn set_cursor_col(&mut self, col: usize) {
+    pub fn set_cursor_col_test(&mut self, col: usize) {
         self.cursor_col = col;
     }
 
@@ -987,4 +1152,8 @@ impl<'a> FileViewerState<'a> {
         self.top_line = line;
     }
 }
+
+
+
+
 

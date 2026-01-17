@@ -357,11 +357,11 @@ fn test_cursor_position_clamping() {
     let line_len = line.len(); // 11
     
     // Try to set cursor beyond line end
-    state.set_cursor_col(100);
+    state.set_cursor_col_test(100);
     
     // Clamp to line length
     let clamped = state.get_cursor_col().min(line_len);
-    state.set_cursor_col(clamped);
+    state.set_cursor_col_test(clamped);
     
     assert_eq!(state.get_cursor_col(), line_len, "Cursor should be clamped to line length");
 }

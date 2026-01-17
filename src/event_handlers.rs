@@ -501,7 +501,9 @@ pub(crate) fn handle_key_event(
         state.goto_line_active = true;
         // Pre-fill with current line number (1-indexed)
         state.goto_line_input = (state.absolute_line() + 1).to_string();
-        state.goto_line_cursor_pos = state.goto_line_input.chars().count(); // Position at end
+        // Position cursor on the last character (not after it), so it appears on the last digit
+        let input_len = state.goto_line_input.chars().count();
+        state.goto_line_cursor_pos = if input_len > 0 { input_len - 1 } else { 0 };
         state.goto_line_typing_started = false; // Mark as not yet typing
         state.needs_redraw = true;
         return Ok((false, false));
@@ -752,43 +754,13 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
     if settings.keybindings.cursor_left_matches(&code, &modifiers) {
-        if state.cursor_col > 0 {
-            state.cursor_col -= 1;
-        } else {
-            let current_absolute = state.top_line + state.cursor_line;
-            if current_absolute > 0 {
-                if state.cursor_line > 0 {
-                    state.cursor_line -= 1;
-                } else if state.top_line > 0 {
-                    state.top_line -= 1;
-                }
-                let new_absolute = state.top_line + state.cursor_line;
-                if let Some(line) = lines.get(new_absolute) {
-                    state.cursor_col = line.len();
-                }
-            }
-        }
+        state.move_cursor_left(lines);
         state.clear_selection();
         state.needs_redraw = true;
         return Ok((false, false));
     }
     if settings.keybindings.cursor_right_matches(&code, &modifiers) {
-        if let Some(line) = lines.get(state.top_line + state.cursor_line) {
-            if state.cursor_col < line.len() {
-                state.cursor_col += 1;
-            } else {
-                let current_absolute = state.top_line + state.cursor_line;
-                if current_absolute + 1 < lines.len() {
-                    state.cursor_line += 1;
-                    state.cursor_col = 0;
-                    let effective_visible_lines = state.effective_visible_lines(lines, visible_lines);
-                    if state.cursor_line >= effective_visible_lines {
-                        state.top_line += 1;
-                        state.cursor_line = effective_visible_lines - 1;
-                    }
-                }
-            }
-        }
+        state.move_cursor_right(lines, visible_lines);
         state.clear_selection();
         state.needs_redraw = true;
         return Ok((false, false));
@@ -835,6 +807,9 @@ pub(crate) fn handle_key_event(
 
     update_selection_state(state, moved, is_shift, is_navigation);
     update_redraw_flags(state, did_edit, moved);
+
+    // Validate cursor invariants in debug builds (catches bugs early, no-op in release)
+    state.validate_cursor_invariants(lines);
 
     Ok((false, false))
 }
@@ -1539,62 +1514,8 @@ fn handle_navigation(
             state.adjust_cursor_col(&lines_refs);
             true
         }
-        KeyCode::Left => {
-            if state.cursor_col > 0 {
-                state.cursor_col -= 1;
-                state.desired_cursor_col = state.cursor_col;
-                true
-            } else {
-                // At beginning of line - move to end of previous line
-                let current_absolute = state.top_line + state.cursor_line;
-                if current_absolute > 0 {
-                    // Move to previous line
-                    if state.cursor_line > 0 {
-                        state.cursor_line -= 1;
-                    } else if state.top_line > 0 {
-                        state.top_line -= 1;
-                    }
-                    // Set cursor to end of that line
-                    let new_absolute = state.top_line + state.cursor_line;
-                    if let Some(line) = lines.get(new_absolute) {
-                        state.cursor_col = line.len();
-                        state.desired_cursor_col = state.cursor_col;
-                    }
-                    true
-                } else {
-                    false
-                }
-            }
-        }
-        KeyCode::Right => {
-            if let Some(line) = lines.get(state.top_line + state.cursor_line) {
-                if state.cursor_col < line.len() {
-                    state.cursor_col += 1;
-                    state.desired_cursor_col = state.cursor_col;
-                    true
-                } else {
-                    // At end of line - move to beginning of next line
-                    let current_absolute = state.top_line + state.cursor_line;
-                    if current_absolute + 1 < lines.len() {
-                        // Move to next line
-                        state.cursor_line += 1;
-                        state.cursor_col = 0;
-                        state.desired_cursor_col = state.cursor_col;
-
-                        // Check if we need to scroll
-                        if state.cursor_line >= effective_visible_lines {
-                            state.top_line += 1;
-                            state.cursor_line = effective_visible_lines - 1;
-                        }
-                        true
-                    } else {
-                        false
-                    }
-                }
-            } else {
-                false
-            }
-        }
+        KeyCode::Left => state.move_cursor_left(lines),
+        KeyCode::Right => state.move_cursor_right(lines, visible_lines),
         KeyCode::Home => {
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
                 // Find first non-blank character
@@ -2226,9 +2147,10 @@ fn handle_goto_line_input(
             // Moving cursor unselects the line number and allows editing
             if !state.goto_line_typing_started {
                 state.goto_line_typing_started = true;
-                // Position cursor at end (before colon conceptually)
-                state.goto_line_cursor_pos = state.goto_line_input.chars().count();
-            } else if state.goto_line_cursor_pos > 0 {
+                // Don't move cursor, just mark as started typing
+            }
+            // Now move left if not at start
+            if state.goto_line_cursor_pos > 0 {
                 state.goto_line_cursor_pos -= 1;
             }
             state.needs_redraw = true;
@@ -2238,13 +2160,12 @@ fn handle_goto_line_input(
             // Moving cursor unselects the line number and allows editing
             if !state.goto_line_typing_started {
                 state.goto_line_typing_started = true;
-                // Position cursor at end
-                state.goto_line_cursor_pos = state.goto_line_input.chars().count();
-            } else {
-                let len = state.goto_line_input.chars().count();
-                if state.goto_line_cursor_pos < len {
-                    state.goto_line_cursor_pos += 1;
-                }
+                // Don't move cursor, just mark as started typing
+            }
+            // Now move right if not at end
+            let len = state.goto_line_input.chars().count();
+            if state.goto_line_cursor_pos < len {
+                state.goto_line_cursor_pos += 1;
             }
             state.needs_redraw = true;
             return Ok((false, false));
