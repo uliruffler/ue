@@ -1373,8 +1373,18 @@ fn position_cursor(
 
                 // Calculate position based on wrapping mode
                 let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
-                    let wrapped_line = visual_col / (text_width as usize);
-                    let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+                    let text_width_usize = text_width as usize;
+                    // Allow cursor to sit at position text_width on current visual line
+                    let wrapped_line = if visual_col <= text_width_usize {
+                        0
+                    } else {
+                        (visual_col - 1) / text_width_usize
+                    };
+                    let cursor_x = if visual_col <= text_width_usize {
+                        visual_col as u16 + line_num_width
+                    } else {
+                        ((visual_col - 1) % text_width_usize + 1) as u16 + line_num_width
+                    };
                     (cursor_x, wrapped_line as u16)
                 } else {
                     // Horizontal scroll mode: apply horizontal offset
@@ -1445,8 +1455,18 @@ fn position_cursor(
 
             // Calculate position based on wrapping mode
             let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
-                let cursor_wrapped_line = visual_col / (text_width as usize);
-                let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+                let text_width_usize = text_width as usize;
+                // Allow cursor to sit at position text_width on current visual line
+                let cursor_wrapped_line = if visual_col <= text_width_usize {
+                    0
+                } else {
+                    (visual_col - 1) / text_width_usize
+                };
+                let cursor_x = if visual_col <= text_width_usize {
+                    visual_col as u16 + line_num_width
+                } else {
+                    ((visual_col - 1) % text_width_usize + 1) as u16 + line_num_width
+                };
                 (cursor_x, cursor_wrapped_line as u16)
             } else {
                 // Horizontal scroll mode: check if cursor is horizontally visible
@@ -1515,8 +1535,18 @@ fn position_cursor(
     // Calculate cursor position based on wrapping mode
     let (cursor_x, cursor_y_offset) = if state.is_line_wrapping_enabled() {
         // Wrapped mode: cursor can be on any wrapped line segment
-        let cursor_wrapped_line = visual_col / (text_width as usize);
-        let cursor_x = (visual_col % (text_width as usize)) as u16 + line_num_width;
+        let text_width_usize = text_width as usize;
+        // Allow cursor to sit at position text_width on current visual line
+        let cursor_wrapped_line = if visual_col <= text_width_usize {
+            0
+        } else {
+            (visual_col - 1) / text_width_usize
+        };
+        let cursor_x = if visual_col <= text_width_usize {
+            visual_col as u16 + line_num_width
+        } else {
+            ((visual_col - 1) % text_width_usize + 1) as u16 + line_num_width
+        };
         (cursor_x, cursor_wrapped_line as u16)
     } else {
         // Horizontal scroll mode: cursor is always on the first (only) visual line

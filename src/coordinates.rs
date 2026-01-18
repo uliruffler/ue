@@ -124,7 +124,12 @@ pub(crate) fn calculate_cursor_visual_line(
     if wrapping_enabled && text_width_usize > 0 && state.absolute_line() < lines.len() {
         let line = &lines[state.absolute_line()];
         let visual_col = visual_width_up_to(line, state.cursor_col, tab_width);
-        visual_line += visual_col / text_width_usize;
+
+        // Allow cursor to sit at position text_width on current visual line
+        // Only wrap when visual_col > text_width
+        if visual_col > text_width_usize {
+            visual_line += (visual_col - 1) / text_width_usize;
+        }
     }
     // When wrapping is disabled, cursor is always on the same visual line as the logical line (no offset)
 

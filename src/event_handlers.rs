@@ -1164,7 +1164,12 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
 
     let line = &lines[absolute_line];
     let visual_col = visual_width_up_to(line, state.cursor_col, tab_width);
-    let current_wrap_line = visual_col / text_width;
+    // Allow cursor to sit at position text_width on current visual line
+    let current_wrap_line = if visual_col <= text_width {
+        0
+    } else {
+        (visual_col - 1) / text_width
+    };
 
     // If we're not on the first wrapped line of this logical line, move up within the same line
     if current_wrap_line > 0 {
@@ -1376,7 +1381,12 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
 
     let line = &lines[absolute_line];
     let visual_col = visual_width_up_to(line, state.cursor_col, tab_width);
-    let current_wrap_line = visual_col / text_width;
+    // Allow cursor to sit at position text_width on current visual line
+    let current_wrap_line = if visual_col <= text_width {
+        0
+    } else {
+        (visual_col - 1) / text_width
+    };
     let num_wrapped =
         calculate_wrapped_lines_for_line(lines, absolute_line, text_width as u16, tab_width)
             as usize;
@@ -1920,7 +1930,12 @@ fn visual_line_end(line: &str, cursor_col: usize, text_width: usize, tab_width: 
     }
 
     let visual_col = visual_width_up_to(line, cursor_col, tab_width);
-    let current_wrap_line = visual_col / text_width;
+    // Allow cursor to sit at position text_width on current visual line
+    let current_wrap_line = if visual_col <= text_width {
+        0
+    } else {
+        (visual_col - 1) / text_width
+    };
     let next_wrap_start = (current_wrap_line + 1) * text_width;
 
     // Find the last character that fits on the current visual line
@@ -1961,7 +1976,12 @@ fn visual_line_start(line: &str, cursor_col: usize, text_width: usize, tab_width
     }
 
     let visual_col = visual_width_up_to(line, cursor_col, tab_width);
-    let current_wrap_line = visual_col / text_width;
+    // Allow cursor to sit at position text_width on current visual line
+    let current_wrap_line = if visual_col <= text_width {
+        0
+    } else {
+        (visual_col - 1) / text_width
+    };
     let wrap_start_visual = current_wrap_line * text_width;
 
     if wrap_start_visual == 0 {
