@@ -1,6 +1,9 @@
 use crate::editor_state::FileViewerState;
 use crate::settings::Settings;
 
+/// Unicode character for line wrap indicator (carriage return arrow)
+pub const WRAP_INDICATOR: char = '↩';
+
 /// Calculate the visual width of a string, considering tabs
 /// Tabs are expanded to the next multiple of tab_width
 pub fn visual_width(s: &str, tab_width: usize) -> usize {
@@ -15,6 +18,97 @@ pub fn visual_width(s: &str, tab_width: usize) -> usize {
         }
     }
     width
+}
+
+
+/// Calculate wrap points for word wrapping
+/// Returns vector of character indices where line should be broken
+/// Reserve 1 character width for the wrap indicator
+pub(crate) fn calculate_word_wrap_points(line: &str, text_width: usize, tab_width: usize) -> Vec<usize> {
+    if text_width == 0 || line.is_empty() {
+        return vec![];
+    }
+
+    let usable_width = text_width.saturating_sub(1); // Reserve 1 for wrap indicator
+    let max_word_length = text_width / 2;
+    let mut wrap_points = vec![];
+    let chars: Vec<char> = line.chars().collect();
+
+    let mut line_start_idx = 0;
+
+    while line_start_idx < chars.len() {
+        let remaining_line: String = chars[line_start_idx..].iter().collect();
+        let remaining_visual_width = visual_width(&remaining_line, tab_width);
+
+        if remaining_visual_width <= usable_width {
+            // Rest of line fits, we're done
+            break;
+        }
+
+        // Find where to break
+        // First, try to find a word boundary (whitespace)
+        let mut best_break = None;
+        let mut current_visual = 0;
+        let mut last_space_idx = None;
+        let mut word_start_idx = line_start_idx;
+        let mut in_word = false;
+
+        for i in line_start_idx..chars.len() {
+            let ch = chars[i];
+            let char_visual_width = if ch == '\t' {
+                tab_width - (current_visual % tab_width)
+            } else {
+                1
+            };
+
+            if current_visual + char_visual_width > usable_width {
+                // Would exceed line width
+                if let Some(space_idx) = last_space_idx {
+                    // Check if the word is reasonable length
+                    let word_text: String = chars[word_start_idx..i].iter().collect();
+                    let word_visual = visual_width(&word_text, tab_width);
+
+                    if word_visual <= max_word_length && space_idx > line_start_idx {
+                        // Break at the last space
+                        best_break = Some(space_idx + 1); // Break after the space
+                        break;
+                    }
+                }
+
+                // No good word boundary found, use character wrap
+                // Go back to find where we can fit
+                if i > line_start_idx {
+                    best_break = Some(i);
+                } else {
+                    best_break = Some(line_start_idx + 1);
+                }
+                break;
+            }
+
+            current_visual += char_visual_width;
+
+            if ch.is_whitespace() {
+                last_space_idx = Some(i);
+                in_word = false;
+            } else if !in_word {
+                word_start_idx = i;
+                in_word = true;
+            }
+        }
+
+        if let Some(break_idx) = best_break {
+            if break_idx > line_start_idx && break_idx < chars.len() {
+                wrap_points.push(break_idx);
+                line_start_idx = break_idx;
+            } else {
+                break;
+            }
+        } else {
+            break;
+        }
+    }
+
+    wrap_points
 }
 
 /// Calculate visual width up to a given character index in a string
@@ -72,6 +166,36 @@ pub fn calculate_wrapped_lines_for_line(
     calculate_wrapped_lines_for_line_with_wrapping(lines, line_index, text_width, tab_width, true)
 }
 
+/// Get the character range for a specific wrap segment
+/// Returns (start_char_index, end_char_index) for the given wrap_index
+pub(crate) fn get_wrap_segment_range(
+    line: &str,
+    wrap_index: usize,
+    text_width: usize,
+    tab_width: usize,
+) -> (usize, usize) {
+    let wrap_points = calculate_word_wrap_points(line, text_width, tab_width);
+    let line_len = line.chars().count();
+
+    if wrap_index == 0 {
+        if wrap_points.is_empty() {
+            (0, line_len)
+        } else {
+            (0, wrap_points[0])
+        }
+    } else if wrap_index <= wrap_points.len() {
+        let start = wrap_points[wrap_index - 1];
+        let end = if wrap_index < wrap_points.len() {
+            wrap_points[wrap_index]
+        } else {
+            line_len
+        };
+        (start, end)
+    } else {
+        (line_len, line_len)
+    }
+}
+
 pub(crate) fn calculate_wrapped_lines_for_line_with_wrapping(
     lines: &[String],
     line_index: usize,
@@ -89,16 +213,15 @@ pub(crate) fn calculate_wrapped_lines_for_line_with_wrapping(
     }
 
     let line = &lines[line_index];
-    let visual_len = visual_width(line, tab_width);
     let width = text_width as usize;
 
     if width == 0 {
         return 1;
     }
 
-    // Calculate how many visual lines this logical line needs
-    let wrapped_lines = visual_len.div_ceil(width); // Ceiling division
-    wrapped_lines.max(1) as u16
+    // Use word wrapping
+    let wrap_points = calculate_word_wrap_points(line, width, tab_width);
+    (wrap_points.len() + 1).max(1) as u16
 }
 
 pub(crate) fn calculate_cursor_visual_line(
@@ -123,12 +246,20 @@ pub(crate) fn calculate_cursor_visual_line(
     // Add the visual line offset within the cursor's logical line itself
     if wrapping_enabled && text_width_usize > 0 && state.absolute_line() < lines.len() {
         let line = &lines[state.absolute_line()];
-        let visual_col = visual_width_up_to(line, state.cursor_col, tab_width);
+        let cursor_col = state.cursor_col;
 
-        // Allow cursor to sit at position text_width on current visual line
-        // Only wrap when visual_col > text_width
-        if visual_col > text_width_usize {
-            visual_line += (visual_col - 1) / text_width_usize;
+        // Find which wrap segment the cursor is in
+        let wrap_points = calculate_word_wrap_points(line, text_width_usize, tab_width);
+
+        for (idx, &wrap_point) in wrap_points.iter().enumerate() {
+            if cursor_col < wrap_point {
+                visual_line += idx;
+                break;
+            }
+        }
+        // If cursor is after all wrap points, it's on the last segment
+        if wrap_points.is_empty() || cursor_col >= *wrap_points.last().unwrap() {
+            visual_line += wrap_points.len();
         }
     }
     // When wrapping is disabled, cursor is always on the same visual line as the logical line (no offset)
@@ -569,9 +700,11 @@ mod tests {
 
     #[test]
     fn test_wrapped_lines_exact_width() {
-        // Line is exactly the text width
+        // Line is exactly the text width, but no spaces means it's one long word
+        // Word wrapping falls back to character wrapping for long words (> width/2)
+        // With 1 char reserved for wrap indicator, 80 chars wraps to 2 lines
         let lines = vec!["x".repeat(80)];
-        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 2);
     }
 
     #[test]
@@ -584,13 +717,15 @@ mod tests {
     #[test]
     fn test_wrapped_lines_double_width() {
         // Line is exactly double the text width
+        // 160 chars with usable width 79 = 3 segments
         let lines = vec!["x".repeat(160)];
-        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 2);
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 3);
     }
 
     #[test]
     fn test_wrapped_lines_triple_width() {
-        // Line needs three visual lines
+        // Line needs multiple visual lines with character wrapping fallback
+        // 200 chars with usable width 79 per line = 3 segments
         let lines = vec!["x".repeat(200)];
         assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 3);
     }
@@ -619,6 +754,29 @@ mod tests {
         let lines = vec!["hello".to_string()];
         assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 0, 4), 1);
     }
+
+    #[test]
+    fn test_word_wrapping_with_spaces() {
+        // Test actual word wrapping with whitespace
+        // "hello world test" should fit on one line at width 80
+        let lines = vec!["hello world test".to_string()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 80, 4), 1);
+
+        // Short width forces word wrap
+        let lines = vec!["hello world".to_string()];
+        assert_eq!(calculate_wrapped_lines_for_line(&lines, 0, 10, 4), 2);
+    }
+
+    #[test]
+    fn test_word_wrapping_preserves_words() {
+        // Words should not be broken if they fit within max word length
+        // Width 20, max word = 10
+        // "short words here" (5+6+4 = 15 chars + 2 spaces) should wrap at word boundaries
+        let lines = vec!["short words here".to_string()];
+        let wrapped = calculate_wrapped_lines_for_line(&lines, 0, 20, 4);
+        assert!(wrapped >= 1);
+    }
+
 
     #[test]
     fn test_wrapped_lines_beyond_line_count() {

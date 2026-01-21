@@ -1021,24 +1021,48 @@ fn render_line(
         }
 
         // Calculate visible segment based on wrapping mode
-        let (start_visual, end_visual) = if wrapping_enabled {
-            // Wrapped mode: show segment at wrap_index
-            let start = wrap_index * available_width;
-            let end = ((wrap_index + 1) * available_width).min(chars.len());
-            (start, end)
+        let (start_char_idx, end_char_idx, show_wrap_indicator) = if wrapping_enabled {
+            // Word wrapping mode: get segment based on word boundaries
+            let (start, end) = crate::coordinates::get_wrap_segment_range(
+                line,
+                wrap_index,
+                available_width,
+                tab_width,
+            );
+            // Show wrap indicator if this is not the last segment
+            let is_last_segment = wrap_index + 1 >= num_wrapped_lines as usize;
+            (start, end, !is_last_segment)
         } else {
             // Horizontal scroll mode: apply horizontal offset to entire document
             let start = ctx.state.horizontal_scroll_offset;
-            let end = (start + available_width).min(chars.len());
-            (start, end)
+            let end = (start + available_width).min(line.chars().count());
+            (start, end, false)
+        };
+
+        // Convert character indices to indices in expanded line
+        let original_chars: Vec<char> = line.chars().collect();
+        let start_visual = if start_char_idx == 0 {
+            0
+        } else {
+            expand_tabs(&original_chars[..start_char_idx].iter().collect::<String>(), tab_width)
+                .chars()
+                .count()
+        };
+        let end_visual = if end_char_idx == 0 {
+            0
+        } else {
+            expand_tabs(&original_chars[..end_char_idx].iter().collect::<String>(), tab_width)
+                .chars()
+                .count()
         };
 
         // Render content if there's any visible part of the line
-        let content_width = if start_visual < chars.len() {
+        let mut content_width = if start_visual < chars.len() {
+            let actual_end = end_visual.min(chars.len());
             let segment = SegmentInfo {
                 line_index: logical_line_index,
                 start_visual,
-                end_visual,
+                end_visual: actual_end,
                 tab_width,
             };
 
@@ -1051,12 +1075,21 @@ fn render_line(
             } else {
                 render_line_segment_expanded(stdout, &chars, line, ctx, &segment)?;
             }
-            (end_visual - start_visual) as u16
+            (actual_end - start_visual) as u16
         } else {
             // Line is shorter than horizontal scroll offset - render as empty
             // (but still takes up a visual row)
             0
         };
+
+        // Show wrap indicator if needed
+        if show_wrap_indicator {
+            use crossterm::style::SetForegroundColor;
+            execute!(stdout, SetForegroundColor(crossterm::style::Color::DarkGrey))?;
+            write!(stdout, "{}", crate::coordinates::WRAP_INDICATOR)?;
+            execute!(stdout, crossterm::style::ResetColor)?;
+            content_width += 1;
+        }
 
         // Calculate current column position after rendering content
         let current_col = if ctx.state.settings.appearance.line_number_digits > 0 {

@@ -30,14 +30,14 @@ fn test_scrollbar_appears_with_wrapped_lines() {
     let state = FileViewerState::new_for_test(80, undo_history, &settings);
 
     // Simulate:
-    // Line 1: 150 'x' characters (wraps to 2 visual lines at 76 width)
-    // Line 2: 150 'y' characters (wraps to 2 visual lines)
+    // Line 1: 150 'x' characters (wraps to 3 visual lines with word wrapping)
+    // Line 2: 150 'y' characters (wraps to 3 visual lines)
     let lines = vec![
-        "x".repeat(150),  // Will wrap to 2 visual lines
-        "y".repeat(150),  // Will wrap to 2 visual lines
+        "x".repeat(150),  // Will wrap to 3 visual lines
+        "y".repeat(150),  // Will wrap to 3 visual lines
     ];
 
-    // Check state: should need scrollbar since 4 visual lines > 3 visible
+    // Check state: should need scrollbar since 6 visual lines > 3 visible
     let text_width = coordinates::calculate_text_width(&state, &lines, 3);
     let total_visual = coordinates::calculate_total_visual_lines(&lines, &state, text_width);
 
@@ -48,8 +48,9 @@ fn test_scrollbar_appears_with_wrapped_lines() {
     println!("  Visible lines: 3");
     println!("  Should show scrollbar: {}", total_visual > 3);
 
-    // 2 logical lines, each wrapping to 2 visual lines = 4 total > 3 visible
-    assert_eq!(total_visual, 4, "Two 150-char lines should produce 4 visual lines");
+    // 2 logical lines, each wrapping to 3 visual lines = 6 total > 3 visible
+    // Word wrapping reserves 1 char for wrap indicator, so usable width = text_width - 1
+    assert_eq!(total_visual, 6, "Two 150-char lines should produce 6 visual lines with word wrapping");
     assert!(total_visual > 3, "Total visual lines should exceed visible lines due to wrapping");
 }
 

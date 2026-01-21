@@ -28,14 +28,20 @@ fn test_scrollbar_with_wrapped_lines() {
     let visible_lines = 3;
     let text_width = calculate_text_width(&state, &[], visible_lines);
 
-    // Two lines, both wrap to 2 visual lines each = 4 total
+    // Two lines, each wraps to 3 visual lines with word wrapping
     let lines = vec![
         "x".repeat(150),
         "y".repeat(150),
     ];
 
     let total_visual = calculate_total_visual_lines(&lines, &state, text_width);
-    assert_eq!(total_visual, 4, "Should have 4 visual lines");
+    
+    // With word wrapping:
+    // - text_width = 75 (80 - 3 for line numbers - 1 for scrollbar - 1 for window frame/padding)
+    // - usable_width = 74 (reserve 1 for wrap indicator)
+    // - 150 chars / 74 usable = 3 segments per line (rounded up)
+    // - 2 lines * 3 segments = 6 total visual lines
+    assert_eq!(total_visual, 6, "Should have 6 visual lines with word wrapping");
     assert!(total_visual > visible_lines, "Should need scrollbar");
 }
 
