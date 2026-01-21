@@ -1407,18 +1407,41 @@ fn position_cursor(
                 // Calculate position based on wrapping mode
                 let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
                     let text_width_usize = text_width as usize;
-                    // Allow cursor to sit at position text_width on current visual line
-                    let wrapped_line = if visual_col <= text_width_usize {
-                        0
+                    let line = &lines[target_line];
+                    let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width_usize, tab_width);
+
+                    if wrap_points.is_empty() {
+                        // No wrapping - cursor is on first line
+                        let cursor_x = visual_col as u16 + line_num_width;
+                        (cursor_x, 0)
                     } else {
-                        (visual_col - 1) / text_width_usize
-                    };
-                    let cursor_x = if visual_col <= text_width_usize {
-                        visual_col as u16 + line_num_width
-                    } else {
-                        ((visual_col - 1) % text_width_usize + 1) as u16 + line_num_width
-                    };
-                    (cursor_x, wrapped_line as u16)
+                        let target_col_clamped = target_col.min(lines[target_line].len());
+
+                        // Find which segment cursor is in
+                        let mut segment_idx = 0;
+                        let mut segment_start_char = 0;
+
+                        for (idx, &wrap_point) in wrap_points.iter().enumerate() {
+                            if target_col_clamped < wrap_point {
+                                segment_idx = idx;
+                                segment_start_char = if idx == 0 { 0 } else { wrap_points[idx - 1] };
+                                break;
+                            }
+                        }
+
+                        // If cursor is at or past last wrap point, it's in the final segment
+                        if target_col_clamped >= *wrap_points.last().unwrap() {
+                            segment_idx = wrap_points.len();
+                            segment_start_char = *wrap_points.last().unwrap();
+                        }
+
+                        // Calculate visual position within segment
+                        let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                        let cursor_x_in_segment = visual_col - segment_start_visual;
+                        let cursor_x = cursor_x_in_segment as u16 + line_num_width;
+
+                        (cursor_x, segment_idx as u16)
+                    }
                 } else {
                     // Horizontal scroll mode: apply horizontal offset
                     let cursor_x = (visual_col.saturating_sub(state.horizontal_scroll_offset)) as u16 + line_num_width;
@@ -1489,18 +1512,39 @@ fn position_cursor(
             // Calculate position based on wrapping mode
             let (cursor_x, wrapped_offset) = if state.is_line_wrapping_enabled() {
                 let text_width_usize = text_width as usize;
-                // Allow cursor to sit at position text_width on current visual line
-                let cursor_wrapped_line = if visual_col <= text_width_usize {
-                    0
+                let line = &lines[cursor_line_abs];
+                let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width_usize, tab_width);
+
+                if wrap_points.is_empty() {
+                    // No wrapping - cursor is on first line
+                    let cursor_x = visual_col as u16 + line_num_width;
+                    (cursor_x, 0)
                 } else {
-                    (visual_col - 1) / text_width_usize
-                };
-                let cursor_x = if visual_col <= text_width_usize {
-                    visual_col as u16 + line_num_width
-                } else {
-                    ((visual_col - 1) % text_width_usize + 1) as u16 + line_num_width
-                };
-                (cursor_x, cursor_wrapped_line as u16)
+                    // Find which segment cursor is in
+                    let mut segment_idx = 0;
+                    let mut segment_start_char = 0;
+
+                    for (idx, &wrap_point) in wrap_points.iter().enumerate() {
+                        if actual_col < wrap_point {
+                            segment_idx = idx;
+                            segment_start_char = if idx == 0 { 0 } else { wrap_points[idx - 1] };
+                            break;
+                        }
+                    }
+
+                    // If cursor is at or past last wrap point, it's in the final segment
+                    if actual_col >= *wrap_points.last().unwrap() {
+                        segment_idx = wrap_points.len();
+                        segment_start_char = *wrap_points.last().unwrap();
+                    }
+
+                    // Calculate visual position within segment
+                    let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                    let cursor_x_in_segment = visual_col - segment_start_visual;
+                    let cursor_x = cursor_x_in_segment as u16 + line_num_width;
+
+                    (cursor_x, segment_idx as u16)
+                }
             } else {
                 // Horizontal scroll mode: check if cursor is horizontally visible
                 // Skip this cursor if it's scrolled off screen horizontally
@@ -1568,19 +1612,46 @@ fn position_cursor(
     // Calculate cursor position based on wrapping mode
     let (cursor_x, cursor_y_offset) = if state.is_line_wrapping_enabled() {
         // Wrapped mode: cursor can be on any wrapped line segment
+        // Use word wrap points to determine which segment cursor is in
         let text_width_usize = text_width as usize;
-        // Allow cursor to sit at position text_width on current visual line
-        let cursor_wrapped_line = if visual_col <= text_width_usize {
-            0
+
+        if cursor_line_idx < lines.len() {
+            let line = &lines[cursor_line_idx];
+            let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width_usize, tab_width);
+
+            if wrap_points.is_empty() {
+                // No wrapping - cursor is on first line
+                let cursor_x = visual_col as u16 + line_num_width;
+                (cursor_x, 0)
+            } else {
+                // Find which segment cursor is in
+                let mut segment_idx = 0;
+                let mut segment_start_char = 0;
+
+                for (idx, &wrap_point) in wrap_points.iter().enumerate() {
+                    if state.cursor_col < wrap_point {
+                        segment_idx = idx;
+                        segment_start_char = if idx == 0 { 0 } else { wrap_points[idx - 1] };
+                        break;
+                    }
+                }
+
+                // If cursor is at or past last wrap point, it's in the final segment
+                if state.cursor_col >= *wrap_points.last().unwrap() {
+                    segment_idx = wrap_points.len();
+                    segment_start_char = *wrap_points.last().unwrap();
+                }
+
+                // Calculate visual position within segment
+                let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                let cursor_x_in_segment = visual_col - segment_start_visual;
+                let cursor_x = cursor_x_in_segment as u16 + line_num_width;
+
+                (cursor_x, segment_idx as u16)
+            }
         } else {
-            (visual_col - 1) / text_width_usize
-        };
-        let cursor_x = if visual_col <= text_width_usize {
-            visual_col as u16 + line_num_width
-        } else {
-            ((visual_col - 1) % text_width_usize + 1) as u16 + line_num_width
-        };
-        (cursor_x, cursor_wrapped_line as u16)
+            (line_num_width, 0)
+        }
     } else {
         // Horizontal scroll mode: cursor is always on the first (only) visual line
         // Apply horizontal scroll offset
