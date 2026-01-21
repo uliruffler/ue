@@ -599,10 +599,17 @@ impl<'a> FileViewerState<'a> {
 
         if let Some(line) = lines.get(absolute_line) {
             if self.cursor_col < line.len() {
-                // Check if NEXT position would be a wrap point (approaching from left)
+                // Check wrap point logic
                 if self.is_line_wrapping_enabled() {
                     let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
                     let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
+
+                    // If we're AT a wrap point with wrap_end=true, move to start of next segment (same position, clear flag)
+                    if wrap_points.contains(&self.cursor_col) && self.cursor_at_wrap_end {
+                        self.cursor_at_wrap_end = false;
+                        self.desired_cursor_col = self.cursor_col;
+                        return true;
+                    }
 
                     let next_pos = self.cursor_col + 1;
 
@@ -646,35 +653,25 @@ impl<'a> FileViewerState<'a> {
     pub(crate) fn move_cursor_left(&mut self, lines: &[String]) -> bool {
         let absolute_line = self.absolute_line();
 
-        // If we're at wrap_end position, first move to start of next segment (same char position)
-        if self.cursor_at_wrap_end {
-            self.cursor_at_wrap_end = false;
-            self.desired_cursor_col = self.cursor_col;
-            return true;
+        // Check if we're AT a wrap point (start of segment) and should move to wrap indicator
+        if self.is_line_wrapping_enabled() && !self.cursor_at_wrap_end && self.cursor_col > 0 {
+            if let Some(line) = lines.get(absolute_line) {
+                let visible_lines = 10; // Default value
+                let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
+                let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
+
+                // If we're AT a wrap point (start of segment), move to wrap indicator (same position, set flag)
+                if wrap_points.contains(&self.cursor_col) {
+                    self.cursor_at_wrap_end = true;
+                    self.desired_cursor_col = self.cursor_col;
+                    return true;
+                }
+            }
         }
 
         if self.cursor_col > 0 {
-            // Check if moving left would put us at a wrap point
-            let new_col = self.cursor_col - 1;
-
-            if self.is_line_wrapping_enabled() {
-                if let Some(line) = lines.get(absolute_line) {
-                    let visible_lines = 10; // Default, will be recalculated if needed
-                    let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
-                    let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
-
-                    if wrap_points.contains(&new_col) {
-                        // Moving to a wrap point from the right - stay at start of next segment
-                        self.cursor_col = new_col;
-                        self.cursor_at_wrap_end = false; // At start of next segment
-                        self.desired_cursor_col = self.cursor_col;
-                        return true;
-                    }
-                }
-            }
-
-            // Normal left movement
-            self.cursor_col = new_col;
+            // Normal left movement (also handles moving left from wrap_end position)
+            self.cursor_col -= 1;
             self.cursor_at_wrap_end = false;
             self.desired_cursor_col = self.cursor_col;
             return true;
