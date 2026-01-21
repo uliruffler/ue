@@ -465,6 +465,7 @@ pub(crate) fn insert_char(
     lines: &mut [String],
     c: char,
     filename: &str,
+    _visible_lines: usize,
 ) -> bool {
     let idx = state.absolute_line();
     if idx < lines.len() && state.cursor_col <= lines[idx].len() {
@@ -475,6 +476,7 @@ pub(crate) fn insert_char(
             ch: c,
         });
         state.cursor_col += 1;
+        state.cursor_at_wrap_end = false; // Clear wrap end flag after typing
         state.desired_cursor_col = state.cursor_col;
         state
             .undo_history
@@ -484,6 +486,7 @@ pub(crate) fn insert_char(
         // Ensure cursor is within bounds and validate invariants (debug only)
         state.clamp_cursor_to_line_bounds(lines);
         state.validate_cursor_invariants(lines);
+
 
         true
     } else {
@@ -1328,7 +1331,7 @@ pub(crate) fn handle_editing_keys(
             } else if state.has_selection() {
                 remove_selection(state, lines, filename);
             }
-            insert_char(state, lines, *c, filename)
+            insert_char(state, lines, *c, filename, visible_lines)
         }
         KeyCode::Enter => {
             if state.has_selection() {
@@ -1656,7 +1659,7 @@ mod tests {
         let mut lines = vec!["hello".to_string()];
         state.cursor_col = 5;
 
-        assert!(insert_char(&mut state, &mut lines, '!', "test.txt"));
+        assert!(insert_char(&mut state, &mut lines, '!', "test.txt", 10));
         assert_eq!(lines[0], "hello!");
         assert_eq!(state.cursor_col, 6);
         assert_eq!(state.undo_history.edits.len(), 1);
@@ -1669,7 +1672,7 @@ mod tests {
         let mut lines = vec!["hello".to_string()];
         state.cursor_col = 2;
 
-        assert!(insert_char(&mut state, &mut lines, 'X', "test.txt"));
+        assert!(insert_char(&mut state, &mut lines, 'X', "test.txt", 10));
         assert_eq!(lines[0], "heXllo");
         assert_eq!(state.cursor_col, 3);
     }
@@ -1759,7 +1762,7 @@ mod tests {
         let mut lines = vec!["hello".to_string()];
         state.cursor_col = 5;
 
-        insert_char(&mut state, &mut lines, '!', "test.txt");
+        insert_char(&mut state, &mut lines, '!', "test.txt", 10);
         assert_eq!(lines[0], "hello!");
 
         assert!(apply_undo(&mut state, &mut lines, "test.txt", 10));
@@ -1805,7 +1808,7 @@ mod tests {
         let mut lines = vec!["hello".to_string()];
         state.cursor_col = 5;
 
-        insert_char(&mut state, &mut lines, '!', "test.txt");
+        insert_char(&mut state, &mut lines, '!', "test.txt", 10);
         apply_undo(&mut state, &mut lines, "test.txt", 10);
 
         assert!(apply_redo(&mut state, &mut lines, "test.txt", 10));
