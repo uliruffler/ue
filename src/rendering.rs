@@ -1624,30 +1624,51 @@ fn position_cursor(
                 let cursor_x = visual_col as u16 + line_num_width;
                 (cursor_x, 0)
             } else {
-                // Find which segment cursor is in
-                let mut segment_idx = 0;
-                let mut segment_start_char = 0;
-
-                for (idx, &wrap_point) in wrap_points.iter().enumerate() {
-                    if state.cursor_col < wrap_point {
-                        segment_idx = idx;
-                        segment_start_char = if idx == 0 { 0 } else { wrap_points[idx - 1] };
-                        break;
+                // Check if cursor is at a wrap point and cursor_at_wrap_end is true
+                if state.cursor_at_wrap_end && wrap_points.contains(&state.cursor_col) {
+                    // Cursor is at wrap point, show at end of previous segment
+                    // Find which segment this wrap point ends
+                    let mut segment_idx = 0;
+                    for (idx, &wp) in wrap_points.iter().enumerate() {
+                        if wp == state.cursor_col {
+                            segment_idx = idx;
+                            break;
+                        }
                     }
+
+                    // Calculate position at end of previous segment (where wrap indicator is shown)
+                    let segment_start_char = if segment_idx == 0 { 0 } else { wrap_points[segment_idx - 1] };
+                    let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                    let cursor_x_in_segment = visual_col - segment_start_visual;
+                    let cursor_x = cursor_x_in_segment as u16 + line_num_width;
+
+                    (cursor_x, segment_idx as u16)
+                } else {
+                    // Normal cursor positioning - find which segment cursor is in
+                    let mut segment_idx = 0;
+                    let mut segment_start_char = 0;
+
+                    for (idx, &wrap_point) in wrap_points.iter().enumerate() {
+                        if state.cursor_col < wrap_point {
+                            segment_idx = idx;
+                            segment_start_char = if idx == 0 { 0 } else { wrap_points[idx - 1] };
+                            break;
+                        }
+                    }
+
+                    // If cursor is at or past last wrap point, it's in the final segment
+                    if state.cursor_col >= *wrap_points.last().unwrap() {
+                        segment_idx = wrap_points.len();
+                        segment_start_char = *wrap_points.last().unwrap();
+                    }
+
+                    // Calculate visual position within segment
+                    let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                    let cursor_x_in_segment = visual_col - segment_start_visual;
+                    let cursor_x = cursor_x_in_segment as u16 + line_num_width;
+
+                    (cursor_x, segment_idx as u16)
                 }
-
-                // If cursor is at or past last wrap point, it's in the final segment
-                if state.cursor_col >= *wrap_points.last().unwrap() {
-                    segment_idx = wrap_points.len();
-                    segment_start_char = *wrap_points.last().unwrap();
-                }
-
-                // Calculate visual position within segment
-                let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
-                let cursor_x_in_segment = visual_col - segment_start_visual;
-                let cursor_x = cursor_x_in_segment as u16 + line_num_width;
-
-                (cursor_x, segment_idx as u16)
             }
         } else {
             (line_num_width, 0)

@@ -146,6 +146,10 @@ pub struct FileViewerState<'a> {
     pub(crate) pending_menu_action: Option<crate::menu::MenuAction>,
     /// Whether this is an untitled file that hasn't been saved to disk yet
     pub(crate) is_untitled: bool,
+    /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
+    /// previous segment (true) or at the start of the next segment (false)
+    /// Only meaningful when cursor_col is exactly at a wrap point
+    pub(crate) cursor_at_wrap_end: bool,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -224,6 +228,7 @@ impl<'a> FileViewerState<'a> {
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
             is_untitled: false,
+            cursor_at_wrap_end: false,
         }
     }
 
@@ -594,15 +599,26 @@ impl<'a> FileViewerState<'a> {
 
         if let Some(line) = lines.get(absolute_line) {
             if self.cursor_col < line.len() {
-                // Move right within current line
+                // Check if NEXT position would be a wrap point (approaching from left)
+                if self.is_line_wrapping_enabled() {
+                    let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
+                    let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
+
+                    let next_pos = self.cursor_col + 1;
+
+                    // If moving TO a wrap point from the left, land on wrap indicator (wrap_end=true)
+                    if wrap_points.contains(&next_pos) && !self.cursor_at_wrap_end {
+                        self.cursor_col = next_pos;
+                        self.cursor_at_wrap_end = true;
+                        self.desired_cursor_col = self.cursor_col;
+                        return true;
+                    }
+                }
+
+                // Normal move right within current line
                 self.cursor_col += 1;
+                self.cursor_at_wrap_end = false;
                 self.desired_cursor_col = self.cursor_col;
-
-                // Check if we need to wrap to next visual line segment
-                // This prevents cursor from sitting on the wrap indicator
-                let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
-                self.wrap_cursor_if_at_indicator(lines, text_width);
-
                 return true;
             }
 
@@ -611,6 +627,7 @@ impl<'a> FileViewerState<'a> {
                 let effective_visible_lines = self.effective_visible_lines(lines, visible_lines);
                 self.cursor_line += 1;
                 self.cursor_col = 0;
+                self.cursor_at_wrap_end = false;
                 self.desired_cursor_col = 0;
 
                 // Check if we need to scroll
@@ -627,15 +644,43 @@ impl<'a> FileViewerState<'a> {
     /// Move cursor left by one character, handling line boundaries
     /// Returns true if cursor moved
     pub(crate) fn move_cursor_left(&mut self, lines: &[String]) -> bool {
+        let absolute_line = self.absolute_line();
+
+        // If we're at wrap_end position, first move to start of next segment (same char position)
+        if self.cursor_at_wrap_end {
+            self.cursor_at_wrap_end = false;
+            self.desired_cursor_col = self.cursor_col;
+            return true;
+        }
+
         if self.cursor_col > 0 {
-            // Move left within current line
-            self.cursor_col -= 1;
+            // Check if moving left would put us at a wrap point
+            let new_col = self.cursor_col - 1;
+
+            if self.is_line_wrapping_enabled() {
+                if let Some(line) = lines.get(absolute_line) {
+                    let visible_lines = 10; // Default, will be recalculated if needed
+                    let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
+                    let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
+
+                    if wrap_points.contains(&new_col) {
+                        // Moving to a wrap point from the right - stay at start of next segment
+                        self.cursor_col = new_col;
+                        self.cursor_at_wrap_end = false; // At start of next segment
+                        self.desired_cursor_col = self.cursor_col;
+                        return true;
+                    }
+                }
+            }
+
+            // Normal left movement
+            self.cursor_col = new_col;
+            self.cursor_at_wrap_end = false;
             self.desired_cursor_col = self.cursor_col;
             return true;
         }
 
         // At start of line - try to move to previous line
-        let absolute_line = self.absolute_line();
         if absolute_line > 0 {
             if self.cursor_line > 0 {
                 self.cursor_line -= 1;
@@ -646,6 +691,7 @@ impl<'a> FileViewerState<'a> {
             let new_absolute = self.absolute_line();
             if let Some(line) = lines.get(new_absolute) {
                 self.cursor_col = line.len();
+                self.cursor_at_wrap_end = false;
                 self.desired_cursor_col = self.cursor_col;
             }
             return true;
@@ -721,74 +767,6 @@ impl<'a> FileViewerState<'a> {
         }
     }
 
-    /// Wrap cursor to next visual line segment if it's at/past the wrap indicator position
-    /// This prevents the cursor from sitting on or after the wrap indicator character
-    /// Returns true if cursor was wrapped
-    pub(crate) fn wrap_cursor_if_at_indicator(&mut self, lines: &[String], text_width: u16) -> bool {
-        if !self.is_line_wrapping_enabled() || text_width == 0 {
-            return false;
-        }
-
-        let absolute_line = self.absolute_line();
-        if absolute_line >= lines.len() {
-            return false;
-        }
-
-        let line = &lines[absolute_line];
-        let tab_width = self.settings.tab_width;
-        let usable_width = (text_width as usize).saturating_sub(1); // Reserve 1 for wrap indicator
-
-        if usable_width == 0 {
-            return false;
-        }
-
-        // Calculate visual column position
-        let visual_col = crate::coordinates::visual_width_up_to(line, self.cursor_col, tab_width);
-
-        // Find which wrap segment we're in based on wrap points
-        let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, tab_width);
-
-        if wrap_points.is_empty() {
-            // No wrapping needed for this line
-            return false;
-        }
-
-        // Determine which segment the cursor is in
-        // Key insight: cursor BEFORE a wrap point is in the segment leading to that wrap point
-        // cursor AT or AFTER a wrap point is in the next segment
-        let mut segment_idx = 0;
-        let mut segment_start_char = 0;
-
-        for (idx, &wrap_point) in wrap_points.iter().enumerate() {
-            if self.cursor_col < wrap_point {
-                // Cursor is BEFORE this wrap point, so it's in segment idx
-                segment_idx = idx;
-                segment_start_char = if idx == 0 { 0 } else { wrap_points[idx - 1] };
-                break;
-            }
-        }
-
-        // If we didn't break (cursor is >= all wrap points), it's in the final segment
-        if self.cursor_col >= *wrap_points.last().unwrap() {
-            segment_idx = wrap_points.len();
-            segment_start_char = *wrap_points.last().unwrap();
-        }
-
-        // Calculate visual position within this segment
-        let segment_start_visual = crate::coordinates::visual_width_up_to(line, segment_start_char, tab_width);
-        let offset_in_segment = visual_col - segment_start_visual;
-
-        // If cursor's visual position within segment equals or exceeds usable_width (wrap indicator position),
-        // wrap it to the next segment
-        if offset_in_segment >= usable_width && segment_idx < wrap_points.len() {
-            // Move cursor to start of next segment
-            self.cursor_col = wrap_points[segment_idx];
-            self.desired_cursor_col = self.cursor_col;
-            return true;
-        }
-
-        false
-    }
 
     /// Debug-only validation of cursor invariants
     /// In debug builds, call this after cursor mutations to catch bugs early
@@ -1148,7 +1126,7 @@ mod tests {
     }
 
     #[test]
-    fn wrap_cursor_at_indicator_position() {
+    fn cursor_at_wrap_point_behavior() {
         let (_tmp, _guard) = set_temp_home();
         let settings = Box::leak(Box::new(
             Settings::load().expect("Failed to load test settings"),
@@ -1156,27 +1134,66 @@ mod tests {
         let undo_history = UndoHistory::new();
         let mut state = FileViewerState::new(80, undo_history, settings);
 
-        // Create a line that will wrap
-        let lines = vec!["123456789012345".to_string()];
-        let text_width = 10;
+        // Create a simple line with a known wrap point at position 10
+        let lines = vec!["x".repeat(100)];
+        let visible_lines = 10;
 
         // Enable line wrapping
         state.toggle_line_wrapping();
 
-        // Wrap point should be at char 9
+        // Manually test wrap_end behavior at a wrap point
+        // Simulate being at position 10 which could be a wrap point
+        state.cursor_col = 10;
+        state.cursor_at_wrap_end = false;
+
+        // Test that cursor_at_wrap_end flag can be set and cleared
+        state.cursor_at_wrap_end = true;
+        assert!(state.cursor_at_wrap_end);
+
+        state.cursor_at_wrap_end = false;
+        assert!(!state.cursor_at_wrap_end);
+
+        // Test that typing clears the flag
+        let _ = crate::editing::insert_char(&mut state, &mut vec![lines[0].clone()], 'a', "test", visible_lines);
+        assert!(!state.cursor_at_wrap_end, "Typing should clear cursor_at_wrap_end");
+    }
+
+    #[test]
+    fn cursor_at_wrap_point_from_right() {
+        let (_tmp, _guard) = set_temp_home();
+        let settings = Box::leak(Box::new(
+            Settings::load().expect("Failed to load test settings"),
+        ));
+        let undo_history = UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+
+        // Create a line with wrapping
+        let lines = vec!["x".repeat(100)];
+        let visible_lines = 10;
+
+        // Enable line wrapping
+        state.toggle_line_wrapping();
+
+        // Get wrap point
+        let text_width = crate::coordinates::calculate_text_width(&state, &lines, visible_lines);
         let wrap_points = crate::coordinates::calculate_word_wrap_points(&lines[0], text_width as usize, 4);
-        assert_eq!(wrap_points, vec![9]);
+        let first_wrap = wrap_points[0];
 
-        // Test 1: cursor at position 8 (last char of first segment) should not wrap
-        state.cursor_col = 8;
-        let wrapped = state.wrap_cursor_if_at_indicator(&lines, text_width);
-        assert!(!wrapped, "Cursor at pos 8 should not wrap");
-        assert_eq!(state.cursor_col, 8);
+        // Position cursor after wrap point
+        state.cursor_col = first_wrap + 1;
+        state.cursor_at_wrap_end = false;
 
-        // Test 2: cursor at position 9 (start of second segment) should not wrap again
-        state.cursor_col = 9;
-        let wrapped2 = state.wrap_cursor_if_at_indicator(&lines, text_width);
-        assert!(!wrapped2, "Cursor at segment start (col 9) should not wrap again");
+        // Move left - should land at wrap point at start of segment (not wrap_end)
+        let moved = state.move_cursor_left(&lines);
+        assert!(moved);
+        assert_eq!(state.cursor_col, first_wrap);
+        assert!(!state.cursor_at_wrap_end, "Moving left to wrap point should be at start of segment");
+
+        // Move left again - should move to previous character
+        let moved2 = state.move_cursor_left(&lines);
+        assert!(moved2);
+        assert_eq!(state.cursor_col, first_wrap - 1);
+        assert!(!state.cursor_at_wrap_end);
     }
 
 

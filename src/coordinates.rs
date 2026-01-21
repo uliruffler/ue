@@ -867,6 +867,7 @@ mod tests {
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
             is_untitled: false,
+            cursor_at_wrap_end: false,
         }
     }
 

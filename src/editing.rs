@@ -465,7 +465,7 @@ pub(crate) fn insert_char(
     lines: &mut [String],
     c: char,
     filename: &str,
-    visible_lines: usize,
+    _visible_lines: usize,
 ) -> bool {
     let idx = state.absolute_line();
     if idx < lines.len() && state.cursor_col <= lines[idx].len() {
@@ -476,6 +476,7 @@ pub(crate) fn insert_char(
             ch: c,
         });
         state.cursor_col += 1;
+        state.cursor_at_wrap_end = false; // Clear wrap end flag after typing
         state.desired_cursor_col = state.cursor_col;
         state
             .undo_history
@@ -486,9 +487,6 @@ pub(crate) fn insert_char(
         state.clamp_cursor_to_line_bounds(lines);
         state.validate_cursor_invariants(lines);
 
-        // Wrap cursor if it landed on wrap indicator position
-        let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
-        state.wrap_cursor_if_at_indicator(lines, text_width);
 
         true
     } else {
