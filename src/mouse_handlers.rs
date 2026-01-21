@@ -928,6 +928,61 @@ fn handle_mouse_click(
         // Use helper to set cursor position with proper bounds checking
         state.set_cursor_position(logical_line, col, lines, visible_lines);
 
+        // Check if we clicked at/past a wrap indicator and should set cursor_at_wrap_end
+        if state.is_line_wrapping_enabled() && logical_line < lines.len() {
+            let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+            let wrap_points = crate::coordinates::calculate_word_wrap_points(
+                &lines[logical_line],
+                text_width as usize,
+                state.settings.tab_width
+            );
+
+            // If cursor ends up at a wrap point, we need to determine which side
+            // The key: if visual_to_logical returned the wrap point position,
+            // it means we clicked somewhere that maps to that character.
+            // We need to check: did we click PAST the actual visual content?
+            if wrap_points.contains(&state.cursor_col) {
+                let line = &lines[logical_line];
+
+                // Calculate which segment this wrap point ends
+                let mut segment_idx = 0;
+                for (idx, &wp) in wrap_points.iter().enumerate() {
+                    if wp == state.cursor_col {
+                        segment_idx = idx;
+                        break;
+                    }
+                }
+
+                // Get the segment boundaries
+                let segment_start_char = if segment_idx == 0 { 0 } else { wrap_points[segment_idx - 1] };
+                let segment_end_char = state.cursor_col; // The wrap point
+
+                // Calculate visual widths
+                let segment_start_visual = crate::coordinates::visual_width_up_to(line, segment_start_char, state.settings.tab_width);
+                let segment_end_visual = crate::coordinates::visual_width_up_to(line, segment_end_char, state.settings.tab_width);
+                let content_width_in_segment = segment_end_visual - segment_start_visual;
+
+                // Calculate where the mouse clicked within this visual line
+                let line_num_width = crate::coordinates::line_number_width(state.settings);
+                let text_col = if column >= line_num_width {
+                    (column - line_num_width) as usize
+                } else {
+                    0
+                };
+
+                // If we clicked past the content width, we're in the empty space/wrap indicator area
+                if text_col >= content_width_in_segment {
+                    state.cursor_at_wrap_end = true;
+                } else {
+                    state.cursor_at_wrap_end = false;
+                }
+            } else {
+                state.cursor_at_wrap_end = false;
+            }
+        } else {
+            state.cursor_at_wrap_end = false;
+        }
+
         // Reset horizontal scroll if clicking on empty/short line in horizontal scroll mode
         if !state.is_line_wrapping_enabled() {
             let line_len = lines[logical_line].len();
@@ -1021,6 +1076,37 @@ fn handle_mouse_drag(
         state.cursor_line = logical_line.saturating_sub(state.top_line);
         state.cursor_col = col.min(lines[logical_line].len()); // Clamp to line length
         state.desired_cursor_col = state.cursor_col;
+
+        // Check if we should set cursor_at_wrap_end for wrapped lines
+        if state.is_line_wrapping_enabled() {
+            let text_width = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+            let wrap_points = crate::coordinates::calculate_word_wrap_points(
+                &lines[logical_line],
+                text_width as usize,
+                state.settings.tab_width
+            );
+
+            if wrap_points.contains(&col) {
+                let line_num_width = crate::coordinates::line_number_width(state.settings);
+                let text_col = if column >= line_num_width {
+                    (column - line_num_width) as usize
+                } else {
+                    0
+                };
+                let usable_width = (text_width as usize).saturating_sub(1);
+
+                if text_col >= usable_width {
+                    state.cursor_at_wrap_end = true;
+                } else {
+                    state.cursor_at_wrap_end = false;
+                }
+            } else {
+                state.cursor_at_wrap_end = false;
+            }
+        } else {
+            state.cursor_at_wrap_end = false;
+        }
+
         state.update_selection();
         state.needs_redraw = true;
     }

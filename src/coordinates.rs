@@ -410,8 +410,24 @@ pub(crate) fn visual_to_logical_position(
 
                 // Calculate visual column in line, accounting for horizontal scroll
                 let visual_col_in_line = if wrapping_enabled {
-                    // Wrapped mode: calculate based on which wrapped segment we're on
-                    line_offset * (text_width as usize) + text_col
+                    // Wrapped mode with word wrapping: use wrap points
+                    let line = &lines[logical_line];
+                    let wrap_points = calculate_word_wrap_points(line, text_width as usize, tab_width);
+
+                    if wrap_points.is_empty() || line_offset == 0 {
+                        // First segment or no wrapping
+                        text_col
+                    } else if line_offset - 1 < wrap_points.len() {
+                        // Subsequent segment - add offset from wrap point
+                        let segment_start_char = wrap_points[line_offset - 1];
+                        let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                        segment_start_visual + text_col
+                    } else {
+                        // Beyond all wrap points - shouldn't happen but handle gracefully
+                        let last_wrap = wrap_points.last().copied().unwrap_or(0);
+                        let last_visual = visual_width_up_to(line, last_wrap, tab_width);
+                        last_visual + text_col
+                    }
                 } else {
                     // Horizontal scroll mode: add scroll offset to screen column
                     state.horizontal_scroll_offset + text_col
@@ -444,8 +460,24 @@ pub(crate) fn visual_to_logical_position(
 
                 // Calculate visual column in line, accounting for horizontal scroll
                 let visual_col_in_line = if wrapping_enabled {
-                    // Wrapped mode: calculate based on which wrapped segment we're on
-                    line_offset * (text_width as usize) + text_col
+                    // Wrapped mode with word wrapping: use wrap points
+                    let line = &lines[logical_line];
+                    let wrap_points = calculate_word_wrap_points(line, text_width as usize, tab_width);
+                    
+                    if wrap_points.is_empty() || line_offset == 0 {
+                        // First segment or no wrapping
+                        text_col
+                    } else if line_offset - 1 < wrap_points.len() {
+                        // Subsequent segment - add offset from wrap point
+                        let segment_start_char = wrap_points[line_offset - 1];
+                        let segment_start_visual = visual_width_up_to(line, segment_start_char, tab_width);
+                        segment_start_visual + text_col
+                    } else {
+                        // Beyond all wrap points - shouldn't happen but handle gracefully
+                        let last_wrap = wrap_points.last().copied().unwrap_or(0);
+                        let last_visual = visual_width_up_to(line, last_wrap, tab_width);
+                        last_visual + text_col
+                    }
                 } else {
                     // Horizontal scroll mode: add scroll offset to screen column
                     state.horizontal_scroll_offset + text_col
@@ -453,7 +485,23 @@ pub(crate) fn visual_to_logical_position(
 
                 // Convert visual column to character index considering tabs
                 let line = &lines[logical_line];
-                let col_in_line = visual_col_to_char_index(line, visual_col_in_line, tab_width);
+                let mut col_in_line = visual_col_to_char_index(line, visual_col_in_line, tab_width);
+                
+                // Check if we're past the wrap point for this segment - if so, clamp to wrap point
+                if wrapping_enabled {
+                    let wrap_points = calculate_word_wrap_points(line, text_width as usize, tab_width);
+                    
+                    // Find which wrap point applies to this segment
+                    if line_offset < wrap_points.len() {
+                        let segment_wrap_point = wrap_points[line_offset];
+                        
+                        // If calculated position is beyond this segment's wrap point, clamp it
+                        if col_in_line > segment_wrap_point {
+                            col_in_line = segment_wrap_point;
+                        }
+                    }
+                }
+                
                 return Some((logical_line, col_in_line));
             }
 

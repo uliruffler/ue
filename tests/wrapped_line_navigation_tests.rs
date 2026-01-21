@@ -166,7 +166,6 @@ fn test_up_navigation_no_skip_last_wrap() {
         "12345678901234567890".to_string(),            // 20 chars -> 2 wraps
     ];
     let text_width: u16 = 10;
-    let text_width_usize = text_width as usize;
     let tab_width = 4;
 
     // When moving up from line 1 to line 0, we should land on the LAST wrap
@@ -243,7 +242,6 @@ fn test_filter_mode_up_navigation_to_last_wrap() {
         "short".to_string(),                           // Line 3: short, not wrapped (visible)
     ];
     let text_width: u16 = 10;
-    let text_width_usize = text_width as usize;
     let tab_width = 4;
 
     // Verify line 1 wraps to 4 lines with word wrapping
