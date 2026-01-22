@@ -779,6 +779,25 @@ fn render_footer(
     Ok(())
 }
 
+/// Rebuild syntax context by scanning lines from start to target line
+/// This establishes the correct syntax stack state for rendering
+fn rebuild_syntax_context(lines: &[String], target_line: usize) {
+    for (line_idx, line) in lines.iter().enumerate() {
+        if line_idx >= target_line {
+            break;
+        }
+        // Get highlights and check for syntax switches
+        let (_highlights, switch_action) = crate::syntax::highlight_line(line);
+        if let Some((is_switch_back, extension)) = switch_action {
+            if is_switch_back {
+                crate::syntax::pop_syntax();
+            } else {
+                crate::syntax::push_syntax(&extension);
+            }
+        }
+    }
+}
+
 fn render_visible_lines(
     stdout: &mut impl Write,
     _file: &str,
@@ -820,6 +839,16 @@ fn render_visible_lines(
     } else {
         Vec::new()
     };
+
+    // Reset syntax stack and rebuild context from document start to top_line
+    crate::syntax::clear_syntax_stack();
+    let start_line = if state.filter_active && !filtered_lines.is_empty() {
+        // In filter mode, scan from start to first visible filtered line
+        filtered_lines.iter().find(|&&line| line >= state.top_line).copied().unwrap_or(0)
+    } else {
+        state.top_line
+    };
+    rebuild_syntax_context(lines, start_line);
 
     let mut visual_lines_rendered = 0;
     
@@ -1103,6 +1132,16 @@ fn render_line(
 
     // Add newline after the last wrapped segment to separate this logical line from the next
     write!(stdout, "\r\n")?;
+
+    // Apply any syntax switches from this line (after rendering so highlighting is correct for this line)
+    let (_highlights, switch_action) = crate::syntax::highlight_line(line);
+    if let Some((is_switch_back, extension)) = switch_action {
+        if is_switch_back {
+            crate::syntax::pop_syntax();
+        } else {
+            crate::syntax::push_syntax(&extension);
+        }
+    }
 
     Ok(lines_to_render)
 }
@@ -1698,7 +1737,7 @@ fn render_line_segment_expanded(
     use crossterm::style::{ResetColor, SetBackgroundColor, SetForegroundColor};
 
     // Get syntax highlighting for the original line
-    let highlights = crate::syntax::highlight_line(original_line);
+    let (highlights, _switch_action) = crate::syntax::highlight_line(original_line);
 
     // Convert byte positions to visual positions for the expanded line
     let mut visual_to_color: Vec<Option<crossterm::style::Color>> =
@@ -1899,7 +1938,7 @@ fn render_line_segment_with_selection_expanded(
     }
 
     // Get syntax highlighting for the original line
-    let highlights = crate::syntax::highlight_line(original_line);
+    let (highlights, _switch_action) = crate::syntax::highlight_line(original_line);
 
     // Convert byte positions to visual positions for the expanded line
     let mut visual_to_color: Vec<Option<crossterm::style::Color>> =

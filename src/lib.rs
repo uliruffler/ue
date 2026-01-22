@@ -40,3 +40,25 @@ pub mod undo;
 
 // Re-export commonly used functions for binary
 pub use ui::generate_untitled_filename;
+
+// Test helper functions for syntax switching
+pub fn syntax_set_current_file(filepath: &str) {
+    syntax::set_current_file(filepath);
+}
+
+pub fn syntax_highlight_line(line: &str) -> (Vec<(usize, usize, crossterm::style::Color)>, Option<(bool, String)>) {
+    syntax::highlight_line(line)
+}
+
+pub fn syntax_push(extension: &str) {
+    syntax::push_syntax(extension);
+}
+
+pub fn syntax_pop() {
+    syntax::pop_syntax();
+}
+
+pub fn syntax_clear_stack() {
+    syntax::clear_syntax_stack();
+}
+

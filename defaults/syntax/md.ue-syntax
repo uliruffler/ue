@@ -1,5 +1,5 @@
 # Markdown syntax highlighting
-# Format: priority|color|regex
+# Format: priority|color|regex[|switch_to=ext or |switch_back]
 # Headers (# ## ### etc.)
 10|blue|^#{1,6}\s+.*$
 # Bold text (** ** or __ __)
@@ -8,8 +8,11 @@
 # Italic text (* * or _ _)
 8|cyan|\*[^*]+\*
 8|cyan|_[^_]+_
-# Code blocks (``` ``` and inline ` `)
-7|green|```[\s\S]*?```
+# Code blocks - opening backticks with language (switches syntax)
+12|green|^```([a-z0-9]+)\s*$|switch_to=$1
+# Code blocks - closing backticks (switches back to markdown)
+11|green|^```\s*$|switch_back
+# Inline code (single backticks)
 7|green|`[^`]+`
 # Links ([text](url))
 6|dark_cyan|\[([^\]]+)\]\([^)]+\)
