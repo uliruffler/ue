@@ -6,6 +6,10 @@ use ue::*;
 #[derive(Parser)]
 #[clap(name = "ue", version = env!("CARGO_PKG_VERSION"), about = "Simple terminal editor")]
 struct Cli {
+    /// Print all keyboard inputs with modifiers (for testing keybindings)
+    #[clap(long)]
+    print_keys: bool,
+
     /// Files to be processed
     files: Vec<String>,
 }
@@ -15,6 +19,12 @@ fn main() -> std::io::Result<()> {
     let _ = default_syntax::deploy_default_syntax_files();
 
     let cli = Cli::parse();
+
+    // Handle --print-keys mode
+    if cli.print_keys {
+        return print_keys_mode();
+    }
+
     let mut files = cli.files.clone();
 
     if files.is_empty() {

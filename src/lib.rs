@@ -39,7 +39,7 @@ pub mod ui;
 pub mod undo;
 
 // Re-export commonly used functions for binary
-pub use ui::generate_untitled_filename;
+pub use ui::{generate_untitled_filename, print_keys_mode};
 
 // Test helper functions for syntax switching
 pub fn syntax_set_current_file(filepath: &str) {

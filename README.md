@@ -66,5 +66,19 @@ Create rectangular (block) selections that span multiple lines:
 **Note**: Alt+Mouse drag also creates block selection. Block selection allows rectangular copy/paste operations across multiple lines.
 
 
+## Debugging Keybindings
+
+If you want to test which key codes your terminal sends or debug keybinding configurations, you can use the keyboard event monitor:
+
+```bash
+ue --print-keys
+```
+
+This displays all keyboard inputs with their modifiers in real-time. Press `Esc` twice quickly to exit. This is especially useful when:
+- Configuring custom keybindings in `~/.ue/settings.toml`
+- Testing how your terminal handles special key combinations
+- Debugging why a keybinding isn't working as expected
+
+
 ## License
 This project is licensed under the GNU General Public License v3.0 - see the LICENSE file for details.

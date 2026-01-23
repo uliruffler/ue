@@ -1283,6 +1283,143 @@ fn editing_session(
     }
 }
 
+/// Print keyboard events with modifiers (for testing keybindings)
+/// Exit with double-Esc
+pub fn print_keys_mode() -> std::io::Result<()> {
+    let mut stdout = io::stdout();
+
+    // Enter raw mode but don't use alternate screen
+    terminal::enable_raw_mode()?;
+
+    // Print instructions (use \r\n because we're in raw mode)
+    print!("Keyboard Event Monitor\r\n");
+    print!("======================\r\n");
+    print!("Press any key to see its code and modifiers.\r\n");
+    print!("Press Esc twice quickly to exit.\r\n\r\n");
+    stdout.flush()?;
+
+    let mut detector = DoubleEscDetector::new(300); // 300ms threshold like default
+
+    loop {
+        // Poll with timeout to handle double-esc timing
+        let timeout = detector.remaining_timeout();
+
+        if !event::poll(timeout)? {
+            // Timeout elapsed, check if we need to handle first Esc timeout
+            if detector.timed_out() {
+                detector.clear();
+            }
+            continue;
+        }
+
+        if let Event::Key(key) = event::read()? {
+            // Check for double-esc
+            match detector.process_key(&key) {
+                EscResult::Double => {
+                    // Exit on double-esc
+                    break;
+                }
+                EscResult::First => {
+                    // First esc, continue waiting
+                }
+                EscResult::None => {
+                    // Not an esc event, clear detector
+                }
+            }
+
+            // Print the key event details
+            print_key_event(&key)?;
+            stdout.flush()?;
+        }
+    }
+
+    // Clean up (use \r\n because we're in raw mode)
+    print!("\r\nExiting keyboard monitor...\r\n");
+    terminal::disable_raw_mode()?;
+
+    Ok(())
+}
+
+/// Format and print a key event with all its details
+fn print_key_event(key: &crossterm::event::KeyEvent) -> std::io::Result<()> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    let mut parts = Vec::new();
+
+    // Add modifiers
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        parts.push("Ctrl");
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        parts.push("Alt");
+    }
+    if key.modifiers.contains(KeyModifiers::SHIFT) {
+        parts.push("Shift");
+    }
+    if key.modifiers.contains(KeyModifiers::SUPER) {
+        parts.push("Super");
+    }
+    if key.modifiers.contains(KeyModifiers::HYPER) {
+        parts.push("Hyper");
+    }
+    if key.modifiers.contains(KeyModifiers::META) {
+        parts.push("Meta");
+    }
+
+    // Add key code
+    let key_str = match key.code {
+        KeyCode::Backspace => "Backspace".to_string(),
+        KeyCode::Enter => "Enter".to_string(),
+        KeyCode::Left => "Left".to_string(),
+        KeyCode::Right => "Right".to_string(),
+        KeyCode::Up => "Up".to_string(),
+        KeyCode::Down => "Down".to_string(),
+        KeyCode::Home => "Home".to_string(),
+        KeyCode::End => "End".to_string(),
+        KeyCode::PageUp => "PageUp".to_string(),
+        KeyCode::PageDown => "PageDown".to_string(),
+        KeyCode::Tab => "Tab".to_string(),
+        KeyCode::BackTab => "BackTab".to_string(),
+        KeyCode::Delete => "Delete".to_string(),
+        KeyCode::Insert => "Insert".to_string(),
+        KeyCode::F(n) => format!("F{}", n),
+        KeyCode::Char(c) => {
+            if c == ' ' {
+                "Space".to_string()
+            } else if c.is_control() {
+                format!("Char({:?})", c)
+            } else {
+                format!("'{}'", c)
+            }
+        }
+        KeyCode::Null => "Null".to_string(),
+        KeyCode::Esc => "Esc".to_string(),
+        KeyCode::CapsLock => "CapsLock".to_string(),
+        KeyCode::ScrollLock => "ScrollLock".to_string(),
+        KeyCode::NumLock => "NumLock".to_string(),
+        KeyCode::PrintScreen => "PrintScreen".to_string(),
+        KeyCode::Pause => "Pause".to_string(),
+        KeyCode::Menu => "Menu".to_string(),
+        KeyCode::KeypadBegin => "KeypadBegin".to_string(),
+        KeyCode::Media(media) => format!("Media({:?})", media),
+        KeyCode::Modifier(modifier) => format!("Modifier({:?})", modifier),
+    };
+
+    parts.push(&key_str);
+
+    // Format output
+    let combined = if parts.len() > 1 {
+        parts.join("+")
+    } else {
+        parts[0].to_string()
+    };
+
+    // Use explicit \r\n because we're in raw mode
+    print!("Key: {}\r\n", combined);
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
