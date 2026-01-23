@@ -527,7 +527,13 @@ pub(crate) fn handle_menu_key(
             // Open menu on File menu with dropdown
             menu_bar.active = true;
             menu_bar.selected_menu_index = 0; // File menu
-            menu_bar.selected_item_index = 0;
+
+            // Select second recent file (index 6) if available, for quick Esc+Enter switching
+            // File menu structure: New(0), Open(1), Save(2), Close(3), Separator(4), Recent1(5), Recent2(6), ...
+            let file_menu = &menu_bar.menus[0];
+            let has_two_recent_files = file_menu.items.len() >= 7; // At least 7 items means 2+ recent files
+            menu_bar.selected_item_index = if has_two_recent_files { 6 } else { 0 };
+
             menu_bar.dropdown_open = true; // Open dropdown immediately
             return (None, true); // Menu opened, needs full redraw
         }

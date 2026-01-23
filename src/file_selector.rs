@@ -246,9 +246,10 @@ fn run_file_selector(
     files: &[FileEntry],
     settings: &crate::settings::Settings,
 ) -> io::Result<Option<String>> {
-    let mut selected_index = 0;
+    // Select second file (index 1) if available, for quick Esc+Enter switching
+    let mut selected_index = if files.len() >= 2 { 1 } else { 0 };
     let mut scroll_offset = 0;
-    let mut prev_selected_index = 0;
+    let mut prev_selected_index = selected_index;
     let mut prev_scroll_offset = 0;
     let mut needs_full_redraw = true;
     let mut help_active = false;
