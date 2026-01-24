@@ -3,7 +3,7 @@ use std::io::Write;
 use std::path::Path;
 
 /// Check if a file has unsaved changes by reading its undo history
-fn check_file_has_unsaved_changes(file_path: &Path) -> bool {
+pub(crate) fn check_file_has_unsaved_changes(file_path: &Path) -> bool {
     // Get the undo history file path for this file
     let file_str = file_path.to_string_lossy();
     if let Ok(undo_path) = crate::undo::UndoHistory::history_path_for(&file_str) {
@@ -19,11 +19,7 @@ fn check_file_has_unsaved_changes(file_path: &Path) -> bool {
     false
 }
 
-/// Public wrapper for check_file_has_unsaved_changes
-#[allow(dead_code)] // Only used in event_handlers.rs (binary)
-pub(crate) fn check_file_has_unsaved_changes_pub(file_path: &Path) -> bool {
-    check_file_has_unsaved_changes(file_path)
-}
+
 
 /// Menu item types
 #[derive(Debug, Clone, PartialEq)]
@@ -85,6 +81,39 @@ impl Menu {
     }
 }
 
+/// Helper to create action menu items
+fn action(label: &str, action: MenuAction) -> MenuItem {
+    MenuItem::Action {
+        label: label.to_string(),
+        action,
+    }
+}
+
+/// Helper to create checkable menu items
+fn checkable(label: &str, action: MenuAction, checked: bool) -> MenuItem {
+    MenuItem::Checkable {
+        label: label.to_string(),
+        action,
+        checked,
+    }
+}
+
+/// Count files in the file section of a menu
+fn count_files_in_menu(menu: &Menu) -> usize {
+    let mut count = 0;
+    for (idx, item) in menu.items.iter().enumerate() {
+        if idx >= FILE_SECTION_START_IDX {
+            if matches!(item, MenuItem::Separator) {
+                break;
+            }
+            if matches!(item, MenuItem::Action { .. }) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 /// Menu bar state
 #[derive(Debug)]
 pub(crate) struct MenuBar {
@@ -98,6 +127,9 @@ pub(crate) struct MenuBar {
     pub(crate) max_visible_files: usize, // Maximum number of files to show in menu (from settings)
 }
 
+// Constants for File menu structure
+const FILE_MENU_INDEX: usize = 0;
+const FILE_SECTION_START_IDX: usize = 6; // First file after "New, Open, Save, Close, Close all, Separator"
 impl MenuBar {
     pub(crate) fn new() -> Self {
         let menus = vec![
@@ -105,101 +137,46 @@ impl MenuBar {
                 "File",
                 'f',
                 vec![
-                    MenuItem::Action {
-                        label: "New".to_string(),
-                        action: MenuAction::FileNew,
-                    },
-                    MenuItem::Action {
-                        label: "Open...".to_string(),
-                        action: MenuAction::FileOpenDialog,
-                    },
-                    MenuItem::Action {
-                        label: "Save".to_string(),
-                        action: MenuAction::FileSave,
-                    },
-                    MenuItem::Action {
-                        label: "Close".to_string(),
-                        action: MenuAction::FileClose,
-                    },
-                    MenuItem::Action {
-                        label: "Close all".to_string(),
-                        action: MenuAction::FileCloseAll,
-                    },
+                    action("New", MenuAction::FileNew),
+                    action("Open...", MenuAction::FileOpenDialog),
+                    action("Save", MenuAction::FileSave),
+                    action("Close", MenuAction::FileClose),
+                    action("Close all", MenuAction::FileCloseAll),
                     MenuItem::Separator,
-                    MenuItem::Action {
-                        label: "Quit".to_string(),
-                        action: MenuAction::FileQuit,
-                    },
+                    action("Quit", MenuAction::FileQuit),
                 ],
             ),
             Menu::new(
                 "Edit",
                 'e',
                 vec![
-                    MenuItem::Action {
-                        label: "Undo".to_string(),
-                        action: MenuAction::EditUndo,
-                    },
-                    MenuItem::Action {
-                        label: "Redo".to_string(),
-                        action: MenuAction::EditRedo,
-                    },
+                    action("Undo", MenuAction::EditUndo),
+                    action("Redo", MenuAction::EditRedo),
                     MenuItem::Separator,
-                    MenuItem::Action {
-                        label: "Copy".to_string(),
-                        action: MenuAction::EditCopy,
-                    },
-                    MenuItem::Action {
-                        label: "Cut".to_string(),
-                        action: MenuAction::EditCut,
-                    },
-                    MenuItem::Action {
-                        label: "Paste".to_string(),
-                        action: MenuAction::EditPaste,
-                    },
+                    action("Copy", MenuAction::EditCopy),
+                    action("Cut", MenuAction::EditCut),
+                    action("Paste", MenuAction::EditPaste),
                     MenuItem::Separator,
-                    MenuItem::Action {
-                        label: "Find".to_string(),
-                        action: MenuAction::EditFind,
-                    },
+                    action("Find", MenuAction::EditFind),
                 ],
             ),
             Menu::new(
                 "View",
                 'v',
                 vec![
-                    MenuItem::Action {
-                        label: "File Selector".to_string(),
-                        action: MenuAction::ViewFileSelector,
-                    },
-                    MenuItem::Checkable {
-                        label: "Line Wrap".to_string(),
-                        action: MenuAction::ViewLineWrap,
-                        checked: false, // Will be updated dynamically
-                    },
+                    action("File Selector", MenuAction::ViewFileSelector),
+                    checkable("Line Wrap", MenuAction::ViewLineWrap, false),
                 ],
             ),
             Menu::new(
                 "Help",
                 ' ',
                 vec![
-                    MenuItem::Action {
-                        label: "Editor Help".to_string(),
-                        action: MenuAction::HelpEditor,
-                    },
-                    MenuItem::Action {
-                        label: "Find Help".to_string(),
-                        action: MenuAction::HelpFind,
-                    },
-                    MenuItem::Action {
-                        label: "File Selector Help".to_string(),
-                        action: MenuAction::HelpFileSelector,
-                    },
+                    action("Editor Help", MenuAction::HelpEditor),
+                    action("Find Help", MenuAction::HelpFind),
+                    action("File Selector Help", MenuAction::HelpFileSelector),
                     MenuItem::Separator,
-                    MenuItem::Action {
-                        label: "About".to_string(),
-                        action: MenuAction::HelpAbout,
-                    },
+                    action("About", MenuAction::HelpAbout),
                 ],
             ),
         ];
@@ -250,52 +227,37 @@ impl MenuBar {
 
     /// Move to next menu
     pub(crate) fn next_menu(&mut self) {
-        let was_dropdown_open = self.dropdown_open;
-        self.selected_menu_index = (self.selected_menu_index + 1) % self.menus.len();
-        self.selected_item_index = 0;
-        self.file_section_scroll_offset = 0; // Reset scroll when switching menus
-        // If dropdown was open, keep it open for the new menu
-        if was_dropdown_open {
-            self.dropdown_open = true;
-        } else {
-            self.dropdown_open = false;
-        }
-        self.needs_redraw = true;
+        self.switch_menu((self.selected_menu_index + 1) % self.menus.len());
     }
 
     /// Move to previous menu
     pub(crate) fn prev_menu(&mut self) {
+        let new_index = if self.selected_menu_index == 0 {
+            self.menus.len() - 1
+        } else {
+            self.selected_menu_index - 1
+        };
+        self.switch_menu(new_index);
+    }
+
+    /// Common logic for switching menus
+    fn switch_menu(&mut self, new_index: usize) {
         let was_dropdown_open = self.dropdown_open;
-        if self.selected_menu_index == 0 {
-            self.selected_menu_index = self.menus.len() - 1;
-        } else {
-            self.selected_menu_index -= 1;
-        }
+        self.selected_menu_index = new_index;
         self.selected_item_index = 0;
-        self.file_section_scroll_offset = 0; // Reset scroll when switching menus
-        // If dropdown was open, keep it open for the new menu
-        if was_dropdown_open {
-            self.dropdown_open = true;
-        } else {
-            self.dropdown_open = false;
-        }
+        self.file_section_scroll_offset = 0;
+        self.dropdown_open = was_dropdown_open;
         self.needs_redraw = true;
     }
 
     /// Move to next item in current menu (skip separators)
     pub(crate) fn next_item(&mut self) {
         let menu = &self.menus[self.selected_menu_index];
-        let mut next = (self.selected_item_index + 1) % menu.items.len();
-
-        // Skip separators
-        while matches!(menu.items[next], MenuItem::Separator) {
-            next = (next + 1) % menu.items.len();
-            if next == self.selected_item_index {
-                break; // All items are separators (shouldn't happen)
-            }
-        }
-
-        self.selected_item_index = next;
+        self.selected_item_index = self.find_next_non_separator(
+            self.selected_item_index,
+            menu.items.len(),
+            true
+        );
         self.ensure_selected_visible();
         self.needs_redraw = true;
     }
@@ -303,78 +265,65 @@ impl MenuBar {
     /// Move to previous item in current menu (skip separators)
     pub(crate) fn prev_item(&mut self) {
         let menu = &self.menus[self.selected_menu_index];
-        let mut prev = if self.selected_item_index == 0 {
-            menu.items.len() - 1
-        } else {
-            self.selected_item_index - 1
-        };
-
-        // Skip separators
-        while matches!(menu.items[prev], MenuItem::Separator) {
-            if prev == 0 {
-                prev = menu.items.len() - 1;
-            } else {
-                prev -= 1;
-            }
-            if prev == self.selected_item_index {
-                break; // All items are separators
-            }
-        }
-
-        self.selected_item_index = prev;
+        self.selected_item_index = self.find_next_non_separator(
+            self.selected_item_index,
+            menu.items.len(),
+            false
+        );
         self.ensure_selected_visible();
         self.needs_redraw = true;
     }
 
+    /// Find next/previous non-separator item index
+    fn find_next_non_separator(&self, current: usize, len: usize, forward: bool) -> usize {
+        let menu = &self.menus[self.selected_menu_index];
+        let mut next = if forward {
+            (current + 1) % len
+        } else if current == 0 {
+            len - 1
+        } else {
+            current - 1
+        };
+
+        let start = next;
+        // Skip separators
+        while matches!(menu.items[next], MenuItem::Separator) {
+            next = if forward {
+                (next + 1) % len
+            } else if next == 0 {
+                len - 1
+            } else {
+                next - 1
+            };
+            if next == start {
+                break; // All items are separators (shouldn't happen)
+            }
+        }
+        next
+    }
+
     /// Ensure selected item is visible by adjusting scroll offset (for file section only)
     fn ensure_selected_visible(&mut self) {
-        // Only adjust scroll for file section items (index 6 and above in File menu)
-        if self.selected_menu_index != 0 || self.selected_item_index < 6 {
-            // If we're leaving the file section, don't change the scroll offset
+        // Only adjust scroll for file section items in File menu
+        if self.selected_menu_index != FILE_MENU_INDEX || self.selected_item_index < FILE_SECTION_START_IDX {
             return;
         }
 
-        let menu = &self.menus[0];
+        let (file_count, file_end_idx) = self.get_file_section_bounds();
 
-        // Count total files (items between first separator and last separator)
-        let file_start_idx = 6; // First file after "New, Open, Save, Close, Close all, Separator"
-        let mut file_count = 0;
-        let mut file_end_idx = file_start_idx; // Default to start if no files
-
-        // Find files between file_start_idx and the next separator
-        for idx in file_start_idx..menu.items.len() {
-            if matches!(menu.items[idx], MenuItem::Separator) {
-                file_end_idx = idx;
-                break; // End of file section
-            } else {
-                file_count += 1;
-            }
-        }
-
-        // If we didn't find a separator, all remaining items are files
-        if file_end_idx == file_start_idx && file_count > 0 {
-            file_end_idx = menu.items.len();
-        }
-
-        // If selected item is beyond the file section (e.g., at Quit), don't scroll
+        // If selected item is beyond the file section, don't scroll
         if self.selected_item_index >= file_end_idx {
             return;
         }
 
-        // Get max visible files from MenuBar field (set from settings)
-        let max_visible_files = self.max_visible_files;
-
         // If we have fewer files than max, no scrolling needed
-        if file_count <= max_visible_files {
+        if file_count <= self.max_visible_files {
             self.file_section_scroll_offset = 0;
             return;
         }
 
         // Calculate file index within the file section (0-based)
-        let file_idx = self.selected_item_index - file_start_idx;
-
-        // Only scroll if the selected file is outside the currently visible range
-        // Don't scroll when just entering the file section - select first visible file
+        let file_idx = self.selected_item_index - FILE_SECTION_START_IDX;
 
         // Adjust scroll if selected file is above visible area
         if file_idx < self.file_section_scroll_offset {
@@ -382,9 +331,32 @@ impl MenuBar {
         }
 
         // Adjust scroll if selected file is below visible area
-        if file_idx >= self.file_section_scroll_offset + max_visible_files {
-            self.file_section_scroll_offset = file_idx - max_visible_files + 1;
+        if file_idx >= self.file_section_scroll_offset + self.max_visible_files {
+            self.file_section_scroll_offset = file_idx - self.max_visible_files + 1;
         }
+    }
+
+    /// Get file section boundaries in File menu
+    /// Returns (file_count, file_end_idx)
+    fn get_file_section_bounds(&self) -> (usize, usize) {
+        let menu = &self.menus[FILE_MENU_INDEX];
+        let mut file_count = 0;
+        let mut file_end_idx = FILE_SECTION_START_IDX;
+
+        for idx in FILE_SECTION_START_IDX..menu.items.len() {
+            if matches!(menu.items[idx], MenuItem::Separator) {
+                file_end_idx = idx;
+                break;
+            }
+            file_count += 1;
+        }
+
+        // If we didn't find a separator, all remaining items are files
+        if file_end_idx == FILE_SECTION_START_IDX && file_count > 0 {
+            file_end_idx = menu.items.len();
+        }
+
+        (file_count, file_end_idx)
     }
 
     /// Get currently selected menu action (if any)
@@ -474,26 +446,23 @@ impl MenuBar {
     /// Build complete File menu items including static items and recent files
     fn build_file_menu_items(file_labels: Vec<String>, _show_more: bool) -> Vec<MenuItem> {
         let mut items = vec![
-            MenuItem::Action { label: "New".to_string(), action: MenuAction::FileNew },
-            MenuItem::Action { label: "Open...".to_string(), action: MenuAction::FileOpenDialog },
-            MenuItem::Action { label: "Save".to_string(), action: MenuAction::FileSave },
-            MenuItem::Action { label: "Close".to_string(), action: MenuAction::FileClose },
-            MenuItem::Action { label: "Close all".to_string(), action: MenuAction::FileCloseAll },
+            action("New", MenuAction::FileNew),
+            action("Open...", MenuAction::FileOpenDialog),
+            action("Save", MenuAction::FileSave),
+            action("Close", MenuAction::FileClose),
+            action("Close all", MenuAction::FileCloseAll),
         ];
 
         if !file_labels.is_empty() {
             items.push(MenuItem::Separator);
 
             for (idx, label) in file_labels.iter().enumerate() {
-                items.push(MenuItem::Action {
-                    label: label.clone(),
-                    action: MenuAction::FileOpenRecent(idx),
-                });
+                items.push(action(label, MenuAction::FileOpenRecent(idx)));
             }
         }
 
         items.push(MenuItem::Separator);
-        items.push(MenuItem::Action { label: "Quit".to_string(), action: MenuAction::FileQuit });
+        items.push(action("Quit", MenuAction::FileQuit));
 
         items
     }
@@ -518,19 +487,16 @@ impl MenuBar {
         let menu = &self.menus[self.selected_menu_index];
 
         if self.selected_item_index == 0 {
-            return; // Already at first item
+            return;
         }
 
-        // Find the separator before current item
-        let mut idx = self.selected_item_index;
-
         // Move backwards to find separator before current section
+        let mut idx = self.selected_item_index;
         while idx > 0 {
             idx -= 1;
             if matches!(menu.items[idx], MenuItem::Separator) {
                 // Found separator, now find last non-separator item before it
                 if idx == 0 {
-                    // No items before this separator
                     return;
                 }
                 idx -= 1;
@@ -538,37 +504,15 @@ impl MenuBar {
                 while idx > 0 && matches!(menu.items[idx], MenuItem::Separator) {
                     idx -= 1;
                 }
-                // Now idx is at the last item of the previous section
                 self.selected_item_index = idx;
-                // Only scroll if we're within the file section
-                if idx >= 6 && self.selected_menu_index == 0 {
-                    // Check if we're not at the separator/quit section
-                    let mut in_file_section = true;
-                    for (i, item) in menu.items.iter().enumerate().skip(5) {
-                        if i == idx {
-                            break;
-                        }
-                        if matches!(item, MenuItem::Separator) {
-                            in_file_section = false;
-                            break;
-                        }
-                    }
-                    if in_file_section {
-                        self.ensure_selected_visible();
-                    }
-                }
+                self.adjust_scroll_for_file_section(idx);
                 self.needs_redraw = true;
                 return;
             }
         }
 
-        // No separator found, we're in the first section, stay at first item
-        self.selected_item_index = 0;
-        while self.selected_item_index < menu.items.len()
-            && matches!(menu.items[self.selected_item_index], MenuItem::Separator) {
-            self.selected_item_index += 1;
-        }
-        // Don't scroll - we're in the top section
+        // No separator found, we're in the first section, stay at first non-separator item
+        self.selected_item_index = self.find_next_non_separator(0, menu.items.len(), true);
         self.needs_redraw = true;
     }
 
@@ -579,7 +523,6 @@ impl MenuBar {
         // Start from current position and search forward for separator
         let mut idx = self.selected_item_index + 1;
 
-        // Find next separator
         while idx < menu.items.len() {
             if matches!(menu.items[idx], MenuItem::Separator) {
                 // Found separator, move to first non-separator after it
@@ -589,44 +532,30 @@ impl MenuBar {
                 }
                 if idx < menu.items.len() {
                     self.selected_item_index = idx;
-                    // Only scroll if we're within the file section
-                    if idx >= 6 && self.selected_menu_index == 0 {
-                        // Check if we're not at the separator/quit section
-                        let mut in_file_section = true;
-                        for (i, item) in menu.items.iter().enumerate().skip(5) {
-                            if i == idx {
-                                break;
-                            }
-                            if matches!(item, MenuItem::Separator) {
-                                in_file_section = false;
-                                break;
-                            }
-                        }
-                        if in_file_section {
-                            // We're entering the file section from above, select first visible file
-                            // without scrolling
-                            let file_start_idx = 6;
-                            let file_idx = idx - file_start_idx;
-                            // Only adjust selection if the file is not visible
-                            let max_visible_files = 5;
-                            if file_idx < self.file_section_scroll_offset {
-                                // File is above visible area, select first visible file instead
-                                self.selected_item_index = file_start_idx + self.file_section_scroll_offset;
-                            } else if file_idx >= self.file_section_scroll_offset + max_visible_files {
-                                // File is below visible area, scroll to show it
-                                self.ensure_selected_visible();
-                            }
-                            // else: file is already visible, don't scroll
-                        }
-                    }
+                    self.adjust_scroll_for_file_section(idx);
                     self.needs_redraw = true;
                 }
                 return;
             }
             idx += 1;
         }
+    }
 
-        // No separator found, we're in the last section, stay at current position
+    /// Adjust scroll offset if the index is in the file section
+    fn adjust_scroll_for_file_section(&mut self, idx: usize) {
+        if self.selected_menu_index != FILE_MENU_INDEX || idx < FILE_SECTION_START_IDX {
+            return;
+        }
+
+        let (_, file_end_idx) = self.get_file_section_bounds();
+
+        // Check if we're within the file section (not at separator/quit)
+        if idx >= file_end_idx {
+            return;
+        }
+
+        // We're in file section, ensure visibility
+        self.ensure_selected_visible();
     }
 }
 
@@ -638,7 +567,7 @@ pub(crate) fn render_dropdown_menu(
     state: &crate::editor_state::FileViewerState,
     lines: &[String],
 ) -> Result<(), std::io::Error> {
-    use crossterm::{cursor::MoveTo, execute, style::{Color, ResetColor, SetBackgroundColor, SetForegroundColor}};
+    use crossterm::style::Color;
 
     if !menu_bar.active || !menu_bar.dropdown_open {
         return Ok(());
@@ -672,17 +601,15 @@ pub(crate) fn render_dropdown_menu(
     let selection_color = Color::Rgb { r: 100, g: 149, b: 237 };
 
     // For File menu, separate items into sections
-    if menu_bar.selected_menu_index == 0 {
-        // File menu structure: New(0), Open(1), Save(2), Close(3), Separator(4), Files..., Separator, Quit
+    if menu_bar.selected_menu_index == FILE_MENU_INDEX {
         let max_visible_files = state.settings.max_menu_files;
 
         // Find file section boundaries
-        let file_start_idx = 6; // First file after static items
         let mut file_end_idx = 5;
         let mut files = Vec::new();
 
         for (idx, item) in menu.items.iter().enumerate() {
-            if idx >= file_start_idx {
+            if idx >= FILE_SECTION_START_IDX {
                 if matches!(item, MenuItem::Separator) {
                     file_end_idx = idx;
                     break;
@@ -694,22 +621,20 @@ pub(crate) fn render_dropdown_menu(
         let total_files = files.len();
         let scroll_offset = menu_bar.file_section_scroll_offset;
 
-        // Render static items at top (New, Open, Save, Close, Separator)
+        // Render static items at top (New, Open, Save, Close, Close all, Separator)
         let mut display_row = 1;
-        for idx in 0..file_start_idx.min(menu.items.len()) {
+        for idx in 0..FILE_SECTION_START_IDX.min(menu.items.len()) {
             let item = &menu.items[idx];
-            execute!(stdout, MoveTo(menu_x as u16, display_row))?;
-
-            let is_selected = idx == menu_bar.selected_item_index;
-            if is_selected {
-                execute!(stdout, SetBackgroundColor(selection_color))?;
-                execute!(stdout, SetForegroundColor(Color::White))?;
-            } else {
-                execute!(stdout, SetBackgroundColor(menu_bg_color))?;
-            }
-
-            render_menu_item(stdout, item, max_width)?;
-            execute!(stdout, ResetColor)?;
+            render_menu_item_at_row(
+                stdout,
+                item,
+                idx == menu_bar.selected_item_index,
+                menu_x,
+                display_row,
+                max_width,
+                menu_bg_color,
+                selection_color,
+            )?;
             display_row += 1;
         }
 
@@ -723,18 +648,16 @@ pub(crate) fn render_dropdown_menu(
 
             for file_idx in visible_start..visible_end {
                 if let Some((idx, item)) = files.get(file_idx) {
-                    execute!(stdout, MoveTo(menu_x as u16, display_row))?;
-
-                    let is_selected = *idx == menu_bar.selected_item_index;
-                    if is_selected {
-                        execute!(stdout, SetBackgroundColor(selection_color))?;
-                        execute!(stdout, SetForegroundColor(Color::White))?;
-                    } else {
-                        execute!(stdout, SetBackgroundColor(menu_bg_color))?;
-                    }
-
-                    render_menu_item(stdout, item, max_width)?;
-                    execute!(stdout, ResetColor)?;
+                    render_menu_item_at_row(
+                        stdout,
+                        item,
+                        *idx == menu_bar.selected_item_index,
+                        menu_x,
+                        display_row,
+                        max_width,
+                        menu_bg_color,
+                        selection_color,
+                    )?;
 
                     // Render scrollbar for this row if needed
                     if show_scrollbar {
@@ -758,39 +681,64 @@ pub(crate) fn render_dropdown_menu(
         // Render remaining items at bottom (Separator, Quit)
         for idx in file_end_idx..menu.items.len() {
             let item = &menu.items[idx];
-            execute!(stdout, MoveTo(menu_x as u16, display_row))?;
-
-            let is_selected = idx == menu_bar.selected_item_index;
-            if is_selected {
-                execute!(stdout, SetBackgroundColor(selection_color))?;
-                execute!(stdout, SetForegroundColor(Color::White))?;
-            } else {
-                execute!(stdout, SetBackgroundColor(menu_bg_color))?;
-            }
-
-            render_menu_item(stdout, item, max_width)?;
-            execute!(stdout, ResetColor)?;
+            render_menu_item_at_row(
+                stdout,
+                item,
+                idx == menu_bar.selected_item_index,
+                menu_x,
+                display_row,
+                max_width,
+                menu_bg_color,
+                selection_color,
+            )?;
             display_row += 1;
         }
     } else {
         // Other menus: render all items normally
         let mut display_row = 1;
         for (idx, item) in menu.items.iter().enumerate() {
-            execute!(stdout, MoveTo(menu_x as u16, display_row))?;
-
-            let is_selected = idx == menu_bar.selected_item_index;
-            if is_selected {
-                execute!(stdout, SetBackgroundColor(selection_color))?;
-                execute!(stdout, SetForegroundColor(Color::White))?;
-            } else {
-                execute!(stdout, SetBackgroundColor(menu_bg_color))?;
-            }
-
-            render_menu_item(stdout, item, max_width)?;
-            execute!(stdout, ResetColor)?;
+            render_menu_item_at_row(
+                stdout,
+                item,
+                idx == menu_bar.selected_item_index,
+                menu_x,
+                display_row,
+                max_width,
+                menu_bg_color,
+                selection_color,
+            )?;
             display_row += 1;
         }
     }
+
+    Ok(())
+}
+
+/// Render a single menu item at a specific position with selection highlighting
+fn render_menu_item_at_row(
+    stdout: &mut impl Write,
+    item: &MenuItem,
+    is_selected: bool,
+    x: usize,
+    y: u16,
+    max_width: usize,
+    bg_color: crossterm::style::Color,
+    selection_color: crossterm::style::Color,
+) -> Result<(), std::io::Error> {
+    use crossterm::{cursor::MoveTo, execute, style::{Color, ResetColor, SetBackgroundColor, SetForegroundColor}};
+
+    execute!(stdout, MoveTo(x as u16, y))?;
+
+    if is_selected {
+        execute!(stdout, SetBackgroundColor(selection_color))?;
+        execute!(stdout, SetForegroundColor(Color::White))?;
+    } else {
+        execute!(stdout, SetBackgroundColor(bg_color))?;
+    }
+
+    render_menu_item(stdout, item, max_width)?;
+    execute!(stdout, ResetColor)?;
+
 
     Ok(())
 }
@@ -892,34 +840,23 @@ pub(crate) fn handle_menu_key(
         } else {
             // Open menu on File menu with dropdown
             menu_bar.active = true;
-            menu_bar.selected_menu_index = 0; // File menu
+            menu_bar.selected_menu_index = FILE_MENU_INDEX;
 
-            // Select second recent file (index 7) if available, for quick Esc+Enter switching
-            // File menu structure: New(0), Open(1), Save(2), Close(3), Close all(4), Separator(5), Recent1(6), Recent2(7), ...
-            let file_menu = &menu_bar.menus[0];
+            // Select second recent file if available, for quick Esc+Enter switching
+            let file_menu = &menu_bar.menus[FILE_MENU_INDEX];
 
-            // Count actual files (items between index 6 and the next separator)
-            let mut file_count = 0;
-            for (idx, item) in file_menu.items.iter().enumerate() {
-                if idx >= 6 {
-                    if matches!(item, MenuItem::Separator) {
-                        break; // Hit the separator after files
-                    }
-                    if matches!(item, MenuItem::Action { .. }) {
-                        file_count += 1;
-                    }
-                }
-            }
+            // Count actual files in file section
+            let file_count = count_files_in_menu(file_menu);
 
             menu_bar.selected_item_index = if file_count >= 2 {
-                7 // Select second file
+                FILE_SECTION_START_IDX + 1 // Select second file
             } else if file_count >= 1 {
-                6 // Select first (only) file
+                FILE_SECTION_START_IDX // Select first (only) file
             } else {
                 0 // No files, select New
             };
 
-            menu_bar.dropdown_open = true; // Open dropdown immediately
+            menu_bar.dropdown_open = true;
             return (None, true); // Menu opened, needs full redraw
         }
     }
@@ -930,13 +867,12 @@ pub(crate) fn handle_menu_key(
 
     // Handle Ctrl+W to remove file from menu (only when dropdown is open and on File menu)
     if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('w') {
-        if menu_bar.dropdown_open && menu_bar.selected_menu_index == 0 {
-            // Check if we're on a recent file item (indices 6 and above in File menu)
-            if menu_bar.selected_item_index >= 6 {
-                let menu = &menu_bar.menus[0];
+        if menu_bar.dropdown_open && menu_bar.selected_menu_index == FILE_MENU_INDEX {
+            // Check if we're on a recent file item
+            if menu_bar.selected_item_index >= FILE_SECTION_START_IDX {
+                let menu = &menu_bar.menus[FILE_MENU_INDEX];
                 if let Some(MenuItem::Action { action: MenuAction::FileOpenRecent(idx), .. })
                     = menu.items.get(menu_bar.selected_item_index) {
-                    // Return FileRemove action to be handled by caller
                     return (Some(MenuAction::FileRemove(*idx)), false);
                 }
             }

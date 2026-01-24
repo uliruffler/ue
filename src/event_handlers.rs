@@ -113,7 +113,7 @@ pub(crate) fn handle_key_event(
                 let files = crate::recent::get_recent_files().unwrap_or_default();
                 if let Some(file_path) = files.get(idx) {
                     // Check for unsaved changes
-                    if crate::menu::check_file_has_unsaved_changes_pub(file_path) {
+                    if crate::menu::check_file_has_unsaved_changes(file_path) {
                         // File has unsaved changes - show warning message, don't remove
                         let filename = file_path
                             .file_name()

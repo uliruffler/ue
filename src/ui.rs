@@ -972,7 +972,7 @@ fn editing_session(
                     let mut unsaved_files = Vec::new();
 
                     for file_path in &all_files {
-                        if crate::menu::check_file_has_unsaved_changes_pub(file_path) {
+                        if crate::menu::check_file_has_unsaved_changes(file_path) {
                             unsaved_files.push(file_path.clone());
                         } else {
                             saved_files.push(file_path.clone());
