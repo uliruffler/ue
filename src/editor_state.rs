@@ -25,6 +25,8 @@ pub struct FileViewerState<'a> {
     /// Last cursor blink toggle time
     pub(crate) last_blink_time: Option<Instant>,
     pub(crate) needs_redraw: bool,
+    /// True if only the footer needs to be redrawn (avoids full screen redraw)
+    pub(crate) needs_footer_redraw: bool,
     pub(crate) modified: bool,
     pub(crate) term_width: u16,
     pub(crate) undo_history: UndoHistory,
@@ -144,12 +146,19 @@ pub struct FileViewerState<'a> {
     pub(crate) menu_bar: crate::menu::MenuBar,
     /// Pending menu action to execute
     pub(crate) pending_menu_action: Option<crate::menu::MenuAction>,
+    /// Close all confirmation prompt active
+    pub(crate) close_all_confirmation_active: bool,
+    /// Set to true when user confirms close all (Enter pressed)
+    pub(crate) close_all_confirmed: bool,
     /// Whether this is an untitled file that hasn't been saved to disk yet
     pub(crate) is_untitled: bool,
     /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
     /// previous segment (true) or at the start of the next segment (false)
     /// Only meaningful when cursor_col is exactly at a wrap point
     pub(crate) cursor_at_wrap_end: bool,
+    /// Status message to show in the footer (e.g., warnings, errors)
+    #[allow(dead_code)] // Read in rendering.rs (binary)
+    pub(crate) status_message: Option<String>,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -167,6 +176,7 @@ impl<'a> FileViewerState<'a> {
             cursor_blink_state: true,
             last_blink_time: None,
             needs_redraw: true,
+            needs_footer_redraw: false,
             modified: false,
             term_width,
             undo_history,
@@ -227,8 +237,11 @@ impl<'a> FileViewerState<'a> {
             last_drag_position: None,
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
+            close_all_confirmation_active: false,
+            close_all_confirmed: false,
             is_untitled: false,
             cursor_at_wrap_end: false,
+            status_message: None,
         }
     }
 

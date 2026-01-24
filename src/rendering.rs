@@ -369,7 +369,7 @@ fn render_goto_position_highlighted(
     Ok(())
 }
 
-fn render_footer(
+pub(crate) fn render_footer(
     stdout: &mut impl Write,
     state: &FileViewerState,
     lines: &[String],
@@ -388,6 +388,44 @@ fn render_footer(
         crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
     {
         execute!(stdout, SetBackgroundColor(color))?;
+    }
+
+    // If close all confirmation is active, show the prompt
+    if state.close_all_confirmation_active {
+        let digits = state.settings.appearance.line_number_digits as usize;
+        let total_width = state.term_width as usize;
+        
+        write!(stdout, "\r")?;
+        
+        // Build the prompt
+        let mut prompt = String::new();
+        if digits > 0 {
+            prompt.push_str(&format!("{:width$} ", "", width = digits));
+        }
+        prompt.push_str("Close all files? [Enter]=Yes [Esc]=No");
+        
+        // Write prompt
+        use crossterm::style::SetForegroundColor;
+        execute!(stdout, SetForegroundColor(crossterm::style::Color::Yellow))?;
+        write!(stdout, "{}", prompt)?;
+        execute!(stdout, ResetColor)?;
+        if let Some(color) =
+            crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
+        {
+            execute!(stdout, SetBackgroundColor(color))?;
+        }
+        
+        // Pad to end of line
+        let written = prompt.len();
+        let remaining = total_width.saturating_sub(written);
+        for _ in 0..remaining {
+            write!(stdout, " ")?;
+        }
+        
+        execute!(stdout, terminal::Clear(ClearType::UntilNewLine))?;
+        execute!(stdout, ResetColor)?;
+        execute!(stdout, cursor::Hide)?;
+        return Ok(());
     }
 
     // If in find mode, show the find prompt on left and hit count/position on right
@@ -734,8 +772,18 @@ fn render_footer(
 
     let remaining_width = total_width.saturating_sub(left_len);
 
-    // Show error/info message if present, otherwise show position
-    if let Some(ref error) = state.find_error {
+    // Show status message, error/info message, or position
+    if let Some(ref message) = state.status_message {
+        use crossterm::style::SetForegroundColor;
+        execute!(stdout, SetForegroundColor(crossterm::style::Color::Yellow))?;
+        write!(stdout, "{}", message)?;
+        execute!(stdout, ResetColor)?;
+        if let Some(color) =
+            crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
+        {
+            execute!(stdout, SetBackgroundColor(color))?;
+        }
+    } else if let Some(ref error) = state.find_error {
         use crossterm::style::SetForegroundColor;
         let color = if error.contains("wrapped") {
             crossterm::style::Color::Yellow

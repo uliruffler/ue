@@ -770,6 +770,8 @@ fn editing_session(
         .to_lowercase();
     state.is_untitled = filename_lower.starts_with("untitled") && !std::path::Path::new(file).exists();
 
+    // Update menu bar settings from configuration
+    state.menu_bar.update_max_visible_files(settings.max_menu_files);
     // Update file menu with current recent files
     state.menu_bar.update_file_menu(settings.max_menu_files, file, state.modified);
 
@@ -825,16 +827,21 @@ fn editing_session(
                 render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
             }
             state.needs_redraw = false;
-        } else if state.menu_bar.active && state.menu_bar.dropdown_open {
+        } else if state.needs_footer_redraw {
+            // Only redraw the footer (e.g., for status messages)
+            crate::rendering::render_footer(&mut stdout, &state, &lines, visible_lines)?;
+            stdout.flush()?;
+            state.needs_footer_redraw = false;
+        } else if state.menu_bar.active && state.menu_bar.dropdown_open && state.menu_bar.needs_redraw {
             // Update menu checkable states before rendering dropdown
             state.menu_bar.update_checkable(
                 crate::menu::MenuAction::ViewLineWrap,
                 state.is_line_wrapping_enabled()
             );
-
-            // Menu is open but no full redraw needed - just update the menu overlay
-            // Render only the dropdown menu without redrawing content
+            
+            // Menu is open and needs redraw - render the dropdown menu overlay
             crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state, &lines)?;
+            state.menu_bar.needs_redraw = false;
             stdout.flush()?;
         }
 
@@ -953,6 +960,64 @@ fn editing_session(
                     return Ok((state.modified, None, false, true));
                 }
 
+                // Handle close all confirmation
+                if state.close_all_confirmed {
+                    state.close_all_confirmed = false;
+
+                    // Get all tracked files
+                    let all_files = crate::recent::get_recent_files().unwrap_or_default();
+
+                    // Check for unsaved changes
+                    let mut saved_files = Vec::new();
+                    let mut unsaved_files = Vec::new();
+
+                    for file_path in &all_files {
+                        if crate::menu::check_file_has_unsaved_changes_pub(file_path) {
+                            unsaved_files.push(file_path.clone());
+                        } else {
+                            saved_files.push(file_path.clone());
+                        }
+                    }
+
+                    // Close saved files
+                    for file_path in &saved_files {
+                        let _ = crate::file_selector::remove_tracked_file(file_path);
+                    }
+
+                    // Always show status message
+                    if !unsaved_files.is_empty() {
+                        // Show warning if there were unsaved files
+                        state.status_message = Some(format!(
+                            "Closed {} file(s). {} file(s) with unsaved changes not closed.",
+                            saved_files.len(),
+                            unsaved_files.len()
+                        ));
+                        state.needs_footer_redraw = true;
+                    } else if !saved_files.is_empty() {
+                        // All files were closed
+                        state.status_message = Some(format!("Closed {} file(s).", saved_files.len()));
+                        state.needs_footer_redraw = true;
+                    }
+
+                    // If all files were closed, check if current file was one of them
+                    if saved_files.iter().any(|p| p.to_string_lossy() == file) {
+                        // Current file was closed - need to switch to another file or quit
+                        if !unsaved_files.is_empty() {
+                            // Switch to first unsaved file
+                            let next_file = unsaved_files[0].to_string_lossy().to_string();
+                            return Ok((false, Some(next_file), false, false));
+                        } else {
+                            // All files closed, quit
+                            return Ok((false, None, true, false));
+                        }
+                    } else if saved_files.is_empty() {
+                        // No files were closed (all had unsaved changes)
+                        // Stay on current file
+                    }
+
+                    state.needs_redraw = true;
+                }
+
                 // Handle pending menu action (e.g., FileOpenRecent or ViewFileSelector)
                 if let Some(action) = state.pending_menu_action.take() {
                     match action {
@@ -1053,6 +1118,12 @@ fn editing_session(
                                 }
                             }
                         }
+                        crate::menu::MenuAction::FileCloseAll => {
+                            // Close menu and show confirmation in footer
+                            state.menu_bar.close();
+                            state.close_all_confirmation_active = true;
+                            state.needs_footer_redraw = true;
+                        }
                         _ => {
                             // Other actions should have been handled in event_handlers.rs
                         }
@@ -1114,6 +1185,10 @@ fn editing_session(
                                 persist_editor_state(&mut state, file);
                                 return Ok((state.modified, Some(path.to_string_lossy().to_string()), false, false));
                             }
+                        }
+                        MenuAction::FileRemove(_idx) => {
+                            // File removal is handled in event_handlers.rs
+                            // This case is here for exhaustiveness but should not be reached
                         }
                         MenuAction::FileSave => {
                             // If this is an untitled file, show save-as dialog
@@ -1201,6 +1276,12 @@ fn editing_session(
                                 let _ = delete_file_history(file);
                                 return Ok((state.modified, None, false, true));
                             }
+                        }
+                        MenuAction::FileCloseAll => {
+                            // Close menu and show confirmation in footer
+                            state.menu_bar.close();
+                            state.close_all_confirmation_active = true;
+                            state.needs_footer_redraw = true;
                         }
                         MenuAction::FileQuit => {
                             return Ok((state.modified, None, true, false));

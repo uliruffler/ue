@@ -854,6 +854,7 @@ mod tests {
             cursor_blink_state: false,
             last_blink_time: None,
             needs_redraw: false,
+            needs_footer_redraw: false,
             modified: false,
             term_width: 80,
             undo_history: UndoHistory::new(),
@@ -914,8 +915,11 @@ mod tests {
             last_drag_position: None,
             menu_bar: crate::menu::MenuBar::new(),
             pending_menu_action: None,
+            close_all_confirmation_active: false,
+            close_all_confirmed: false,
             is_untitled: false,
             cursor_at_wrap_end: false,
+            status_message: None,
         }
     }
 

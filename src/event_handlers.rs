@@ -42,6 +42,34 @@ pub(crate) fn handle_key_event(
         code, modifiers, ..
     } = key_event;
 
+    // Clear status message on any key press
+    if state.status_message.is_some() {
+        state.status_message = None;
+        state.needs_footer_redraw = true; // Only redraw footer
+    }
+
+    // Handle close all confirmation
+    if state.close_all_confirmation_active {
+        match code {
+            KeyCode::Enter => {
+                // User confirmed - set flag to trigger actual closing in ui.rs
+                state.close_all_confirmation_active = false;
+                state.close_all_confirmed = true;
+                state.needs_footer_redraw = true;
+                return Ok((false, false));
+            }
+            KeyCode::Esc => {
+                // User cancelled
+                state.close_all_confirmation_active = false;
+                state.needs_footer_redraw = true;
+                return Ok((false, false));
+            }
+            _ => {
+                // Ignore other keys while in confirmation mode
+                return Ok((false, false));
+            }
+        }
+    }
 
     // Update menu checkable states before rendering
     state.menu_bar.update_checkable(
@@ -79,6 +107,45 @@ pub(crate) fn handle_key_event(
                 state.pending_menu_action = Some(action);
                 return Ok((false, false));
             }
+            crate::menu::MenuAction::FileRemove(idx) => {
+                // Remove a recent file from the menu (triggered by Ctrl+W)
+                // Check if the file has unsaved changes
+                let files = crate::recent::get_recent_files().unwrap_or_default();
+                if let Some(file_path) = files.get(idx) {
+                    // Check for unsaved changes
+                    if crate::menu::check_file_has_unsaved_changes_pub(file_path) {
+                        // File has unsaved changes - show warning message, don't remove
+                        let filename = file_path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or("file");
+                        state.status_message = Some(format!("Cannot remove '{}': has unsaved changes", filename));
+                        state.needs_footer_redraw = true; // Only redraw footer to avoid flicker
+                        return Ok((false, false));
+                    }
+                    
+                    // Remove the file from tracking
+                    let _ = crate::file_selector::remove_tracked_file(file_path);
+                    
+                    // Rebuild the menu to reflect the change
+                    state.menu_bar.update_file_menu(10, filename, state.modified);
+                    
+                    // If we removed the last item and there are still items, adjust selection
+                    let file_menu = &state.menu_bar.menus[0];
+                    if state.menu_bar.selected_item_index >= file_menu.items.len() {
+                        state.menu_bar.selected_item_index = file_menu.items.len().saturating_sub(1);
+                        // Skip back to last non-separator
+                        while state.menu_bar.selected_item_index > 0 
+                            && matches!(file_menu.items.get(state.menu_bar.selected_item_index), 
+                                Some(crate::menu::MenuItem::Separator)) {
+                            state.menu_bar.selected_item_index -= 1;
+                        }
+                    }
+                    
+                    state.needs_redraw = true;
+                }
+                return Ok((false, false));
+            }
             crate::menu::MenuAction::FileSave => {
                 // If this is an untitled file, we need to show the save-as dialog
                 if state.is_untitled {
@@ -114,6 +181,11 @@ pub(crate) fn handle_key_event(
                     let _ = delete_file_history(filename);
                     return Ok((false, true));
                 }
+            }
+            crate::menu::MenuAction::FileCloseAll => {
+                // Close all files - delegate to ui.rs for confirmation
+                state.pending_menu_action = Some(action);
+                return Ok((false, false));
             }
             crate::menu::MenuAction::FileQuit => {
                 // Quit editor
