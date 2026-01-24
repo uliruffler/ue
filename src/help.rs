@@ -81,17 +81,6 @@ pub(crate) fn get_help_content(
     }
 }
 
-/// Get help content for file selector
-pub(crate) fn get_file_selector_help(
-    settings: &crate::settings::Settings,
-    term_width: usize,
-) -> Vec<String> {
-    load_help_from_md(
-        include_str!("../defaults/help-file-selector.md"),
-        settings,
-        term_width,
-    )
-}
 
 /// Get help content for open dialog
 pub(crate) fn get_open_dialog_help(
@@ -235,18 +224,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_file_selector_help_has_content() {
-        let settings = Default::default();
-        let term_width = 80;
-        let selector_help = get_file_selector_help(&settings, term_width);
-        assert!(!selector_help.is_empty());
-        assert!(
-            selector_help
-                .iter()
-                .any(|line| line.contains("File Selector") || line.contains("FILE SELECTOR"))
-        );
-    }
 
     #[test]
     fn test_help_input_handling() {
@@ -276,14 +253,6 @@ mod tests {
         // Find help should be loaded and rendered from markdown
         let find_help = get_help_content(HelpContext::Find, &settings, term_width);
         assert!(find_help.iter().any(|line| line.contains("Find Mode")));
-
-        // File selector help should be loaded and rendered from markdown
-        let selector_help = get_file_selector_help(&settings, term_width);
-        assert!(
-            selector_help
-                .iter()
-                .any(|line| line.contains("File Selector"))
-        );
     }
 
     #[test]
@@ -365,11 +334,6 @@ mod tests {
                 || find_text.contains("Pattern")
                 || find_text.contains("Matches")
         );
-
-        // Test file selector help tables
-        let selector_help = get_file_selector_help(&settings, term_width);
-        let selector_text = selector_help.join("\n");
-        assert!(selector_text.contains("File Operations") || selector_text.contains("Navigation"));
     }
 
     #[test]
@@ -438,14 +402,6 @@ mod tests {
             find_help
                 .iter()
                 .any(|line| line.contains("Basic Usage") || line.contains("Find Mode"))
-        );
-
-        // File selector help should have tables
-        let selector_help = get_file_selector_help(&settings, term_width);
-        assert!(
-            selector_help
-                .iter()
-                .any(|line| line.contains("Navigation") || line.contains("File Operations"))
         );
     }
 

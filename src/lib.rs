@@ -24,7 +24,6 @@ pub mod editor_state;
 #[cfg(test)]
 pub mod env;
 pub mod event_handlers;
-pub mod file_selector;
 pub mod find;
 pub mod help;
 pub mod menu;

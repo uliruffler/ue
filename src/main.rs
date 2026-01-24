@@ -36,33 +36,33 @@ fn main() -> std::io::Result<()> {
                         // Open last file even if it doesn't exist (new buffer support)
                         files = vec![f.to_string_lossy().to_string()];
                     } else {
-                        // No file recorded - fall back to selector
-                        match file_selector::select_file()? {
-                            Some(f) => files = vec![f],
-                            None => {
-                                // No tracked files - create new untitled document
-                                files = vec![generate_untitled_filename()];
-                            }
-                        }
+                        // No file recorded - get first recent file or create new
+                        let recent_files = recent::get_recent_files().unwrap_or_default();
+                        files = if let Some(first) = recent_files.first() {
+                            vec![first.to_string_lossy().to_string()]
+                        } else {
+                            vec![generate_untitled_filename()]
+                        };
                     }
                 }
-                session::SessionMode::Selector => match file_selector::select_file()? {
-                    Some(f) => files = vec![f],
-                    None => {
-                        // No tracked files - create new untitled document
-                        files = vec![generate_untitled_filename()];
-                    }
-                },
+                session::SessionMode::Selector => {
+                    // Selector mode - get first recent file or create new
+                    let recent_files = recent::get_recent_files().unwrap_or_default();
+                    files = if let Some(first) = recent_files.first() {
+                        vec![first.to_string_lossy().to_string()]
+                    } else {
+                        vec![generate_untitled_filename()]
+                    };
+                }
             }
         } else {
-            // No previous session - check if there are tracked files
-            match file_selector::select_file()? {
-                Some(f) => files = vec![f],
-                None => {
-                    // No tracked files - create new untitled document
-                    files = vec![generate_untitled_filename()];
-                }
-            }
+            // No previous session - get first recent file or create new
+            let recent_files = recent::get_recent_files().unwrap_or_default();
+            files = if let Some(first) = recent_files.first() {
+                vec![first.to_string_lossy().to_string()]
+            } else {
+                vec![generate_untitled_filename()]
+            };
         }
     }
 

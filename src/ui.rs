@@ -23,7 +23,6 @@ use crate::undo::{UndoHistory, ValidationResult};
 type FileSelectorResult = Option<(bool, Option<String>, bool, bool)>;
 
 // Constants to eliminate magic numbers
-const DEFAULT_VISIBLE_LINES: usize = 20;
 const STATUS_LINE_HEIGHT: usize = 2;
 const CURSOR_CONTEXT_LINES: usize = 5;
 
@@ -55,12 +54,11 @@ pub fn generate_untitled_filename() -> String {
             format!("untitled-{}", n)
         };
 
-        // Check if this file already exists in tracked files
-        let tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
+        // Check if this file already exists in recent files
+        let recent = crate::recent::get_recent_files().unwrap_or_default();
         let filename_lower = filename.to_lowercase();
-        let exists = tracked.iter().any(|entry| {
-            entry.path
-                .file_name()
+        let exists = recent.iter().any(|path| {
+            path.file_name()
                 .and_then(|n| n.to_str())
                 .map(|s| s.to_lowercase() == filename_lower)
                 .unwrap_or(false)
@@ -72,134 +70,6 @@ pub fn generate_untitled_filename() -> String {
     }
 }
 
-/// Result of file selector overlay: Selected(path), Cancelled, or Quit
-enum SelectorResult {
-    Selected(String),
-    Cancelled,
-    #[allow(dead_code)]
-    Quit,
-}
-
-/// Run file selector overlay and return selected file path if confirmed (None if cancelled)
-fn run_file_selector_overlay(
-    current_file: &str,
-    visible_lines: &mut usize,
-    settings: &Settings,
-) -> std::io::Result<SelectorResult> {
-    use crossterm::event::{Event, KeyCode, KeyModifiers};
-    let mut stdout = io::stdout();
-    let mut tracked = crate::file_selector::get_tracked_files().unwrap_or_default();
-    if tracked.is_empty() {
-        return Ok(SelectorResult::Cancelled);
-    }
-
-    let current_canon = std::fs::canonicalize(current_file)
-        .unwrap_or_else(|_| std::path::PathBuf::from(current_file));
-    let current_str = current_canon.to_string_lossy();
-    let mut selected_index = tracked
-        .iter()
-        .position(|e| e.path.to_string_lossy() == current_str)
-        .unwrap_or(0);
-    let mut scroll_offset = 0usize;
-    let (_, th) = terminal::size()?;
-    let vis = (th as usize).saturating_sub(1);
-    execute!(stdout, Hide)?;
-    crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
-
-    // Use DoubleEscDetector for consistent double-Esc handling
-    let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
-
-    loop {
-        // Check if first Esc timed out -> cancel overlay
-        if last_esc.timed_out() {
-            last_esc.clear();
-            execute!(stdout, Show)?;
-            return Ok(SelectorResult::Cancelled);
-        }
-
-        // Poll with timeout to detect when to cancel
-        let timeout = last_esc.remaining_timeout();
-
-        if !event::poll(timeout)? {
-            // Timeout elapsed, check again at top of loop
-            continue;
-        }
-
-        match event::read()? {
-            Event::Key(k) => {
-                let k = crate::event_handlers::normalize_key_event(k, settings);
-                match k.code {
-                    KeyCode::Char('w') if k.modifiers.contains(KeyModifiers::CONTROL) => {
-                        // Close selected file (remove its tracked undo entry)
-                        if let Some(entry) = tracked.get(selected_index) {
-                            let _ = crate::file_selector::remove_tracked_file(&entry.path);
-                            tracked.remove(selected_index);
-                            // Adjust selection and scroll
-                            if selected_index >= tracked.len() && selected_index > 0 {
-                                selected_index -= 1;
-                            }
-                            if scroll_offset > 0 && scroll_offset + vis > tracked.len() {
-                                scroll_offset = scroll_offset.saturating_sub(1);
-                            }
-                            // If all files are closed, exit overlay
-                            if tracked.is_empty() {
-                                execute!(stdout, Show)?;
-                                return Ok(SelectorResult::Cancelled);
-                            }
-                            // Full redraw after removal
-                            crate::file_selector::render_file_list(&tracked, selected_index, scroll_offset, vis)?;
-                        }
-                    }
-                    KeyCode::Up | KeyCode::Char('k') => {
-                        if selected_index > 0 {
-                            let prev = selected_index;
-                            selected_index -= 1;
-                            crate::file_selector::render_selection_change(
-                                &tracked,
-                                prev,
-                                selected_index,
-                                scroll_offset,
-                                vis,
-                            )?;
-                        }
-                    }
-                    KeyCode::Down | KeyCode::Char('j') => {
-                        if selected_index + 1 < tracked.len() {
-                            let prev = selected_index;
-                            selected_index += 1;
-                            crate::file_selector::render_selection_change(
-                                &tracked,
-                                prev,
-                                selected_index,
-                                scroll_offset,
-                                vis,
-                            )?;
-                        }
-                    }
-                    KeyCode::Enter => {
-                        execute!(stdout, Show)?;
-                        return Ok(SelectorResult::Selected(
-                            tracked[selected_index].path.to_string_lossy().to_string(),
-                        ));
-                    }
-                    _ => {}
-                }
-            }
-            Event::Resize(_, h) => {
-                *visible_lines = (h as usize).saturating_sub(2);
-                let vis_new = (h as usize).saturating_sub(1);
-                crate::file_selector::render_file_list(
-                    &tracked,
-                    selected_index,
-                    scroll_offset,
-                    vis_new,
-                )?;
-            }
-            Event::Mouse(_) => { /* ignore mouse */ }
-            _ => {}
-        }
-    }
-}
 
 /// Helper to fully restore terminal state on exit or when switching out of the editor
 fn restore_terminal(stdout: &mut impl Write) -> io::Result<()> {
@@ -257,43 +127,23 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
                     current_files.remove(idx);
                     unsaved.retain(|f| f != &file);
 
-                    // Always show file selector after closing a file
-                    // The closed file has already been removed from the tracked files list (undo history deleted)
-                    // Exit alternate screen to show full file selector
-                    restore_terminal(&mut stdout)?;
+                    // Get first recent file or create new one
+                    let recent_files = crate::recent::get_recent_files().unwrap_or_default();
+                    let next_file = if let Some(first) = recent_files.first() {
+                        first.to_string_lossy().to_string()
+                    } else {
+                        // No recent files - create new untitled file
+                        generate_untitled_filename()
+                    };
 
-                    // Show full file selector
-                    match crate::file_selector::select_file()? {
-                        Some(selected_file) => {
-                            // Re-enter raw mode and alternate screen for editing
-                            terminal::enable_raw_mode()?;
-                            execute!(
-                                stdout,
-                                EnterAlternateScreen,
-                                EnableMouseCapture,
-                                SetCursorStyle::BlinkingBar,
-                                terminal::Clear(ClearType::All)
-                            )?;
-
-                            // Find or add the selected file
-                            if let Some(pos) =
-                                current_files.iter().position(|f| f == &selected_file)
-                            {
-                                idx = pos;
-                            } else {
-                                current_files.insert(0, selected_file);
-                                idx = 0;
-                            }
-                            continue;
-                        }
-                        None => {
-                            // User quit from file selector
-                            if let Err(e) = crate::session::save_selector_session() {
-                                eprintln!("Warning: failed to save selector session: {}", e);
-                            }
-                            return Ok(()); // Exit editor
-                        }
+                    // Find or add the next file
+                    if let Some(pos) = current_files.iter().position(|f| f == &next_file) {
+                        idx = pos;
+                    } else {
+                        current_files.insert(0, next_file);
+                        idx = 0;
                     }
+                    continue;
                 }
 
                 if let Some(target) = next {
@@ -331,32 +181,24 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
                 if close_file {
                     current_files.remove(idx);
                     unsaved.retain(|f| f != &file);
-                    restore_terminal(&mut stdout)?;
-                    match crate::file_selector::select_file()? {
-                        Some(selected_file) => {
-                            terminal::enable_raw_mode()?;
-                            execute!(
-                                stdout,
-                                EnterAlternateScreen,
-                                EnableMouseCapture,
-                                SetCursorStyle::BlinkingBar,
-                                terminal::Clear(ClearType::All)
-                            )?;
-                            if let Some(pos) = current_files.iter().position(|f| f == &selected_file) {
-                                idx = pos;
-                            } else {
-                                current_files.insert(0, selected_file);
-                                idx = 0;
-                            }
-                            continue;
-                        }
-                        None => {
-                            if let Err(e) = crate::session::save_selector_session() {
-                                eprintln!("Warning: failed to save selector session: {}", e);
-                            }
-                            return Ok(());
-                        }
+
+                    // Get first recent file or create new one
+                    let recent_files = crate::recent::get_recent_files().unwrap_or_default();
+                    let next_file = if let Some(first) = recent_files.first() {
+                        first.to_string_lossy().to_string()
+                    } else {
+                        // No recent files - create new untitled file
+                        generate_untitled_filename()
+                    };
+
+                    // Find or add the next file
+                    if let Some(pos) = current_files.iter().position(|f| f == &next_file) {
+                        idx = pos;
+                    } else {
+                        current_files.insert(0, next_file);
+                        idx = 0;
                     }
+                    continue;
                 }
 
                 if let Some(target) = next {
@@ -396,24 +238,6 @@ pub fn show(files: &[String]) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Helper function to show file selector and return the result
-/// Eliminates code duplication across multiple validation branches
-fn show_file_selector_and_return(
-    file: &str,
-    settings: &Settings,
-) -> std::io::Result<(bool, Option<String>, bool, bool)> {
-    let mut visible_lines = DEFAULT_VISIBLE_LINES;
-    match run_file_selector_overlay(file, &mut visible_lines, settings)? {
-        SelectorResult::Selected(selected_file) => Ok((false, Some(selected_file), false, false)),
-        SelectorResult::Quit => {
-            if let Err(e) = crate::session::save_selector_session() {
-                eprintln!("Warning: failed to save selector session: {}", e);
-            }
-            Ok((false, None, true, false))
-        }
-        SelectorResult::Cancelled => Ok((false, None, true, false)),
-    }
-}
 
 /// Helper function to update undo history timestamp to current file time
 fn update_undo_timestamp(undo_history: &mut UndoHistory, file: &str) {
@@ -548,39 +372,6 @@ fn persist_editor_state(state: &mut FileViewerState, file: &str) {
     }
 }
 
-/// Helper to show file selector and handle result in event loop context
-/// Returns Some((modified, next_file, quit, close)) to exit loop, or None to continue
-fn handle_file_selector_in_loop(
-    file: &str,
-    state: &mut FileViewerState,
-    visible_lines: &mut usize,
-    settings: &Settings,
-) -> std::io::Result<FileSelectorResult> {
-    // Persist state before showing selector
-    state
-        .undo_history
-        .update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
-    if let Err(e) = state.undo_history.save(file) {
-        eprintln!("Warning: failed to save undo history: {}", e);
-    }
-    state.last_save_time = Some(Instant::now());
-
-    match run_file_selector_overlay(file, visible_lines, settings)? {
-        SelectorResult::Selected(selected_file) => {
-            Ok(Some((state.modified, Some(selected_file), false, false)))
-        }
-        SelectorResult::Quit => {
-            if let Err(e) = crate::session::save_selector_session() {
-                eprintln!("Warning: failed to save selector session: {}", e);
-            }
-            Ok(Some((state.modified, None, true, false)))
-        }
-        SelectorResult::Cancelled => {
-            state.needs_redraw = true;
-            Ok(None) // Continue loop
-        }
-    }
-}
 
 /// Helper to show open dialog and handle result in event loop context
 /// Returns Some((modified, next_file, quit, close)) to exit loop, or None to continue
@@ -618,8 +409,7 @@ fn handle_open_dialog_in_loop(
 
 /// Handle first Esc press in various modes
 /// Returns true if handled (should continue waiting), false if in normal mode (should process Esc)
-fn handle_first_esc(state: &mut FileViewerState, esc_was_in_normal_mode: &mut bool) -> bool {
-    *esc_was_in_normal_mode = false;
+fn handle_first_esc(state: &mut FileViewerState) -> bool {
 
     // In help mode, ESC exits help
     if state.help_active {
@@ -726,16 +516,15 @@ fn editing_session(
             // Normal case - use undo file
         }
         ValidationResult::ModifiedNoUnsaved => {
-            // File was modified externally and no unsaved changes - delete stale undo file and go to selector
+            // File was modified externally and no unsaved changes - delete stale undo file and quit
             let _ = crate::editing::delete_file_history(file);
-            return show_file_selector_and_return(file, settings);
+            return Ok((false, None, true, false)); // quit
         }
         ValidationResult::ModifiedWithUnsaved => {
             // File was modified externally but has unsaved changes - ask user
             if !show_undo_conflict_confirmation(settings)? {
-                // User pressed Esc (No) - go to file selector WITHOUT deleting undo file
-                // This allows them to select the same file again and keep the undo history
-                return show_file_selector_and_return(file, settings);
+                // User pressed Esc (No) - quit to let them handle it
+                return Ok((false, None, true, false)); // quit
             } else {
                 // User pressed Enter (Yes) - open file anyway with unsaved changes
                 // Update the timestamp to current file time so future validations pass
@@ -795,7 +584,6 @@ fn editing_session(
 
     // Track last Esc press time for double-press detection
     let mut last_esc = DoubleEscDetector::new(settings.double_tap_speed_ms);
-    let mut esc_was_in_normal_mode = false; // Track if first Esc was in normal mode
 
     // File watching state for multi-instance synchronization
     let mut last_undo_check = Instant::now();
@@ -860,26 +648,9 @@ fn editing_session(
             last_known_undo_mtime = new_mtime;
         }
 
-        // Check if we should open file selector after timeout
-        if last_esc.timed_out() {
-            last_esc.clear();
-            if let Some(result) =
-                handle_file_selector_in_loop(file, &mut state, &mut visible_lines, settings)?
-            {
-                return Ok(result);
-            }
-            continue;
-        }
-
-        // Use poll with timeout to detect when to open file selector
-        // Cap timeout to file check interval so we wake up regularly to check for external changes
-        let esc_timeout = last_esc.remaining_timeout();
+        // Use poll with timeout for file check interval
         let file_check_timeout = Duration::from_millis(UNDO_FILE_CHECK_INTERVAL_MS);
-        let timeout = if esc_timeout < file_check_timeout {
-            esc_timeout
-        } else {
-            file_check_timeout
-        };
+        let timeout = file_check_timeout;
 
         if !event::poll(timeout)? {
             // Handle continuous horizontal auto-scroll during mouse drag
@@ -893,23 +664,6 @@ fn editing_session(
                 state.needs_redraw = true;
             }
 
-            if last_esc.timed_out() {
-                last_esc.clear();
-                // Only open file selector if the first Esc was in normal mode
-                // (not in find or selection mode, which we already exited)
-                if esc_was_in_normal_mode {
-                    esc_was_in_normal_mode = false;
-                    if let Some(result) = handle_file_selector_in_loop(
-                        file,
-                        &mut state,
-                        &mut visible_lines,
-                        settings,
-                    )? {
-                        return Ok(result);
-                    }
-                }
-                // If not in normal mode, value is already false, no need to reassign
-            }
             continue;
         }
 
@@ -925,7 +679,7 @@ fn editing_session(
                     }
                     EscResult::First => {
                         // First Esc - handle based on current mode
-                        let handled = handle_first_esc(&mut state, &mut esc_was_in_normal_mode);
+                        let handled = handle_first_esc(&mut state);
                         if handled {
                             continue; // Wait for second Esc or timeout
                         }
@@ -933,7 +687,6 @@ fn editing_session(
                     }
                     EscResult::None => {
                         // Not an Esc key - normal handling
-                        esc_was_in_normal_mode = false; // Clear the flag
 
                         // Special handling for F1 in help mode
                         if state.help_active && matches!(key_event.code, KeyCode::F(1)) {
@@ -981,7 +734,7 @@ fn editing_session(
 
                     // Close saved files
                     for file_path in &saved_files {
-                        let _ = crate::file_selector::remove_tracked_file(file_path);
+                        let _ = crate::editing::delete_file_history(&file_path.to_string_lossy());
                     }
 
                     // Always show status message
@@ -1018,7 +771,7 @@ fn editing_session(
                     state.needs_redraw = true;
                 }
 
-                // Handle pending menu action (e.g., FileOpenRecent or ViewFileSelector)
+                // Handle pending menu action (e.g., FileOpenRecent)
                 if let Some(action) = state.pending_menu_action.take() {
                     match action {
                         crate::menu::MenuAction::FileNew => {
@@ -1039,17 +792,6 @@ fn editing_session(
                                 return Ok((state.modified, Some(path.to_string_lossy().to_string()), false, false));
                             }
                             // If index is out of bounds, just ignore
-                        }
-                        crate::menu::MenuAction::ViewFileSelector => {
-                            // Open file selector
-                            if let Some(result) = handle_file_selector_in_loop(
-                                file,
-                                &mut state,
-                                &mut visible_lines,
-                                settings,
-                            )? {
-                                return Ok(result);
-                            }
                         }
                         crate::menu::MenuAction::FileOpenDialog => {
                             // Open directory tree dialog
@@ -1318,16 +1060,6 @@ fn editing_session(
                             state.find_cursor_pos = 0;
                             state.find_error = None;
                         }
-                        MenuAction::ViewFileSelector => {
-                            if let Some(result) = handle_file_selector_in_loop(
-                                file,
-                                &mut state,
-                                &mut visible_lines,
-                                settings,
-                            )? {
-                                return Ok(result);
-                            }
-                        }
                         MenuAction::ViewLineWrap => {
                             state.toggle_line_wrapping();
                             // Update menu checkbox to reflect new state
@@ -1344,11 +1076,6 @@ fn editing_session(
                         MenuAction::HelpFind => {
                             state.help_active = true;
                             state.help_context = crate::help::HelpContext::Find;
-                            state.help_scroll_offset = 0;
-                        }
-                        MenuAction::HelpFileSelector => {
-                            state.help_active = true;
-                            state.help_context = crate::help::HelpContext::Editor;
                             state.help_scroll_offset = 0;
                         }
                         MenuAction::HelpAbout => {

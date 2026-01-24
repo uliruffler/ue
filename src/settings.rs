@@ -12,8 +12,6 @@ pub(crate) struct KeyBindings {
     pub(crate) save: String,
     pub(crate) undo: String,
     pub(crate) redo: String,
-    #[serde(default = "default_file_selector")]
-    pub(crate) file_selector: String,
     #[serde(default = "default_open_dialog")]
     pub(crate) open_dialog: String,
     pub(crate) find: String,
@@ -100,9 +98,6 @@ fn default_toggle_line_wrap() -> String {
     "Alt+w".into()
 }
 
-fn default_file_selector() -> String {
-    "".into() // Empty - no longer used, Esc opens menu instead
-}
 
 fn default_open_dialog() -> String {
     "Ctrl+o".into()
@@ -347,11 +342,6 @@ impl KeyBindings {
     pub fn help_matches(&self, key: &crossterm::event::KeyEvent) -> bool {
         parse_keybinding(&self.help, &key.code, &key.modifiers)
     }
-
-    #[allow(dead_code)] // Used for custom keybindings, not in default double-Esc implementation
-    pub fn file_selector_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
-        parse_keybinding(&self.file_selector, code, modifiers)
-    }
 }
 
 fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
@@ -463,7 +453,6 @@ mod tests {
             save: "Ctrl+s".into(),
             undo: "Ctrl+z".into(),
             redo: "Ctrl+y".into(),
-            file_selector: "Esc".into(),
             open_dialog: "Ctrl+o".into(),
             find: "Ctrl+f".into(),
             find_next: "F3".into(),
@@ -498,7 +487,6 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let kb = create_test_keybindings();
         assert!(kb.quit_matches(&KeyCode::Esc, &KeyModifiers::empty()));
-        // file_selector no longer uses Esc - Esc opens menu instead
     }
 
     #[test]
@@ -560,7 +548,6 @@ mod tests {
         kb.quit = "Esc Esc".into();
 
         // Single Esc now opens menu (handled in UI layer), not file selector
-        // file_selector keybinding is now empty/unused
 
         // Note: Double Esc detection is handled in the UI layer, not by keybinding parser
         // The quit keybinding "Esc Esc" is a special marker that the UI interprets
@@ -655,7 +642,6 @@ mod tests {
 
         // Check that all keybindings are non-empty
         assert!(!settings.keybindings.quit.is_empty());
-        // file_selector is now optional/empty - Esc opens menu instead
         assert!(!settings.keybindings.copy.is_empty());
         assert!(!settings.keybindings.paste.is_empty());
         assert!(!settings.keybindings.cut.is_empty());
@@ -838,7 +824,6 @@ close = "Ctrl+w"
 save = "Ctrl+s"
 undo = "Ctrl+z"
 redo = "Ctrl+y"
-file_selector = "Esc"
 find = "Ctrl+f"
 find_next = "Ctrl+n"
 find_previous = "Ctrl+p"

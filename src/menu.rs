@@ -52,12 +52,10 @@ pub(crate) enum MenuAction {
     EditPaste,
     EditFind,
     // View menu
-    ViewFileSelector,
     ViewLineWrap,
     // Help menu
     HelpEditor,
     HelpFind,
-    HelpFileSelector,
     HelpAbout,
     // Special actions
     FileRemove(usize), // Remove file at index from recent files (triggered by Ctrl+W)
@@ -164,7 +162,6 @@ impl MenuBar {
                 "View",
                 'v',
                 vec![
-                    action("File Selector", MenuAction::ViewFileSelector),
                     checkable("Line Wrap", MenuAction::ViewLineWrap, false),
                 ],
             ),
@@ -174,7 +171,6 @@ impl MenuBar {
                 vec![
                     action("Editor Help", MenuAction::HelpEditor),
                     action("Find Help", MenuAction::HelpFind),
-                    action("File Selector Help", MenuAction::HelpFileSelector),
                     MenuItem::Separator,
                     action("About", MenuAction::HelpAbout),
                 ],

@@ -125,7 +125,7 @@ pub(crate) fn handle_key_event(
                     }
                     
                     // Remove the file from tracking
-                    let _ = crate::file_selector::remove_tracked_file(file_path);
+                    let _ = delete_file_history(&file_path.to_string_lossy());
                     
                     // Rebuild the menu to reflect the change
                     state.menu_bar.update_file_menu(10, filename, state.modified);
@@ -244,11 +244,6 @@ pub(crate) fn handle_key_event(
                 state.needs_redraw = true;
                 return Ok((false, false));
             }
-            crate::menu::MenuAction::ViewFileSelector => {
-                // Open file selector (handled by ui.rs)
-                state.pending_menu_action = Some(action);
-                return Ok((false, false));
-            }
             crate::menu::MenuAction::ViewLineWrap => {
                 // Toggle line wrapping
                 state.toggle_line_wrapping();
@@ -265,14 +260,6 @@ pub(crate) fn handle_key_event(
             crate::menu::MenuAction::HelpFind => {
                 state.help_active = true;
                 state.help_context = crate::help::HelpContext::Find;
-                state.help_scroll_offset = 0;
-                state.needs_redraw = true;
-                return Ok((false, false));
-            }
-            crate::menu::MenuAction::HelpFileSelector => {
-                // Show file selector help - for now just show editor help
-                state.help_active = true;
-                state.help_context = crate::help::HelpContext::Editor;
                 state.help_scroll_offset = 0;
                 state.needs_redraw = true;
                 return Ok((false, false));
