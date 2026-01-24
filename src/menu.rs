@@ -755,16 +755,7 @@ pub(crate) fn render_dropdown_menu(
             }
         }
 
-        // Fill remaining file slots with blank lines if we have fewer files than max_visible_files
-        for _ in actual_visible_files..max_visible_files {
-            execute!(stdout, MoveTo(menu_x as u16, display_row))?;
-            execute!(stdout, SetBackgroundColor(menu_bg_color))?;
-            execute!(stdout, crossterm::style::Print(" ".repeat(max_width)))?;
-            execute!(stdout, ResetColor)?;
-            display_row += 1;
-        }
-
-        // Render remaining items at bottom (Separator, Quit) - ALWAYS at fixed position
+        // Render remaining items at bottom (Separator, Quit)
         for idx in file_end_idx..menu.items.len() {
             let item = &menu.items[idx];
             execute!(stdout, MoveTo(menu_x as u16, display_row))?;
@@ -906,8 +897,27 @@ pub(crate) fn handle_menu_key(
             // Select second recent file (index 7) if available, for quick Esc+Enter switching
             // File menu structure: New(0), Open(1), Save(2), Close(3), Close all(4), Separator(5), Recent1(6), Recent2(7), ...
             let file_menu = &menu_bar.menus[0];
-            let has_two_recent_files = file_menu.items.len() >= 8; // At least 8 items means 2+ recent files
-            menu_bar.selected_item_index = if has_two_recent_files { 7 } else { 0 };
+
+            // Count actual files (items between index 6 and the next separator)
+            let mut file_count = 0;
+            for (idx, item) in file_menu.items.iter().enumerate() {
+                if idx >= 6 {
+                    if matches!(item, MenuItem::Separator) {
+                        break; // Hit the separator after files
+                    }
+                    if matches!(item, MenuItem::Action { .. }) {
+                        file_count += 1;
+                    }
+                }
+            }
+
+            menu_bar.selected_item_index = if file_count >= 2 {
+                7 // Select second file
+            } else if file_count >= 1 {
+                6 // Select first (only) file
+            } else {
+                0 // No files, select New
+            };
 
             menu_bar.dropdown_open = true; // Open dropdown immediately
             return (None, true); // Menu opened, needs full redraw
