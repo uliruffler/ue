@@ -9,6 +9,23 @@ fn get_clipboard() -> &'static Mutex<Option<arboard::Clipboard>> {
     GLOBAL_CLIPBOARD.get_or_init(|| Mutex::new(arboard::Clipboard::new().ok()))
 }
 
+/// Get the character length of a string (not byte length)
+/// This is important for Unicode support
+#[inline]
+fn char_len(s: &str) -> usize {
+    s.chars().count()
+}
+
+/// Convert character index to byte index in a string
+/// Returns the byte index that corresponds to the character at char_idx
+/// If char_idx is beyond the string, returns the byte length of the string
+fn char_index_to_byte_index(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(s.len())
+}
+
 /// Save undo history and record the save timestamp to prevent reload loops
 fn save_undo_with_timestamp(state: &mut FileViewerState, filename: &str) {
     // Update undo history with current find history before saving
@@ -265,7 +282,7 @@ pub(crate) fn handle_cut(
         state.cursor_line = (abs - 1).saturating_sub(state.top_line);
         state.cursor_col = lines
             .get(abs - 1)
-            .map(|l| l.len().min(state.cursor_col))
+            .map(|l| char_len(l).min(state.cursor_col))
             .unwrap_or(0);
     } else {
         state.cursor_line = abs.saturating_sub(state.top_line);
@@ -468,27 +485,33 @@ pub(crate) fn insert_char(
     _visible_lines: usize,
 ) -> bool {
     let idx = state.absolute_line();
-    if idx < lines.len() && state.cursor_col <= lines[idx].len() {
-        lines[idx].insert(state.cursor_col, c);
-        state.undo_history.push(Edit::InsertChar {
-            line: idx,
-            col: state.cursor_col,
-            ch: c,
-        });
-        state.cursor_col += 1;
-        state.cursor_at_wrap_end = false; // Clear wrap end flag after typing
-        state.desired_cursor_col = state.cursor_col;
-        state
-            .undo_history
-            .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
-        save_undo_with_timestamp(state, filename);
+    if idx < lines.len() {
+        let line_char_len = char_len(&lines[idx]);
+        if state.cursor_col <= line_char_len {
+            let byte_idx = char_index_to_byte_index(&lines[idx], state.cursor_col);
+            lines[idx].insert(byte_idx, c);
 
-        // Ensure cursor is within bounds and validate invariants (debug only)
-        state.clamp_cursor_to_line_bounds(lines);
-        state.validate_cursor_invariants(lines);
+            state.undo_history.push(Edit::InsertChar {
+                line: idx,
+                col: state.cursor_col,
+                ch: c,
+            });
+            state.cursor_col += 1;
+            state.cursor_at_wrap_end = false; // Clear wrap end flag after typing
+            state.desired_cursor_col = state.cursor_col;
+            state
+                .undo_history
+                .update_state(state.top_line, idx, state.cursor_col, lines.to_vec());
+            save_undo_with_timestamp(state, filename);
 
+            // Ensure cursor is within bounds and validate invariants (debug only)
+            state.clamp_cursor_to_line_bounds(lines);
+            state.validate_cursor_invariants(lines);
 
-        true
+            true
+        } else {
+            false
+        }
     } else {
         false
     }
@@ -571,12 +594,13 @@ pub(crate) fn split_line(
     if idx >= lines.len() {
         return false;
     }
-    let split_at = state.cursor_col.min(lines[idx].len());
+    let split_at_char = state.cursor_col.min(char_len(&lines[idx]));
+    let split_at_byte = char_index_to_byte_index(&lines[idx], split_at_char);
     let line_clone = lines[idx].clone();
-    let (before, after) = line_clone.split_at(split_at);
+    let (before, after) = line_clone.split_at(split_at_byte);
     state.undo_history.push(Edit::SplitLine {
         line: idx,
-        col: split_at,
+        col: split_at_char,
         before: before.to_string(),
         after: after.to_string(),
     });
@@ -609,9 +633,10 @@ pub(crate) fn delete_backward(
     if idx >= lines.len() {
         return false;
     }
-    if state.cursor_col > 0 && state.cursor_col <= lines[idx].len() {
+    if state.cursor_col > 0 && state.cursor_col <= char_len(&lines[idx]) {
         let ch = lines[idx].chars().nth(state.cursor_col - 1).unwrap();
-        lines[idx].remove(state.cursor_col - 1);
+        let byte_idx = char_index_to_byte_index(&lines[idx], state.cursor_col - 1);
+        lines[idx].remove(byte_idx);
         state.undo_history.push(Edit::DeleteChar {
             line: idx,
             col: state.cursor_col - 1,
@@ -626,7 +651,7 @@ pub(crate) fn delete_backward(
         true
     } else if idx > 0 {
         let current = lines.remove(idx);
-        let prev_len = lines[idx - 1].len();
+        let prev_len = char_len(&lines[idx - 1]);
         let first_snapshot = lines[idx - 1].clone();
         lines[idx - 1].push_str(&current);
         state.undo_history.push(Edit::MergeLine {
@@ -669,9 +694,10 @@ pub(crate) fn delete_forward(
     if idx >= lines.len() {
         return false;
     }
-    if state.cursor_col < lines[idx].len() {
+    if state.cursor_col < char_len(&lines[idx]) {
         let ch = lines[idx].chars().nth(state.cursor_col).unwrap();
-        lines[idx].remove(state.cursor_col);
+        let byte_idx = char_index_to_byte_index(&lines[idx], state.cursor_col);
+        lines[idx].remove(byte_idx);
         state.undo_history.push(Edit::DeleteChar {
             line: idx,
             col: state.cursor_col,
@@ -754,7 +780,10 @@ pub(crate) fn delete_word_backward(
         forward: false,
     });
     
-    lines[idx].replace_range(end_col..start_col, "");
+    // Convert character indices to byte indices for replace_range
+    let start_byte = char_index_to_byte_index(&lines[idx], end_col);
+    let end_byte = char_index_to_byte_index(&lines[idx], start_col);
+    lines[idx].replace_range(start_byte..end_byte, "");
     state.cursor_col = end_col;
     state.desired_cursor_col = state.cursor_col;
 
@@ -795,7 +824,8 @@ pub(crate) fn delete_word_forward(
         end_col += 1;
     }
     // Then skip word characters
-    while end_col < line.len() {
+    let line_char_len = char_len(line);
+    while end_col < line_char_len {
         let c = line.chars().nth(end_col).unwrap_or(' ');
         if !is_word_char(c) {
             break;
@@ -814,7 +844,10 @@ pub(crate) fn delete_word_forward(
         forward: true,
     });
     
-    lines[idx].replace_range(start_col..end_col, "");
+    // Convert character indices to byte indices for replace_range
+    let start_byte = char_index_to_byte_index(&lines[idx], start_col);
+    let end_byte = char_index_to_byte_index(&lines[idx], end_col);
+    lines[idx].replace_range(start_byte..end_byte, "");
 
     state
         .undo_history
@@ -834,9 +867,10 @@ pub(crate) fn insert_tab(
 ) -> bool {
     let idx = state.absolute_line();
     let tab_width = state.settings.tab_width;
-    if idx < lines.len() && state.cursor_col <= lines[idx].len() {
+    if idx < lines.len() && state.cursor_col <= char_len(&lines[idx]) {
+        let byte_idx = char_index_to_byte_index(&lines[idx], state.cursor_col);
         let spaces = " ".repeat(tab_width);
-        lines[idx].insert_str(state.cursor_col, &spaces);
+        lines[idx].insert_str(byte_idx, &spaces);
         for (i, _) in spaces.chars().enumerate() {
             state.undo_history.push(Edit::InsertChar {
                 line: idx,
@@ -931,8 +965,9 @@ fn apply_single_undo_edit(
     match edit {
         Edit::InsertChar { line, col, .. } => {
             // Undo insert: delete the character
-            if *line < lines.len() && *col < lines[*line].len() {
-                lines[*line].remove(*col);
+            if *line < lines.len() && *col < char_len(&lines[*line]) {
+                let byte_idx = char_index_to_byte_index(&lines[*line], *col);
+                lines[*line].remove(byte_idx);
                 state.cursor_col = *col;
                 state.cursor_line = line.saturating_sub(state.top_line);
                 true
@@ -942,8 +977,9 @@ fn apply_single_undo_edit(
         }
         Edit::DeleteChar { line, col, ch } => {
             // Undo delete: insert the character back
-            if *line < lines.len() && *col <= lines[*line].len() {
-                lines[*line].insert(*col, *ch);
+            if *line < lines.len() && *col <= char_len(&lines[*line]) {
+                let byte_idx = char_index_to_byte_index(&lines[*line], *col);
+                lines[*line].insert(byte_idx, *ch);
                 state.cursor_col = col + 1;
                 state.cursor_line = line.saturating_sub(state.top_line);
                 true
@@ -1105,8 +1141,9 @@ fn apply_single_redo_edit(
     match edit {
         Edit::InsertChar { line, col, ch } => {
             // Redo insert: insert the character
-            if *line < lines.len() && *col <= lines[*line].len() {
-                lines[*line].insert(*col, *ch);
+            if *line < lines.len() && *col <= char_len(&lines[*line]) {
+                let byte_idx = char_index_to_byte_index(&lines[*line], *col);
+                lines[*line].insert(byte_idx, *ch);
                 state.cursor_col = col + 1;
                 state.cursor_line = line.saturating_sub(state.top_line);
                 true
@@ -1116,8 +1153,9 @@ fn apply_single_redo_edit(
         }
         Edit::DeleteChar { line, col, .. } => {
             // Redo delete: delete the character
-            if *line < lines.len() && *col < lines[*line].len() {
-                lines[*line].remove(*col);
+            if *line < lines.len() && *col < char_len(&lines[*line]) {
+                let byte_idx = char_index_to_byte_index(&lines[*line], *col);
+                lines[*line].remove(byte_idx);
                 state.cursor_col = *col;
                 state.cursor_line = line.saturating_sub(state.top_line);
                 true
@@ -1366,8 +1404,9 @@ fn insert_char_multi_cursor(
     let undo_cursor = Some((state.absolute_line(), state.cursor_col, state.multi_cursors.clone()));
 
     for &(line_idx, col) in positions.iter().rev() {
-        if line_idx < lines.len() && col <= lines[line_idx].len() {
-            lines[line_idx].insert(col, c);
+        if line_idx < lines.len() && col <= char_len(&lines[line_idx]) {
+            let byte_idx = char_index_to_byte_index(&lines[line_idx], col);
+            lines[line_idx].insert(byte_idx, c);
             edits.push(Edit::InsertChar { line: line_idx, col, ch: c });
             inserted = true;
         }
@@ -1404,12 +1443,14 @@ fn delete_backward_multi_cursor(
     for &(line_idx, col) in &positions {
         if line_idx < lines.len() && col > 0 {
             let line = &mut lines[line_idx];
-            if col <= line.len() {
+            let line_char_len = char_len(line);
+            if col <= line_char_len {
                 let chars: Vec<char> = line.chars().collect();
                 if col > 0 && col <= chars.len() {
                     let removed_char = chars[col - 1];
                     edits.push(Edit::DeleteChar { line: line_idx, col: col - 1, ch: removed_char });
-                    line.remove(col - 1);
+                    let byte_idx = char_index_to_byte_index(line, col - 1);
+                    line.remove(byte_idx);
                     deleted = true;
                 }
             }

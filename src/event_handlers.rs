@@ -1201,7 +1201,7 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
                     }
                     // Try to restore desired column position
                     let prev_line = &lines[prev_line_idx];
-                    state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                    state.cursor_col = state.desired_cursor_col.min(prev_line.chars().count());
                 }
             }
         } else {
@@ -1210,12 +1210,12 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
                 state.cursor_line -= 1;
                 // Try to restore desired column position
                 let prev_line = &lines[state.absolute_line()];
-                state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                state.cursor_col = state.desired_cursor_col.min(prev_line.chars().count());
             } else if state.top_line > 0 {
                 state.top_line -= 1;
                 // Try to restore desired column position
                 let prev_line = &lines[state.absolute_line()];
-                state.cursor_col = state.desired_cursor_col.min(prev_line.len());
+                state.cursor_col = state.desired_cursor_col.min(prev_line.chars().count());
             }
         }
         return;
@@ -1346,7 +1346,7 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
                     let target_wrap_line = num_wrapped.saturating_sub(1);
                     let base_visual_col = target_wrap_line * text_width;
 
-                    let desired_col = state.desired_cursor_col.min(new_top_line.len());
+                    let desired_col = state.desired_cursor_col.min(new_top_line.chars().count());
                     let desired_visual_col = visual_width_up_to(new_top_line, desired_col, tab_width);
 
                     let target_visual_col = if desired_visual_col >= base_visual_col {
@@ -1487,7 +1487,7 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                     // Position cursor on the FIRST wrapped line with correct column offset
                     let next_line = &lines[next_line_idx];
                     let desired_offset = state.desired_cursor_col % text_width;
-                    state.cursor_col = desired_offset.min(next_line.len());
+                    state.cursor_col = desired_offset.min(next_line.chars().count());
                 }
             }
         } else {
@@ -1532,7 +1532,7 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                     let desired_offset = state.desired_cursor_col % text_width;
 
                     // Clamp to line length
-                    state.cursor_col = desired_offset.min(next_line.len());
+                    state.cursor_col = desired_offset.min(next_line.chars().count());
                 }
             }
         }
@@ -1860,7 +1860,7 @@ fn word_right(state: &mut FileViewerState, lines: &[String]) -> bool {
         return false;
     }
     let line = &lines[abs];
-    let len = line.len();
+    let len = line.chars().count();
     if state.cursor_col >= len {
         if abs + 1 >= lines.len() {
             return false;

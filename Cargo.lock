@@ -1253,6 +1253,7 @@ dependencies = [
  "tempfile",
  "termimad",
  "toml",
+ "unicode-width",
 ]
 
 [[package]]

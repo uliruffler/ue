@@ -1,11 +1,13 @@
 use crate::editor_state::FileViewerState;
 use crate::settings::Settings;
+use unicode_width::UnicodeWidthChar;
 
 /// Unicode character for line wrap indicator (carriage return arrow)
 pub const WRAP_INDICATOR: char = '↩';
 
-/// Calculate the visual width of a string, considering tabs
+/// Calculate the visual width of a string, considering tabs and wide characters (emoji, CJK)
 /// Tabs are expanded to the next multiple of tab_width
+/// Wide characters (emoji, CJK) are counted as 2 columns
 pub fn visual_width(s: &str, tab_width: usize) -> usize {
     let mut width = 0;
     for ch in s.chars() {
@@ -14,7 +16,8 @@ pub fn visual_width(s: &str, tab_width: usize) -> usize {
             let spaces_to_next_tab = tab_width - (width % tab_width);
             width += spaces_to_next_tab;
         } else {
-            width += 1;
+            // Use Unicode width - emoji and CJK are 2, most others are 1
+            width += ch.width().unwrap_or(1);
         }
     }
     width
@@ -58,7 +61,8 @@ pub(crate) fn calculate_word_wrap_points(line: &str, text_width: usize, tab_widt
             let char_visual_width = if ch == '\t' {
                 tab_width - (current_visual % tab_width)
             } else {
-                1
+                // Use Unicode width - emoji and CJK are 2, most others are 1
+                ch.width().unwrap_or(1)
             };
 
             if current_visual + char_visual_width > usable_width {
@@ -112,6 +116,7 @@ pub(crate) fn calculate_word_wrap_points(line: &str, text_width: usize, tab_widt
 }
 
 /// Calculate visual width up to a given character index in a string
+/// Accounts for tabs and wide characters (emoji, CJK characters are 2 columns wide)
 pub fn visual_width_up_to(s: &str, char_index: usize, tab_width: usize) -> usize {
     let mut width = 0;
     for (i, ch) in s.chars().enumerate() {
@@ -122,7 +127,8 @@ pub fn visual_width_up_to(s: &str, char_index: usize, tab_width: usize) -> usize
             let spaces_to_next_tab = tab_width - (width % tab_width);
             width += spaces_to_next_tab;
         } else {
-            width += 1;
+            // Use Unicode width - emoji and CJK are 2, most others are 1
+            width += ch.width().unwrap_or(1);
         }
     }
     width

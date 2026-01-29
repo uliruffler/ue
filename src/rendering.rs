@@ -861,6 +861,7 @@ fn render_visible_lines(
         visible_lines
     };
 
+
     let text_width_u16 = crate::coordinates::calculate_text_width(state, lines, visible_lines);
     let _text_width_usize = text_width_u16 as usize;
 
@@ -900,6 +901,7 @@ fn render_visible_lines(
 
     let mut visual_lines_rendered = 0;
     
+
     if state.filter_active && !filtered_lines.is_empty() {
         // Filter mode: render only lines with matches
         let mut filtered_index = 0;
@@ -1152,7 +1154,11 @@ fn render_line(
             } else {
                 render_line_segment_expanded(stdout, &chars, line, ctx, &segment)?;
             }
-            (actual_end - start_visual) as u16
+
+            // Calculate actual visual width of rendered content (emoji = 2 cols, normal = 1 col)
+            // This is the NUMBER OF TERMINAL COLUMNS occupied, not character count
+            let rendered_text: String = chars[start_visual..actual_end].iter().collect();
+            crate::coordinates::visual_width(&rendered_text, tab_width) as u16
         } else {
             // Line is shorter than horizontal scroll offset - render as empty
             // (but still takes up a visual row)
@@ -1487,7 +1493,7 @@ fn position_cursor(
             if let Some(mut cursor_y) = cursor_y_opt {
                 let visual_col = visual_width_up_to(
                     &lines[target_line],
-                    target_col.min(lines[target_line].len()),
+                    target_col.min(lines[target_line].chars().count()),
                     tab_width,
                 );
 
@@ -1502,7 +1508,7 @@ fn position_cursor(
                         let cursor_x = visual_col as u16 + line_num_width;
                         (cursor_x, 0)
                     } else {
-                        let target_col_clamped = target_col.min(lines[target_line].len());
+                        let target_col_clamped = target_col.min(lines[target_line].chars().count());
 
                         // Find which segment cursor is in
                         let mut segment_idx = 0;

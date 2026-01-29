@@ -314,7 +314,8 @@ fn try_reload_undo_from_external_change(
 
             if new_cursor_line < lines.len() {
                 state.cursor_line = new_cursor_line.saturating_sub(state.top_line);
-                if new_cursor_col <= lines[new_cursor_line].len() {
+                let line_char_len = lines[new_cursor_line].chars().count();
+                if new_cursor_col <= line_char_len {
                     state.cursor_col = new_cursor_col;
                     state.desired_cursor_col = new_cursor_col;
                 }
@@ -541,6 +542,7 @@ fn editing_session(
         if l.is_empty() {
             l.push(String::new());
         }
+
         l
     };
 
@@ -574,7 +576,8 @@ fn editing_session(
             state.top_line = saved_cursor_line.saturating_sub(CURSOR_CONTEXT_LINES);
         }
         state.cursor_line = saved_cursor_line.saturating_sub(state.top_line);
-        if saved_cursor_col <= lines[saved_cursor_line].len() {
+        let line_char_len = lines[saved_cursor_line].chars().count();
+        if saved_cursor_col <= line_char_len {
             state.cursor_col = saved_cursor_col;
             state.desired_cursor_col = saved_cursor_col;
         }

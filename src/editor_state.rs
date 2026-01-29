@@ -611,7 +611,8 @@ impl<'a> FileViewerState<'a> {
         let absolute_line = self.absolute_line();
 
         if let Some(line) = lines.get(absolute_line) {
-            if self.cursor_col < line.len() {
+            let line_char_len = line.chars().count();
+            if self.cursor_col < line_char_len {
                 // Check wrap point logic
                 if self.is_line_wrapping_enabled() {
                     let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
@@ -700,7 +701,7 @@ impl<'a> FileViewerState<'a> {
 
             let new_absolute = self.absolute_line();
             if let Some(line) = lines.get(new_absolute) {
-                self.cursor_col = line.len();
+                self.cursor_col = line.chars().count();
                 self.cursor_at_wrap_end = false;
                 self.desired_cursor_col = self.cursor_col;
             }
@@ -723,7 +724,7 @@ impl<'a> FileViewerState<'a> {
 
         // Clamp column to line length
         let target_col = if target_line < lines.len() {
-            target_col.min(lines[target_line].len())
+            target_col.min(lines[target_line].chars().count())
         } else {
             0
         };
@@ -758,8 +759,9 @@ impl<'a> FileViewerState<'a> {
     pub(crate) fn clamp_cursor_to_line_bounds(&mut self, lines: &[String]) {
         let absolute_line = self.absolute_line();
         if let Some(line) = lines.get(absolute_line) {
-            if self.cursor_col > line.len() {
-                self.cursor_col = line.len();
+            let line_char_len = line.chars().count();
+            if self.cursor_col > line_char_len {
+                self.cursor_col = line_char_len;
                 self.desired_cursor_col = self.cursor_col;
             }
         }
@@ -771,7 +773,8 @@ impl<'a> FileViewerState<'a> {
     pub(crate) fn set_cursor_col(&mut self, col: usize, lines: &[String]) {
         let absolute_line = self.absolute_line();
         if let Some(line) = lines.get(absolute_line) {
-            let clamped_col = col.min(line.len());
+            let line_char_len = line.chars().count();
+            let clamped_col = col.min(line_char_len);
             self.cursor_col = clamped_col;
             self.desired_cursor_col = clamped_col;
         }
