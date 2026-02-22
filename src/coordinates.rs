@@ -925,6 +925,7 @@ mod tests {
             close_all_confirmation_active: false,
             close_all_confirmed: false,
             is_untitled: false,
+            is_read_only: false,
             cursor_at_wrap_end: false,
             status_message: None,
         }

@@ -156,6 +156,9 @@ pub struct FileViewerState<'a> {
     pub(crate) close_all_confirmed: bool,
     /// Whether this is an untitled file that hasn't been saved to disk yet
     pub(crate) is_untitled: bool,
+    /// Whether this file is read-only (no write permission)
+    /// In read-only mode, editing operations are blocked but navigation/copy/find still work
+    pub(crate) is_read_only: bool,
     /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
     /// previous segment (true) or at the start of the next segment (false)
     /// Only meaningful when cursor_col is exactly at a wrap point
@@ -245,6 +248,7 @@ impl<'a> FileViewerState<'a> {
             close_all_confirmation_active: false,
             close_all_confirmed: false,
             is_untitled: false,
+            is_read_only: false,
             cursor_at_wrap_end: false,
             status_message: None,
         }

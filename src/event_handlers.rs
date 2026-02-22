@@ -154,6 +154,12 @@ pub(crate) fn handle_key_event(
                     return Ok((false, false));
                 }
 
+                if state.is_read_only {
+                    state.status_message = Some("File is read-only".to_string());
+                    state.needs_footer_redraw = true;
+                    return Ok((false, false));
+                }
+
                 save_file(filename, lines)?;
                 state.modified = false;
                 state.undo_history.clear_unsaved_state();
@@ -192,12 +198,22 @@ pub(crate) fn handle_key_event(
                 return Ok((true, false));
             }
             crate::menu::MenuAction::EditUndo => {
+                if state.is_read_only {
+                    state.status_message = Some("File is read-only".to_string());
+                    state.needs_footer_redraw = true;
+                    return Ok((false, false));
+                }
                 if apply_undo(state, lines, filename, visible_lines) {
                     state.needs_redraw = true;
                 }
                 return Ok((false, false));
             }
             crate::menu::MenuAction::EditRedo => {
+                if state.is_read_only {
+                    state.status_message = Some("File is read-only".to_string());
+                    state.needs_footer_redraw = true;
+                    return Ok((false, false));
+                }
                 if apply_redo(state, lines, filename, visible_lines) {
                     state.needs_redraw = true;
                 }
@@ -208,12 +224,22 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::EditCut => {
+                if state.is_read_only {
+                    state.status_message = Some("File is read-only".to_string());
+                    state.needs_footer_redraw = true;
+                    return Ok((false, false));
+                }
                 if handle_cut(state, lines, filename) {
                     state.needs_redraw = true;
                 }
                 return Ok((false, false));
             }
             crate::menu::MenuAction::EditPaste => {
+                if state.is_read_only {
+                    state.status_message = Some("File is read-only".to_string());
+                    state.needs_footer_redraw = true;
+                    return Ok((false, false));
+                }
                 if handle_paste(state, lines, filename) {
                     state.needs_redraw = true;
                 }
@@ -591,6 +617,11 @@ pub(crate) fn handle_key_event(
     // If no search pattern exists yet, enter find mode first
     // If search pattern exists, enter replace mode
     if settings.keybindings.replace_matches(&code, &modifiers) && !state.replace_active {
+        if state.is_read_only {
+            state.status_message = Some("File is read-only".to_string());
+            state.needs_footer_redraw = true;
+            return Ok((false, false));
+        }
         if state.last_search_pattern.is_none() {
             // No search yet - enter find mode first (will auto-enter replace mode after search)
             state.find_active = true;
@@ -613,7 +644,7 @@ pub(crate) fn handle_key_event(
     // Handle replace current occurrence - works even if not in replace mode
     // Requires both a search pattern and a replacement pattern
     if settings.keybindings.replace_current_matches(&code, &modifiers) {
-        if state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
+        if !state.is_read_only && state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
             crate::find::replace_current_occurrence(state, lines, visible_lines);
             // Save changes - update file content in undo history before saving
             let abs = state.absolute_line();
@@ -628,7 +659,7 @@ pub(crate) fn handle_key_event(
     // Handle replace all occurrences (Ctrl+Alt+R) - works even if not in replace mode
     // Requires both a search pattern and a replacement pattern
     if settings.keybindings.replace_all_matches(&code, &modifiers) {
-        if state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
+        if !state.is_read_only && state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
             crate::find::replace_all_occurrences(state, lines);
             // Save changes - update file content in undo history before saving
             let abs = state.absolute_line();
@@ -687,11 +718,13 @@ pub(crate) fn handle_key_event(
         .keybindings
         .save_and_quit_matches(&code, &modifiers)
     {
-        // Save the file first
-        save_file(filename, lines)?;
-        state.modified = false;
-        // Clear the unsaved file content since we just saved
-        state.undo_history.clear_unsaved_state();
+        // For read-only files, skip saving and just quit
+        if !state.is_read_only {
+            save_file(filename, lines)?;
+            state.modified = false;
+            // Clear the unsaved file content since we just saved
+            state.undo_history.clear_unsaved_state();
+        }
         // Before exiting, persist final scroll and cursor position
         let abs = state.absolute_line();
         state
@@ -707,6 +740,13 @@ pub(crate) fn handle_key_event(
 
     // Handle save
     if settings.keybindings.save_matches(&code, &modifiers) {
+        // If this is a read-only file, show error and do nothing
+        if state.is_read_only {
+            state.status_message = Some("File is read-only".to_string());
+            state.needs_footer_redraw = true;
+            return Ok((false, false));
+        }
+
         // If this is an untitled file, we need to show the save-as dialog
         if state.is_untitled {
             // Mark the action so ui.rs can handle it
@@ -728,16 +768,20 @@ pub(crate) fn handle_key_event(
 
     // Handle undo
     if settings.keybindings.undo_matches(&code, &modifiers) {
-        if apply_undo(state, lines, filename, visible_lines) {
-            state.needs_redraw = true;
+        if !state.is_read_only {
+            if apply_undo(state, lines, filename, visible_lines) {
+                state.needs_redraw = true;
+            }
         }
         return Ok((false, false));
     }
 
     // Handle redo
     if settings.keybindings.redo_matches(&code, &modifiers) {
-        if apply_redo(state, lines, filename, visible_lines) {
-            state.needs_redraw = true;
+        if !state.is_read_only {
+            if apply_redo(state, lines, filename, visible_lines) {
+                state.needs_redraw = true;
+            }
         }
         return Ok((false, false));
     }
@@ -750,15 +794,19 @@ pub(crate) fn handle_key_event(
 
     // Handle paste
     if settings.keybindings.paste_matches(&code, &modifiers) {
-        if handle_paste(state, lines, filename) {
-            state.needs_redraw = true;
+        if !state.is_read_only {
+            if handle_paste(state, lines, filename) {
+                state.needs_redraw = true;
+            }
         }
         return Ok((false, false));
     }
 
     // Handle cut
     if settings.keybindings.cut_matches(&code, &modifiers) {
-        if handle_cut(state, lines, filename) { /* already set redraw */ }
+        if !state.is_read_only {
+            if handle_cut(state, lines, filename) { /* already set redraw */ }
+        }
         return Ok((false, false));
     }
 
@@ -768,10 +816,12 @@ pub(crate) fn handle_key_event(
     if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
         && (matches!(code, KeyCode::Backspace) || matches!(code, KeyCode::Char('h')))
     {
-        use crate::editing::delete_word_backward;
-        if delete_word_backward(state, lines, filename) {
-            state.modified = true;
-            state.needs_redraw = true;
+        if !state.is_read_only {
+            use crate::editing::delete_word_backward;
+            if delete_word_backward(state, lines, filename) {
+                state.modified = true;
+                state.needs_redraw = true;
+            }
         }
         return Ok((false, false));
     }
@@ -779,10 +829,12 @@ pub(crate) fn handle_key_event(
     if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
         && matches!(code, KeyCode::Delete)
     {
-        use crate::editing::delete_word_forward;
-        if delete_word_forward(state, lines, filename) {
-            state.modified = true;
-            state.needs_redraw = true;
+        if !state.is_read_only {
+            use crate::editing::delete_word_forward;
+            if delete_word_forward(state, lines, filename) {
+                state.modified = true;
+                state.needs_redraw = true;
+            }
         }
         return Ok((false, false));
     }
@@ -856,7 +908,11 @@ pub(crate) fn handle_key_event(
         }
     }
 
-    let did_edit = handle_editing_keys(state, lines, &code, &modifiers, visible_lines, filename);
+    let did_edit = if state.is_read_only {
+        false
+    } else {
+        handle_editing_keys(state, lines, &code, &modifiers, visible_lines, filename)
+    };
     let moved = handle_navigation(state, lines, code, visible_lines);
 
     // After editing or navigation, ensure cursor is visible (handles line wrapping auto-scroll)

@@ -260,7 +260,7 @@ fn render_header(
         }
     } else {
         // When menu is not active, show filename as usual
-        let modified_char = if state.modified { '*' } else { ' ' };
+        let modified_indicator: &str = if state.is_read_only { "⛔" } else if state.modified { "*" } else { " " };
         let path = std::path::Path::new(file);
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
         let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");
@@ -287,7 +287,7 @@ fn render_header(
 
         // For untitled files, show a special indicator
         if state.is_untitled {
-            let title = format!("{} {} (unsaved)", modified_char, filename);
+            let title = format!("{} {} (unsaved)", modified_indicator, filename);
             // Truncate if necessary
             let truncated_title = if visual_width(&title, 4) > available_width {
                 truncate_to_width(&title, available_width)
@@ -297,7 +297,7 @@ fn render_header(
             write!(stdout, "{}", truncated_title)?;
         } else {
             // For normal files, try to fit filename and directory
-            let mut display = format!("{} {} (", modified_char, filename);
+            let mut display = format!("{} {} (", modified_indicator, filename);
             let base_width = visual_width(&display, 4);
 
             // Reserve space for closing parenthesis

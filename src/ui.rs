@@ -561,6 +561,18 @@ fn editing_session(
         .to_lowercase();
     state.is_untitled = filename_lower.starts_with("untitled") && !std::path::Path::new(file).exists();
 
+    // Check if this file is read-only by attempting to open it for writing.
+    // We use OpenOptions with write(true) but without truncate/create so we can test
+    // write permission without modifying the file. permissions().readonly() is not
+    // sufficient on Unix because it only checks if all write bits are cleared, not
+    // whether the current user actually has write access (ownership matters).
+    state.is_read_only = !state.is_untitled && std::path::Path::new(file).exists() && {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(file)
+            .is_err()
+    };
+
     // Update menu bar settings from configuration
     state.menu_bar.update_max_visible_files(settings.max_menu_files);
     // Update file menu with current recent files
