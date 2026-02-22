@@ -42,31 +42,27 @@ const SAVE_GRACE_PERIOD_MS: u64 = 200;
 
 /// Generate a unique untitled filename (untitled, untitled-2, untitled-3, etc.)
 pub fn generate_untitled_filename() -> String {
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    static COUNTER: AtomicUsize = AtomicUsize::new(1);
+    // Collect the set of untitled names already in use (from recent files).
+    let recent = crate::recent::get_recent_files().unwrap_or_default();
+    let used: std::collections::HashSet<String> = recent
+        .iter()
+        .filter_map(|path| path.file_name()?.to_str())
+        .map(|s| s.to_lowercase())
+        .collect();
 
-    // Try to find a unique untitled-N name
+    // Find the lowest available untitled / untitled-N name, starting from 1.
+    // This reuses numbers freed when files are closed.
+    let mut n: usize = 1;
     loop {
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let filename = if n == 1 {
+        let candidate = if n == 1 {
             "untitled".to_string()
         } else {
             format!("untitled-{}", n)
         };
-
-        // Check if this file already exists in recent files
-        let recent = crate::recent::get_recent_files().unwrap_or_default();
-        let filename_lower = filename.to_lowercase();
-        let exists = recent.iter().any(|path| {
-            path.file_name()
-                .and_then(|n| n.to_str())
-                .map(|s| s.to_lowercase() == filename_lower)
-                .unwrap_or(false)
-        });
-
-        if !exists {
-            return filename;
+        if !used.contains(&candidate) {
+            return candidate;
         }
+        n += 1;
     }
 }
 
@@ -576,7 +572,7 @@ fn editing_session(
     // Update menu bar settings from configuration
     state.menu_bar.update_max_visible_files(settings.max_menu_files);
     // Update file menu with current recent files
-    state.menu_bar.update_file_menu(settings.max_menu_files, file, state.modified);
+    state.menu_bar.update_file_menu(settings.max_menu_files, file, state.modified, state.is_read_only);
 
     let saved_cursor_line = undo_history.cursor_line;
     let saved_cursor_col = undo_history.cursor_col;
@@ -769,14 +765,15 @@ fn editing_session(
 
                     // If all files were closed, check if current file was one of them
                     if saved_files.iter().any(|p| p.to_string_lossy() == file) {
-                        // Current file was closed - need to switch to another file or quit
+                        // Current file was closed - need to switch to another file or open new untitled
                         if !unsaved_files.is_empty() {
                             // Switch to first unsaved file
                             let next_file = unsaved_files[0].to_string_lossy().to_string();
                             return Ok((false, Some(next_file), false, false));
                         } else {
-                            // All files closed, quit
-                            return Ok((false, None, true, false));
+                            // All files closed - open a new untitled file instead of quitting
+                            let untitled_name = generate_untitled_filename();
+                            return Ok((false, Some(untitled_name), false, false));
                         }
                     } else if saved_files.is_empty() {
                         // No files were closed (all had unsaved changes)

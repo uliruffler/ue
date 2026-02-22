@@ -124,20 +124,42 @@ pub(crate) fn handle_key_event(
                         return Ok((false, false));
                     }
                     
+                    // Check if we're removing the currently open file
+                    let current_canonical = std::path::PathBuf::from(filename)
+                        .canonicalize()
+                        .unwrap_or_else(|_| std::path::PathBuf::from(filename));
+                    let removed_canonical = file_path
+                        .canonicalize()
+                        .unwrap_or_else(|_| file_path.to_path_buf());
+                    let is_current_file = current_canonical == removed_canonical;
+
                     // Remove the file from tracking
                     let _ = delete_file_history(&file_path.to_string_lossy());
-                    
+
+                    if is_current_file {
+                        // Signal ui.rs to close this file and open a new untitled
+                        state.menu_bar.close();
+                        return Ok((false, true));
+                    }
+
                     // Rebuild the menu to reflect the change
-                    state.menu_bar.update_file_menu(10, filename, state.modified);
-                    
-                    // If we removed the last item and there are still items, adjust selection
-                    let file_menu = &state.menu_bar.menus[0];
-                    if state.menu_bar.selected_item_index >= file_menu.items.len() {
-                        state.menu_bar.selected_item_index = file_menu.items.len().saturating_sub(1);
-                        // Skip back to last non-separator
-                        while state.menu_bar.selected_item_index > 0 
-                            && matches!(file_menu.items.get(state.menu_bar.selected_item_index), 
-                                Some(crate::menu::MenuItem::Separator)) {
+                    state.menu_bar.update_file_menu(10, filename, state.modified, state.is_read_only);
+
+                    // Clamp selection to valid range and skip back over any separator.
+                    // We do this unconditionally because the removed item may leave the
+                    // index pointing exactly at a separator even when still in-bounds.
+                    {
+                        let file_menu = &state.menu_bar.menus[0];
+                        let last_valid = file_menu.items.len().saturating_sub(1);
+                        if state.menu_bar.selected_item_index > last_valid {
+                            state.menu_bar.selected_item_index = last_valid;
+                        }
+                        while state.menu_bar.selected_item_index > 0
+                            && matches!(
+                                file_menu.items.get(state.menu_bar.selected_item_index),
+                                Some(crate::menu::MenuItem::Separator)
+                            )
+                        {
                             state.menu_bar.selected_item_index -= 1;
                         }
                     }

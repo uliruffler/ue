@@ -260,7 +260,7 @@ fn render_header(
         }
     } else {
         // When menu is not active, show filename as usual
-        let modified_indicator: &str = if state.is_read_only { "⛔" } else if state.modified { "*" } else { " " };
+        let modified_indicator: &str = if state.is_read_only { "⚿" } else if state.modified { "*" } else { " " };
         let path = std::path::Path::new(file);
         let filename = path.file_name().and_then(|n| n.to_str()).unwrap_or(file);
         let parent = path.parent().and_then(|p| p.to_str()).unwrap_or(".");

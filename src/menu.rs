@@ -385,7 +385,7 @@ impl MenuBar {
 
     /// Update File menu with current tracked files
     #[allow(dead_code)] // Only used in ui.rs (binary)
-    pub(crate) fn update_file_menu(&mut self, max_files: usize, current_file: &str, is_current_modified: bool) {
+    pub(crate) fn update_file_menu(&mut self, max_files: usize, current_file: &str, is_current_modified: bool, is_current_read_only: bool) {
         let files = crate::recent::get_recent_files().unwrap_or_default();
         // Show all files for scrolling support (max_files parameter kept for API compatibility)
         let _ = max_files; // Suppress unused warning
@@ -399,6 +399,7 @@ impl MenuBar {
             files.len(), // Show all files
             &current_canonical,
             is_current_modified,
+            is_current_read_only,
         );
 
         let items = Self::build_file_menu_items(file_labels, false); // Never show "..."
@@ -412,6 +413,7 @@ impl MenuBar {
         count: usize,
         current_canonical: &std::path::Path,
         is_current_modified: bool,
+        is_current_read_only: bool,
     ) -> Vec<String> {
         files
             .iter()
@@ -424,13 +426,20 @@ impl MenuBar {
                 } else {
                     check_file_has_unsaved_changes(&path)
                 };
+                let is_read_only = if is_current {
+                    is_current_read_only
+                } else {
+                    path.exists() && std::fs::OpenOptions::new().write(true).open(&path).is_err()
+                };
 
                 let filename = path
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or_else(|| file.to_str().unwrap_or("???"));
 
-                if is_modified {
+                if is_read_only {
+                    format!("⚿ {}", filename)
+                } else if is_modified {
                     format!("* {}", filename)
                 } else {
                     filename.to_string()
@@ -600,8 +609,10 @@ pub(crate) fn render_dropdown_menu(
     if menu_bar.selected_menu_index == FILE_MENU_INDEX {
         let max_visible_files = state.settings.max_menu_files;
 
-        // Find file section boundaries
-        let mut file_end_idx = 5;
+        // Find file section boundaries.
+        // Default to menu end so that when there are no files we don't re-render the
+        // trailing Separator+Quit items a second time in the "bottom section" loop.
+        let mut file_end_idx = menu.items.len();
         let mut files = Vec::new();
 
         for (idx, item) in menu.items.iter().enumerate() {
@@ -610,7 +621,14 @@ pub(crate) fn render_dropdown_menu(
                     file_end_idx = idx;
                     break;
                 }
-                files.push((idx, item));
+                // Only treat FileOpenRecent actions as file entries; any other item
+                // (e.g., Quit when no files are present) marks the end of the section.
+                if matches!(item, MenuItem::Action { action: MenuAction::FileOpenRecent(_), .. }) {
+                    files.push((idx, item));
+                } else {
+                    file_end_idx = idx;
+                    break;
+                }
             }
         }
 
@@ -1283,7 +1301,7 @@ mod tests {
 
         // Update menu (file1 is "current" and not modified)
         let mut menu_bar = MenuBar::new();
-        menu_bar.update_file_menu(5, file1.to_str().unwrap(), false);
+        menu_bar.update_file_menu(5, file1.to_str().unwrap(), false, false);
 
         // Find the File menu items
         let file_menu = &menu_bar.menus[0];
@@ -1320,7 +1338,7 @@ mod tests {
 
         let file1 = tmp.path().join("file1.txt");
         let mut menu_bar = MenuBar::new();
-        menu_bar.update_file_menu(5, file1.to_str().unwrap(), false);
+        menu_bar.update_file_menu(5, file1.to_str().unwrap(), false, false);
 
         let file_menu = &menu_bar.menus[0];
         let mut found_ellipsis = false;
