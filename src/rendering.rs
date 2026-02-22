@@ -1112,9 +1112,23 @@ fn render_line(
             let is_last_segment = wrap_index + 1 >= num_wrapped_lines as usize;
             (start, end, !is_last_segment)
         } else {
-            // Horizontal scroll mode: apply horizontal offset to entire document
-            let start = ctx.state.horizontal_scroll_offset;
-            let end = (start + available_width).min(line.chars().count());
+            // Horizontal scroll mode: apply horizontal offset to entire document.
+            // horizontal_scroll_offset is a visual column offset; convert it to a
+            // character index so that tabs and wide characters are handled correctly,
+            // and short lines scrolled past their end don't cause a panic.
+            let line_char_count = line.chars().count();
+            let start = crate::coordinates::visual_col_to_char_index(
+                line,
+                ctx.state.horizontal_scroll_offset,
+                tab_width,
+            )
+            .min(line_char_count);
+            let end = crate::coordinates::visual_col_to_char_index(
+                line,
+                ctx.state.horizontal_scroll_offset + available_width,
+                tab_width,
+            )
+            .min(line_char_count);
             (start, end, false)
         };
 
