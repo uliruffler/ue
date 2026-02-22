@@ -572,7 +572,7 @@ fn editing_session(
     // Update menu bar settings from configuration
     state.menu_bar.update_max_visible_files(settings.max_menu_files);
     // Update file menu with current recent files
-    state.menu_bar.update_file_menu(settings.max_menu_files, file, state.modified, state.is_read_only);
+    state.menu_bar.update_file_menu(file, state.modified, state.is_read_only);
 
     let saved_cursor_line = undo_history.cursor_line;
     let saved_cursor_col = undo_history.cursor_col;

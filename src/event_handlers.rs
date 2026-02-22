@@ -143,7 +143,7 @@ pub(crate) fn handle_key_event(
                     }
 
                     // Rebuild the menu to reflect the change
-                    state.menu_bar.update_file_menu(10, filename, state.modified, state.is_read_only);
+                    state.menu_bar.update_file_menu(filename, state.modified, state.is_read_only);
 
                     // Clamp selection to valid range and skip back over any separator.
                     // We do this unconditionally because the removed item may leave the
