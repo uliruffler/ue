@@ -896,6 +896,30 @@ pub fn delete_file_history(file_path: &str) -> Result<(), Box<dyn std::error::Er
     if history_path.exists() {
         fs::remove_file(&history_path)?;
     }
+    // Remove empty parent directories up to (but not including) ~/.ue/files/
+    let home = std::env::var("UE_TEST_HOME")
+        .or_else(|_| std::env::var("HOME"))
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+    let files_root = std::path::PathBuf::from(&home).join(".ue").join("files");
+    let mut dir = history_path.parent().map(|p| p.to_path_buf());
+    while let Some(d) = dir {
+        // Stop at the files root - don't delete it
+        if d == files_root {
+            break;
+        }
+        // Only remove if empty
+        match fs::read_dir(&d) {
+            Ok(mut entries) => {
+                if entries.next().is_some() {
+                    break; // Not empty, stop climbing
+                }
+                let _ = fs::remove_dir(&d);
+                dir = d.parent().map(|p| p.to_path_buf());
+            }
+            Err(_) => break,
+        }
+    }
     // Also remove from recent files list to keep both in sync
     let _ = crate::recent::remove_recent_file(file_path);
     Ok(())

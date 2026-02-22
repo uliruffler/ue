@@ -148,6 +148,46 @@ fn test_quit_editor_saves_editor_session() {
     assert_eq!(session2.mode, ue::session::SessionMode::Editor);
     assert_eq!(session2.file.unwrap().to_string_lossy(), test_file_str);
 }
+/// Test: delete_file_history removes empty parent directories
+#[test]
+#[serial]
+fn test_delete_file_history_cleans_empty_dirs() {
+    let (_tmp, ue_dir) = setup_test_env();
+    // Create a deeply nested file path
+    let file = _tmp.path().join("subdir").join("nested").join("doc.txt");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, "hello").unwrap();
+
+    // Save undo history - this creates the directory tree under ~/.ue/files/
+    let history = ue::undo::UndoHistory::new();
+    history.save(&file.to_string_lossy()).unwrap();
+
+    // Build the expected directory: ~/.ue/files/<tmp>/subdir/nested/
+    let files_dir = ue_dir.join("files");
+    let mut ue_leaf_dir = files_dir.clone();
+    if let Some(parent) = file.parent() {
+        for comp in parent.components() {
+            if !matches!(comp, std::path::Component::RootDir) {
+                ue_leaf_dir.push(comp.as_os_str());
+            }
+        }
+    }
+    assert!(ue_leaf_dir.exists(), "history dir should exist before deletion");
+
+    // Delete history
+    ue::editing::delete_file_history(&file.to_string_lossy()).unwrap();
+
+    // The .ue file should be gone
+    let ue_file = ue_leaf_dir.join("doc.txt.ue");
+    assert!(!ue_file.exists(), ".ue history file should be removed");
+
+    // All empty ancestor directories up to ~/.ue/files/ should be gone
+    assert!(!ue_leaf_dir.exists(), "empty leaf directory should be removed");
+
+    // The files root itself must still exist
+    assert!(files_dir.exists(), "~/.ue/files root must not be removed");
+}
+
 /// Test: Closing a file from file selector using Ctrl+W
 #[test]
 #[serial]
