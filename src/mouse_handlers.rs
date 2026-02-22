@@ -831,7 +831,13 @@ pub(crate) fn handle_mouse_event(
                     };
 
                     if in_selection {
-                        // Start drag operation (only if not a potential multi-click)
+                        // Start drag operation (only if not a potential multi-click).
+                        // Also remember where the user clicked so that, if they release the
+                        // mouse without actually dragging, we can clear the selection and
+                        // place the cursor at that position instead of keeping the selection.
+                        if let Some((logical_line, col)) = pos_opt {
+                            state.drag_click_logical_pos = Some((logical_line, col.min(lines[logical_line].len())));
+                        }
                         state.start_drag();
                     } else {
                         // Normal cursor move (including multi-click handling).
@@ -881,7 +887,20 @@ pub(crate) fn handle_mouse_event(
                 state.h_scrollbar_dragging = false;
                 state.needs_redraw = true;
             } else if state.dragging_selection_active {
-                finalize_drag(state, lines, modifiers.contains(KeyModifiers::CONTROL));
+                if state.drag_target.is_some() {
+                    // Actual drag-to-move/copy operation
+                    finalize_drag(state, lines, modifiers.contains(KeyModifiers::CONTROL));
+                } else {
+                    // User clicked inside the selection without dragging:
+                    // clear the selection and place the cursor at the click position.
+                    let click_pos = state.drag_click_logical_pos;
+                    state.clear_drag();
+                    state.clear_selection();
+                    if let Some((logical_line, col)) = click_pos {
+                        state.set_cursor_position(logical_line, col, lines, visible_lines);
+                    }
+                    state.needs_redraw = true;
+                }
             }
             state.mouse_dragging = false;
             state.last_drag_position = None; // Clear drag position

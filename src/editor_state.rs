@@ -43,6 +43,10 @@ pub struct FileViewerState<'a> {
     pub(crate) drag_text: Option<String>,
     pub(crate) dragging_selection_active: bool,
     pub(crate) drag_target: Option<Position>,
+    /// Logical position (line, col) where the user clicked to start a selection-drag.
+    /// Used to move the cursor and clear the selection when the user clicks inside a
+    /// selection without actually dragging (i.e., drag_target remains None on mouse-up).
+    pub(crate) drag_click_logical_pos: Option<Position>,
     /// Timestamp of last save to prevent reload loops when current instance saves
     pub(crate) last_save_time: Option<Instant>,
     /// Find mode active
@@ -189,6 +193,7 @@ impl<'a> FileViewerState<'a> {
             drag_source_end: None,
             drag_text: None,
             drag_target: None,
+            drag_click_logical_pos: None,
             last_save_time: None,
             find_active: false,
             find_regex_mode: true,
@@ -496,6 +501,7 @@ impl<'a> FileViewerState<'a> {
         self.drag_text = None;
         self.dragging_selection_active = false;
         self.drag_target = None;
+        self.drag_click_logical_pos = None;
     }
 
 

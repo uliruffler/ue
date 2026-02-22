@@ -873,6 +873,7 @@ mod tests {
             drag_text: None,
             dragging_selection_active: false,
             drag_target: None,
+            drag_click_logical_pos: None,
             last_save_time: None,
             find_active: false,
             find_regex_mode: true,
