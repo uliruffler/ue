@@ -64,7 +64,7 @@ pub fn update_recent_file(file_path: &str) -> io::Result<()> {
     Ok(())
 }
 
-/// Remove a file from the recent files list
+/// Remove a file from the recent files list.
 pub fn remove_recent_file(file_path: &str) -> io::Result<()> {
     let path_buf = PathBuf::from(file_path);
     // Try canonicalize but fall back to original if fails

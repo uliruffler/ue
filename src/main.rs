@@ -15,12 +15,10 @@ struct Cli {
 }
 
 fn main() -> std::io::Result<()> {
-    // Deploy default syntax files if they don't exist
     let _ = default_syntax::deploy_default_syntax_files();
 
     let cli = Cli::parse();
 
-    // Handle --print-keys mode
     if cli.print_keys {
         return print_keys_mode();
     }
@@ -28,68 +26,40 @@ fn main() -> std::io::Result<()> {
     let mut files = cli.files.clone();
 
     if files.is_empty() {
-        // Try last session first
         if let Ok(Some(last)) = session::load_last_session() {
-            match last.mode {
-                session::SessionMode::Editor => {
-                    if let Some(f) = last.file.as_ref() {
-                        // Open last file even if it doesn't exist (new buffer support)
-                        files = vec![f.to_string_lossy().to_string()];
-                    } else {
-                        // No file recorded - get first recent file or create new
-                        let recent_files = recent::get_recent_files().unwrap_or_default();
-                        files = if let Some(first) = recent_files.first() {
-                            vec![first.to_string_lossy().to_string()]
-                        } else {
-                            vec![generate_untitled_filename()]
-                        };
-                    }
-                }
-                session::SessionMode::Selector => {
-                    // Selector mode - get first recent file or create new
-                    let recent_files = recent::get_recent_files().unwrap_or_default();
-                    files = if let Some(first) = recent_files.first() {
-                        vec![first.to_string_lossy().to_string()]
-                    } else {
-                        vec![generate_untitled_filename()]
-                    };
-                }
+            // Restore the last file regardless of mode (editor or selector).
+            // For selector mode we still need a file open underneath.
+            if let Some(f) = last.file.as_ref() {
+                files = vec![f.to_string_lossy().to_string()];
+            } else {
+                files = vec![first_recent_or_untitled()];
             }
         } else {
-            // No previous session - get first recent file or create new
-            let recent_files = recent::get_recent_files().unwrap_or_default();
-            files = if let Some(first) = recent_files.first() {
-                vec![first.to_string_lossy().to_string()]
-            } else {
-                vec![generate_untitled_filename()]
-            };
+            files = vec![first_recent_or_untitled()];
         }
     }
 
-    // Canonicalize file paths to absolute paths for consistent display
-    // but skip untitled files (they are just simple filenames)
+    // Resolve all paths to absolute form for consistent display.
+    // Untitled buffers (simple names starting with "untitled", no path separators)
+    // are kept as-is since they don't correspond to real filesystem paths yet.
     let files: Vec<String> = files
         .into_iter()
         .map(|f| {
-            // Check if this is an untitled file (simple filename like "untitled" or "untitled-2")
             let is_untitled = {
-                let path = std::path::Path::new(&f);
-                let filename_lower = path.file_name()
+                let lower = std::path::Path::new(&f)
+                    .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("")
                     .to_lowercase();
-                // Untitled files are simple filenames starting with "untitled" (no path separators)
-                !f.contains('/') && !f.contains('\\') && filename_lower.starts_with("untitled")
+                !f.contains('/') && !f.contains('\\') && lower.starts_with("untitled")
             };
 
             if is_untitled {
-                // Keep untitled files as-is
                 f
             } else {
-                // Canonicalize other files to absolute paths
                 std::fs::canonicalize(&f)
                     .unwrap_or_else(|_| {
-                        // If canonicalization fails (file doesn't exist yet), convert to absolute path manually
+                        // File doesn't exist yet — build an absolute path manually.
                         let path = std::path::PathBuf::from(&f);
                         if path.is_absolute() {
                             path
@@ -105,12 +75,19 @@ fn main() -> std::io::Result<()> {
         })
         .collect();
 
-    // Update recent list for each file chosen
     for f in &files {
         let _ = recent::update_recent_file(f);
     }
 
-    ui::show(&files)?;
-    // Removed automatic editor session save; handled in event handlers on quit.
-    Ok(())
+    ui::show(&files)
+}
+
+/// Return the most recently used file, or a fresh untitled buffer if there are none.
+fn first_recent_or_untitled() -> String {
+    recent::get_recent_files()
+        .unwrap_or_default()
+        .into_iter()
+        .next()
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(generate_untitled_filename)
 }

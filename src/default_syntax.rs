@@ -50,7 +50,8 @@ fn get_default_syntax(extension: &str) -> Option<&'static str> {
     }
 }
 
-/// Deploy all default syntax files to ~/.ue/syntax/, skipping existing files
+/// Deploy all default syntax files to ~/.ue/syntax/, skipping existing files.
+/// Called once at startup; existing user-customised files are left untouched.
 #[allow(dead_code)]
 pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
     let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;

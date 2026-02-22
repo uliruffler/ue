@@ -601,22 +601,20 @@ fn render_file_menu_dropdown(
         let show_scrollbar = total_files > max_visible_files;
 
         for file_idx in visible_start..visible_end {
-            if let Some((idx, item)) = files.get(file_idx) {
-                render_menu_item_at_row(
-                    stdout, item, *idx == menu_bar.selected_item_index,
-                    menu_x, display_row, max_width, bg_color, selection_color,
+            let (idx, item) = &files[file_idx];
+            render_menu_item_at_row(
+                stdout, item, *idx == menu_bar.selected_item_index,
+                menu_x, display_row, max_width, bg_color, selection_color,
+            )?;
+
+            if show_scrollbar {
+                render_file_scrollbar_row(
+                    stdout, file_idx - visible_start, scroll_offset, total_files,
+                    max_visible_files, menu_x + max_width - 1, display_row,
                 )?;
-
-                if show_scrollbar {
-                    let row_in_view = file_idx - visible_start;
-                    render_file_scrollbar_row(
-                        stdout, row_in_view, scroll_offset, total_files,
-                        max_visible_files, menu_x + max_width - 1, display_row,
-                    )?;
-                }
-
-                display_row += 1;
             }
+
+            display_row += 1;
         }
     }
 
@@ -935,7 +933,13 @@ fn menu_x_position(
 ) -> usize {
     let line_num_width =
         crate::coordinates::line_number_display_width(state.settings, lines.len()) as usize;
-    let mut x = line_num_width + 2; // line-number gutter + "≡ "
+    menu_x_from_gutter(menu_bar, line_num_width)
+}
+
+/// Compute the dropdown X column given a known gutter width.
+/// Shared by rendering and hit-testing.
+fn menu_x_from_gutter(menu_bar: &MenuBar, line_num_width: usize) -> usize {
+    let mut x = line_num_width + 2; // gutter + "≡ "
     for i in 0..menu_bar.selected_menu_index {
         x += menu_bar.menus[i].label.len() + 2;
     }
@@ -954,16 +958,10 @@ pub(crate) fn is_point_in_dropdown(
     }
 
     let menu = &menu_bar.menus[menu_bar.selected_menu_index];
-    let line_num_width = line_number_width as usize;
-    let mut menu_x = line_num_width + 2;
-    for i in 0..menu_bar.selected_menu_index {
-        menu_x += menu_bar.menus[i].label.len() + 2;
-    }
-
+    let menu_x = menu_x_from_gutter(menu_bar, line_number_width as usize);
     let max_width = menu_display_width(menu);
-    let dropdown_rows = 1..=menu.items.len();
 
-    dropdown_rows.contains(&row) && col >= menu_x && col < menu_x + max_width
+    (1..=menu.items.len()).contains(&row) && col >= menu_x && col < menu_x + max_width
 }
 
 #[cfg(test)]
@@ -1144,7 +1142,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_file_menu_shows_ellipsis_when_too_many_files() {
+    fn test_update_file_menu_shows_all_files_with_scrolling() {
         use std::fs;
         use crate::env::set_temp_home;
 

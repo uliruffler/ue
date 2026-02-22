@@ -1,21 +1,11 @@
-//! # UE - Uli's Editor
+//! Internal module re-exports for integration tests.
 //!
-//! A terminal-based text editor written in Rust.
-//!
-//! This library provides the core functionality for the `ue` text editor,
-//! including text editing, syntax highlighting, file management, and UI rendering.
-//!
-//! ## Example
-//!
-//! The editor is typically run via the binary, but the library can be used for testing:
-//!
-//! ```
-//! // Library functions are available for integration tests
-//! assert!(true); // Basic sanity check
-//! ```
+//! This crate is **not** a public library. All items here are re-exported as
+//! `pub` solely so that the integration tests in `tests/` can access them.
+//! Production code uses `pub(crate)` visibility throughout.
 
-// Export modules for testing purposes
-// Note: dead_code warnings are suppressed for library-only code
+// Re-export all modules so integration tests in tests/ can reach them.
+// dead_code warnings are suppressed because some items are only used by the binary.
 pub mod coordinates;
 pub mod default_syntax;
 pub mod double_esc;
@@ -60,4 +50,3 @@ pub fn syntax_pop() {
 pub fn syntax_clear_stack() {
     syntax::clear_syntax_stack();
 }
-
