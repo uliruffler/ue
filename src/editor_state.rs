@@ -166,6 +166,9 @@ pub struct FileViewerState<'a> {
     /// Status message to show in the footer (e.g., warnings, errors)
     #[allow(dead_code)] // Read in rendering.rs (binary)
     pub(crate) status_message: Option<String>,
+    /// True when the current mouse drag was initiated by clicking on the line number area.
+    /// Used to distinguish line-number drags from text-area drags that move over line numbers.
+    pub(crate) line_number_drag_active: bool,
 }
 
 impl<'a> FileViewerState<'a> {
@@ -251,6 +254,7 @@ impl<'a> FileViewerState<'a> {
             is_read_only: false,
             cursor_at_wrap_end: false,
             status_message: None,
+            line_number_drag_active: false,
         }
     }
 

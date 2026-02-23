@@ -872,8 +872,15 @@ pub(crate) fn handle_mouse_event(
                 // Check if dragging on line number area
                 let line_num_width = crate::coordinates::line_number_width(state.settings);
                 if column < line_num_width {
-                    // Dragging on line number - extend line selection
-                    handle_line_number_drag(state, lines, visual_line, visible_lines);
+                    if state.line_number_drag_active {
+                        // Drag started on the line number area – extend line selection.
+                        handle_line_number_drag(state, lines, visual_line, visible_lines);
+                    } else {
+                        // Drag started from text area and moved over line numbers.
+                        // Continue the existing text selection by treating the cursor as
+                        // being at the very start of the text (column = line_num_width).
+                        handle_mouse_drag(state, lines, visual_line, line_num_width, visible_lines, modifiers);
+                    }
                 } else {
                     handle_mouse_drag(state, lines, visual_line, column, visible_lines, modifiers);
                 }
@@ -903,6 +910,7 @@ pub(crate) fn handle_mouse_event(
                 }
             }
             state.mouse_dragging = false;
+            state.line_number_drag_active = false;
             state.last_drag_position = None; // Clear drag position
         }
         MouseEventKind::ScrollDown => {
@@ -1203,9 +1211,9 @@ fn handle_line_number_click(
     {
         restore_cursor_to_screen(state);
 
-        // Select the entire line
-        // Start of line: (logical_line, 0)
-        // End of line: (logical_line, line_length) or start of next line
+        // Anchor is at the start of the clicked line so that dragging in either
+        // direction (into line numbers or into text) extends correctly.
+        state.selection_anchor = Some((logical_line, 0));
         state.selection_start = Some((logical_line, 0));
 
         // Position cursor at end of line
@@ -1222,6 +1230,7 @@ fn handle_line_number_click(
         }
 
         state.mouse_dragging = true;
+        state.line_number_drag_active = true;
         state.needs_redraw = true;
     }
 }
@@ -1241,46 +1250,48 @@ fn handle_line_number_drag(
         visual_line_to_logical_line(state, lines, visual_line, visible_lines)
         && logical_line < lines.len()
     {
+        // Use the anchor to determine drag direction so that selection_start/end
+        // are always set correctly regardless of which way the user drags.
+        let anchor_line = state
+            .selection_anchor
+            .map(|(l, _)| l)
+            .unwrap_or(logical_line);
+
         restore_cursor_to_screen(state);
 
-        // Extend selection to include entire lines
-        if let Some(start) = state.selection_start {
-            let start_line = start.0;
+        if logical_line >= anchor_line {
+            // Dragging downward (or staying on anchor line)
+            // Anchor stays at start of anchor line; cursor moves to end of current line.
+            state.selection_anchor = Some((anchor_line, 0));
+            state.selection_start = Some((anchor_line, 0));
 
-            if logical_line >= start_line {
-                // Dragging downward - select from start of start_line to end of current line
-                state.selection_start = Some((start_line, 0));
+            state.cursor_line = logical_line.saturating_sub(state.top_line);
+            state.cursor_col = lines[logical_line].len();
+            state.desired_cursor_col = state.cursor_col;
 
-                // Position cursor at end of dragged line
-                state.cursor_line = logical_line.saturating_sub(state.top_line);
-                state.cursor_col = lines[logical_line].len();
-                state.desired_cursor_col = state.cursor_col;
-
-                // Extend to start of next line or end of current line
-                if logical_line + 1 < lines.len() {
-                    state.selection_end = Some((logical_line + 1, 0));
-                } else {
-                    state.selection_end = Some((logical_line, lines[logical_line].len()));
-                }
+            if logical_line + 1 < lines.len() {
+                state.selection_end = Some((logical_line + 1, 0));
             } else {
-                // Dragging upward - select from start of current line to end of start_line
-                state.selection_start = Some((logical_line, 0));
-
-                // Position cursor at start of dragged line
-                state.cursor_line = logical_line.saturating_sub(state.top_line);
-                state.cursor_col = 0;
-                state.desired_cursor_col = 0;
-
-                // Extend to start of line after start_line or end of start_line
-                if start_line + 1 < lines.len() {
-                    state.selection_end = Some((start_line + 1, 0));
-                } else {
-                    state.selection_end = Some((start_line, lines[start_line].len()));
-                }
+                state.selection_end = Some((logical_line, lines[logical_line].len()));
             }
+        } else {
+            // Dragging upward past the anchor line
+            // Cursor moves to start of current line; selection covers up to end of anchor line.
+            state.selection_anchor = Some((anchor_line, 0));
+            state.selection_start = Some((logical_line, 0));
 
-            state.needs_redraw = true;
+            state.cursor_line = logical_line.saturating_sub(state.top_line);
+            state.cursor_col = 0;
+            state.desired_cursor_col = 0;
+
+            if anchor_line + 1 < lines.len() {
+                state.selection_end = Some((anchor_line + 1, 0));
+            } else {
+                state.selection_end = Some((anchor_line, lines[anchor_line].len()));
+            }
         }
+
+        state.needs_redraw = true;
     }
 }
 /// Convert visual line to logical line index
@@ -1700,10 +1711,12 @@ mod tests {
             "fourth line".to_string(),
         ];
 
-        // First click on line 1
+        // First click on line 1 (as handle_line_number_click would set up)
+        state.selection_anchor = Some((1, 0));
         state.selection_start = Some((1, 0));
         state.selection_end = Some((2, 0));
         state.mouse_dragging = true;
+        state.line_number_drag_active = true;
 
         // Drag to line 3
         let mouse_event = MouseEvent {

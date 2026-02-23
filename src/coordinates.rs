@@ -928,6 +928,7 @@ mod tests {
             is_read_only: false,
             cursor_at_wrap_end: false,
             status_message: None,
+            line_number_drag_active: false,
         }
     }
 
