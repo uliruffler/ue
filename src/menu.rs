@@ -501,6 +501,7 @@ pub(crate) fn render_dropdown_menu(
     menu_bar: &MenuBar,
     state: &crate::editor_state::FileViewerState,
     lines: &[String],
+    menu_bg: crossterm::style::Color,
 ) -> Result<(), std::io::Error> {
     use crossterm::style::Color;
 
@@ -512,8 +513,7 @@ pub(crate) fn render_dropdown_menu(
     let menu_x = menu_x_position(menu_bar, state, lines);
     let max_width = menu_display_width(menu);
 
-    let menu_bg_color = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
-        .unwrap_or(Color::DarkBlue);
+    let menu_bg_color = menu_bg;
     let selection_color = Color::Rgb { r: 100, g: 149, b: 237 };
 
     if menu_bar.selected_menu_index == FILE_MENU_INDEX {

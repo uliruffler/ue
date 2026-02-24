@@ -13,9 +13,7 @@ pub struct LastSession {
 }
 
 fn session_file_path() -> io::Result<PathBuf> {
-    let home = std::env::var("UE_TEST_HOME")
-        .or_else(|_| std::env::var("HOME"))
-        .or_else(|_| std::env::var("USERPROFILE"))
+    let home = crate::env::resolve_home()
         .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     Ok(PathBuf::from(home).join(".ue").join("last_session"))
 }

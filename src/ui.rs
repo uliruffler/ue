@@ -569,6 +569,13 @@ fn editing_session(
             .is_err()
     };
 
+    // Detect if running with elevated privileges (sudo or direct root login).
+    // SUDO_USER is set by sudo when it elevates privileges.
+    // USER == "root" covers direct root login without sudo.
+    state.is_sudo = std::env::var("SUDO_USER").is_ok()
+        || std::env::var("USER").as_deref() == Ok("root")
+        || std::env::var("LOGNAME").as_deref() == Ok("root");
+
     // Update menu bar settings from configuration
     state.menu_bar.update_max_visible_files(settings.max_menu_files);
     // Update file menu with current recent files
@@ -639,7 +646,7 @@ fn editing_session(
             );
             
             // Menu is open and needs redraw - render the dropdown menu overlay
-            crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state, &lines)?;
+            crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state, &lines, state.effective_theme_bg())?;
             state.menu_bar.needs_redraw = false;
             stdout.flush()?;
         }

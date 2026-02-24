@@ -11,6 +11,14 @@ use crate::coordinates::{
 };
 use crate::editor_state::{FileViewerState, Position};
 
+/// Thin wrapper so rendering.rs can call `effective_theme_bg(state)` without
+/// spelling out `state.effective_theme_bg()` everywhere.  The authoritative
+/// logic lives in `FileViewerState::effective_theme_bg`.
+fn effective_theme_bg(state: &FileViewerState) -> crossterm::style::Color {
+    state.effective_theme_bg()
+}
+
+
 /// Expand tabs in a string to spaces, considering tab stops
 fn expand_tabs(s: &str, tab_width: usize) -> String {
     let mut result = String::new();
@@ -148,7 +156,7 @@ pub(crate) fn render_screen(
 
     // Then render dropdown menu OVER the content if active
     if state.menu_bar.active && state.menu_bar.dropdown_open {
-        crate::menu::render_dropdown_menu(stdout, &state.menu_bar, state, lines)?;
+        crate::menu::render_dropdown_menu(stdout, &state.menu_bar, state, lines, effective_theme_bg(state))?;
     }
 
     position_cursor(stdout, lines, state, visible_lines)?;
@@ -170,9 +178,7 @@ fn render_header(
     execute!(stdout, MoveTo(0, 0))?;
 
     // Set header background color
-    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
-        execute!(stdout, SetBackgroundColor(color))?;
-    }
+    execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
 
     // Render line number area (if enabled)
     if state.settings.appearance.line_number_digits > 0 {
@@ -228,9 +234,7 @@ fn render_header(
         if cursor_above {
             execute!(stdout, ResetColor)?;
             // Re-apply header background
-            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
-                execute!(stdout, SetBackgroundColor(color))?;
-            }
+            execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
         }
         write!(stdout, " ")?;
     }
@@ -252,9 +256,7 @@ fn render_header(
             execute!(stdout, ResetColor)?;
 
             // Restore header background
-            if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg) {
-                execute!(stdout, SetBackgroundColor(color))?;
-            }
+            execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
 
             write!(stdout, "  ")?;
         }
@@ -384,11 +386,7 @@ pub(crate) fn render_footer(
     // Position cursor at footer row
     execute!(stdout, MoveTo(0, footer_row))?;
 
-    if let Some(color) =
-        crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
-    {
-        execute!(stdout, SetBackgroundColor(color))?;
-    }
+    execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
 
     // If close all confirmation is active, show the prompt
     if state.close_all_confirmation_active {
@@ -409,12 +407,8 @@ pub(crate) fn render_footer(
         execute!(stdout, SetForegroundColor(crossterm::style::Color::Yellow))?;
         write!(stdout, "{}", prompt)?;
         execute!(stdout, ResetColor)?;
-        if let Some(color) =
-            crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
-        {
-            execute!(stdout, SetBackgroundColor(color))?;
-        }
-        
+        execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
+
         // Pad to end of line
         let written = prompt.len();
         let remaining = total_width.saturating_sub(written);
@@ -485,11 +479,7 @@ pub(crate) fn render_footer(
             execute!(stdout, SetForegroundColor(crossterm::style::Color::Red))?;
             write!(stdout, "[{}] ", error)?;
             execute!(stdout, ResetColor)?;
-            if let Some(color) =
-                crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
-            {
-                execute!(stdout, SetBackgroundColor(color))?;
-            }
+            execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
             error.len() + 3 // "[error] "
         } else {
             0
@@ -518,9 +508,7 @@ pub(crate) fn render_footer(
                 if i + 1 == sel_end {
                     // End selection - restore colors
                     execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::NoReverse))?;
-                    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
-                        execute!(stdout, SetBackgroundColor(color))?;
-                    }
+                    execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
                 }
             }
         } else {
@@ -611,9 +599,7 @@ pub(crate) fn render_footer(
                 if i + 1 == sel_end {
                     // End selection - restore colors
                     execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::NoReverse))?;
-                    if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
-                        execute!(stdout, SetBackgroundColor(color))?;
-                    }
+                    execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
                 }
             }
         } else {
@@ -746,9 +732,7 @@ pub(crate) fn render_footer(
     if highlight_digit_hint {
         execute!(stdout, ResetColor)?;
         // Re-apply footer background
-        if let Some(color) = crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg) {
-            execute!(stdout, SetBackgroundColor(color))?;
-        }
+        execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
     }
 
     // Write space separator
@@ -778,11 +762,7 @@ pub(crate) fn render_footer(
         execute!(stdout, SetForegroundColor(crossterm::style::Color::Yellow))?;
         write!(stdout, "{}", message)?;
         execute!(stdout, ResetColor)?;
-        if let Some(color) =
-            crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
-        {
-            execute!(stdout, SetBackgroundColor(color))?;
-        }
+        execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
     } else if let Some(ref error) = state.find_error {
         use crossterm::style::SetForegroundColor;
         let color = if error.contains("wrapped") {
@@ -793,11 +773,7 @@ pub(crate) fn render_footer(
         execute!(stdout, SetForegroundColor(color))?;
         write!(stdout, "{}", error)?;
         execute!(stdout, ResetColor)?;
-        if let Some(color) =
-            crate::settings::Settings::parse_color(&state.settings.appearance.footer_bg)
-        {
-            execute!(stdout, SetBackgroundColor(color))?;
-        }
+        execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
     } else if position_info.len() >= remaining_width {
         let truncated = &position_info[position_info.len() - remaining_width..];
         if state.goto_line_active {
@@ -948,11 +924,7 @@ fn render_visible_lines(
     // Fill remaining content lines with empty lines
     while visual_lines_rendered < content_lines {
         if state.settings.appearance.line_number_digits > 0 {
-            if let Some(color) =
-                crate::settings::Settings::parse_color(&state.settings.appearance.line_numbers_bg)
-            {
-                execute!(stdout, SetBackgroundColor(color))?;
-            }
+            execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
             write!(
                 stdout,
                 "{:width$} ",
@@ -1046,11 +1018,7 @@ fn render_line(
                 let is_cursor_line = logical_line_index == ctx.state.absolute_line();
 
                 // Set line numbers background color
-                if let Some(color) = crate::settings::Settings::parse_color(
-                    &ctx.state.settings.appearance.line_numbers_bg,
-                ) {
-                    execute!(stdout, SetBackgroundColor(color))?;
-                }
+                execute!(stdout, SetBackgroundColor(effective_theme_bg(ctx.state)))?;
 
                 // Highlight line number with scrollbar color if cursor line
                 if is_cursor_line {
@@ -1068,11 +1036,7 @@ fn render_line(
 
                 // Reset to line numbers background before writing indicator
                 if is_cursor_line {
-                    if let Some(color) = crate::settings::Settings::parse_color(
-                        &ctx.state.settings.appearance.line_numbers_bg,
-                    ) {
-                        execute!(stdout, SetBackgroundColor(color))?;
-                    }
+                    execute!(stdout, SetBackgroundColor(effective_theme_bg(ctx.state)))?;
                 }
 
                 // Show '>' for cursor line, space for others
@@ -1084,11 +1048,7 @@ fn render_line(
 
                 execute!(stdout, ResetColor)?;
             } else {
-                if let Some(color) = crate::settings::Settings::parse_color(
-                    &ctx.state.settings.appearance.line_numbers_bg,
-                ) {
-                    execute!(stdout, SetBackgroundColor(color))?;
-                }
+                execute!(stdout, SetBackgroundColor(effective_theme_bg(ctx.state)))?;
                 write!(
                     stdout,
                     "{:width$} ",
@@ -2254,8 +2214,7 @@ fn render_scrollbar(
     execute!(stdout, SavePosition)?;
 
     // Get colors - use same blue as header/footer for background, light blue for bar
-    let bg_color = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
-        .unwrap_or(crossterm::style::Color::DarkBlue);
+    let bg_color = effective_theme_bg(state);
     let bar_color = crossterm::style::Color::Rgb {
         r: 100,
         g: 149,
@@ -2394,8 +2353,7 @@ fn render_horizontal_scrollbar(
     let bar_position = ((scrollbar_width - bar_width) as f64 * scroll_progress) as usize;
 
     // Get colors - same as vertical scrollbar
-    let bg_color = crate::settings::Settings::parse_color(&state.settings.appearance.header_bg)
-        .unwrap_or(crossterm::style::Color::DarkBlue);
+    let bg_color = effective_theme_bg(state);
     let bar_color = crossterm::style::Color::Rgb {
         r: 100,
         g: 149,

@@ -280,9 +280,7 @@ impl UndoHistory {
     }
 
     fn history_path(file_path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let home = std::env::var("UE_TEST_HOME")
-            .or_else(|_| std::env::var("HOME"))
-            .or_else(|_| std::env::var("USERPROFILE"))?;
+        let home = crate::env::resolve_home()?;
 
         let home_path = PathBuf::from(&home);
 

@@ -4,9 +4,7 @@ use std::{fs, io};
 const MAX_RECENT: usize = 50;
 
 fn recent_list_path() -> io::Result<PathBuf> {
-    let home = std::env::var("UE_TEST_HOME")
-        .or_else(|_| std::env::var("HOME"))
-        .or_else(|_| std::env::var("USERPROFILE"))
+    let home = crate::env::resolve_home()
         .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
     Ok(PathBuf::from(home).join(".ue").join("files.ue"))
 }

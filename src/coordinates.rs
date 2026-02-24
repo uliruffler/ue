@@ -926,6 +926,7 @@ mod tests {
             close_all_confirmed: false,
             is_untitled: false,
             is_read_only: false,
+            is_sudo: false,
             cursor_at_wrap_end: false,
             status_message: None,
             line_number_drag_active: false,

@@ -897,10 +897,7 @@ pub fn delete_file_history(file_path: &str) -> Result<(), Box<dyn std::error::Er
         fs::remove_file(&history_path)?;
     }
     // Remove empty parent directories up to (but not including) ~/.ue/files/
-    let home = std::env::var("UE_TEST_HOME")
-        .or_else(|_| std::env::var("HOME"))
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .unwrap_or_default();
+    let home = crate::env::resolve_home().unwrap_or_default();
     let files_root = std::path::PathBuf::from(&home).join(".ue").join("files");
     let mut dir = history_path.parent().map(|p| p.to_path_buf());
     while let Some(d) = dir {

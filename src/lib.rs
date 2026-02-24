@@ -11,7 +11,6 @@ pub mod default_syntax;
 pub mod double_esc;
 pub mod editing;
 pub mod editor_state;
-#[cfg(test)]
 pub mod env;
 pub mod event_handlers;
 pub mod find;

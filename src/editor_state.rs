@@ -159,6 +159,8 @@ pub struct FileViewerState<'a> {
     /// Whether this file is read-only (no write permission)
     /// In read-only mode, editing operations are blocked but navigation/copy/find still work
     pub(crate) is_read_only: bool,
+    /// Whether the editor was started with elevated privileges (sudo/root)
+    pub(crate) is_sudo: bool,
     /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
     /// previous segment (true) or at the start of the next segment (false)
     /// Only meaningful when cursor_col is exactly at a wrap point
@@ -252,6 +254,7 @@ impl<'a> FileViewerState<'a> {
             close_all_confirmed: false,
             is_untitled: false,
             is_read_only: false,
+            is_sudo: false,
             cursor_at_wrap_end: false,
             status_message: None,
             line_number_drag_active: false,
@@ -260,6 +263,28 @@ impl<'a> FileViewerState<'a> {
 
     pub(crate) fn current_position(&self) -> Position {
         (self.top_line + self.cursor_line, self.cursor_col)
+    }
+
+    /// Returns the effective background color for the UI chrome (header, footer, line
+    /// numbers, menu, scrollbar) based on sudo and read-only state:
+    ///
+    /// | sudo | read-only | color      |
+    /// |------|-----------|------------|
+    /// | no   | no        | configured |
+    /// | no   | yes       | pale blue  |
+    /// | yes  | no        | deep red   |
+    /// | yes  | yes       | pale red   |
+    pub(crate) fn effective_theme_bg(&self) -> crossterm::style::Color {
+        use crossterm::style::Color;
+        match (self.is_sudo, self.is_read_only) {
+            (false, false) => {
+                crate::settings::Settings::parse_color(&self.settings.appearance.header_bg)
+                    .unwrap_or(Color::Rgb { r: 0, g: 24, b: 72 })
+            }
+            (false, true) => Color::Rgb { r: 30, g: 77, b: 122 },
+            (true, false) => Color::Rgb { r: 90, g: 0, b: 0 },
+            (true, true)  => Color::Rgb { r: 122, g: 32, b: 32 },
+        }
     }
 
     pub(crate) fn absolute_line(&self) -> usize {

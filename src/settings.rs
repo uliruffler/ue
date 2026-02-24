@@ -232,9 +232,7 @@ impl Settings {
     }
 
     fn config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let home = std::env::var("UE_TEST_HOME")
-            .or_else(|_| std::env::var("HOME"))
-            .or_else(|_| std::env::var("USERPROFILE"))?;
+        let home = crate::env::resolve_home()?;
         Ok(PathBuf::from(home).join(".ue").join("settings.toml"))
     }
 }
