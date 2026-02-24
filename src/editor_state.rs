@@ -283,7 +283,7 @@ impl<'a> FileViewerState<'a> {
             }
             (false, true) => Color::Rgb { r: 30, g: 77, b: 122 },
             (true, false) => Color::Rgb { r: 90, g: 0, b: 0 },
-            (true, true)  => Color::Rgb { r: 122, g: 32, b: 32 },
+            (true, true)  => Color::Rgb { r: 120, g: 80, b: 80 },
         }
     }
 
