@@ -1277,11 +1277,11 @@ fn apply_cursor_shape(
     settings: &crate::settings::Settings,
 ) -> std::io::Result<()> {
     // Use VT escape sequence to set cursor style.
-    // block: 2 (steady) or 0 (blinking), bar: 6 (steady) or 5 (blinking), underline: 4 (steady) or 3 (blinking)
+    // block: 2 (steady) or 1 (blinking), bar: 6 (steady) or 5 (blinking), underline: 4 (steady) or 3 (blinking)
     let seq = match settings.appearance.cursor_shape.to_lowercase().as_str() {
-        "block" => "\x1b[2 q",
-        "underline" => "\x1b[4 q",
-        _ => "\x1b[6 q", // bar default
+        "block" => "\x1b[1 q",
+        "underline" => "\x1b[3 q",
+        _ => "\x1b[5 q", // blinking bar default
     };
     write!(stdout, "{}", seq)?;
     Ok(())
