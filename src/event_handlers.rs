@@ -1295,7 +1295,9 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
 
     let line = &lines[absolute_line];
     let wrap_points = calculate_word_wrap_points(line, text_width, tab_width);
-    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col >= wp).count();
+    // cursor_col == wrap_point means cursor is at the wrap indicator of the current segment
+    // (visually still on that segment), so use strict > to determine segment membership.
+    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col > wp).count();
 
     // Compute the visual column offset within the current segment.
     // This is the "screen column" the cursor is at on this visual line.
@@ -1475,7 +1477,9 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
 
     let line = &lines[absolute_line];
     let wrap_points = calculate_word_wrap_points(line, text_width, tab_width);
-    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col >= wp).count();
+    // cursor_col == wrap_point means cursor is at the wrap indicator of the current segment
+    // (visually still on that segment), so use strict > to determine segment membership.
+    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col > wp).count();
     let num_wrapped = wrap_points.len() + 1;
 
     // Compute the visual column offset within the current segment — the "screen column".
