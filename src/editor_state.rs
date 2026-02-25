@@ -123,12 +123,17 @@ pub struct FileViewerState<'a> {
     pub(crate) h_scrollbar_drag_start_x: u16,
     /// Offset within the h_scrollbar bar when dragging started
     pub(crate) h_scrollbar_drag_bar_offset: usize,
-    /// Help mode active
+    /// Help mode active (legacy — kept for tests)
     pub(crate) help_active: bool,
-    /// Help context (what help to show)
+    /// Help context (what help to show) — legacy, kept for tests
+    #[allow(dead_code)]
     pub(crate) help_context: crate::help::HelpContext,
-    /// Help scroll offset
+    /// Help scroll offset — legacy, kept for tests
+    #[allow(dead_code)]
     pub(crate) help_scroll_offset: usize,
+    /// Signals that the editing loop should open the help file for the given context.
+    /// Set by F1 / menu help actions; consumed by ui.rs to launch the viewer.
+    pub(crate) open_help_requested: Option<crate::help::HelpContext>,
     /// Horizontal scroll offset (character offset from line start)
     /// Only used when line_wrapping is false
     pub(crate) horizontal_scroll_offset: usize,
@@ -249,6 +254,7 @@ impl<'a> FileViewerState<'a> {
             help_active: false,
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
+            open_help_requested: None,
             horizontal_scroll_offset: 0,
             line_wrapping_override: None,
             last_click_time: None,

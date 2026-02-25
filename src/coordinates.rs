@@ -914,6 +914,7 @@ mod tests {
             help_active: false,
             help_context: crate::help::HelpContext::Editor,
             help_scroll_offset: 0,
+            open_help_requested: None,
             horizontal_scroll_offset: 0,
             line_wrapping_override: None,
             last_click_time: None,

@@ -1,10 +1,50 @@
 use crossterm::event::{KeyCode, KeyEvent};
+use std::path::PathBuf;
 
 /// Help page content for different contexts
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub(crate) enum HelpContext {
+pub enum HelpContext {
     Editor,
     Find,
+}
+
+/// Return the absolute path to the deployed help file for a given context.
+/// The file lives in `~/.ue/help/<name>.md`.
+pub fn get_help_file_path(context: HelpContext) -> Option<PathBuf> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .ok()?;
+    let name = match context {
+        HelpContext::Editor => "editor.md",
+        HelpContext::Find => "find.md",
+    };
+    Some(PathBuf::from(home).join(".ue").join("help").join(name))
+}
+
+/// Deploy help files to `~/.ue/help/` with keybinding placeholders replaced.
+/// Always overwrites existing files so keybinding changes take effect immediately.
+pub fn deploy_help_files(settings: &crate::settings::Settings) {
+    let home = match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
+        Ok(h) => h,
+        Err(_) => return,
+    };
+    let help_dir = PathBuf::from(&home).join(".ue").join("help");
+    if std::fs::create_dir_all(&help_dir).is_err() {
+        return;
+    }
+
+    let files: &[(&str, &str)] = &[
+        ("editor.md", include_str!("../defaults/help-editor.md")),
+        ("find.md", include_str!("../defaults/help-find.md")),
+        ("file-selector.md", include_str!("../defaults/help-file-selector.md")),
+        ("open-dialog.md", include_str!("../defaults/help-open-dialog.md")),
+    ];
+
+    for (name, content) in files {
+        let path = help_dir.join(name);
+        let replaced = replace_keybindings(content, settings);
+        let _ = std::fs::write(&path, replaced);
+    }
 }
 
 /// Replace keybinding placeholders with actual values from settings
@@ -91,7 +131,8 @@ fn load_help_from_md(
         .collect()
 }
 
-/// Get help content for the given context
+/// Get help content for the given context (used in tests; production now opens deployed files)
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn get_help_content(
     context: HelpContext,
     settings: &crate::settings::Settings,

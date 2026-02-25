@@ -495,6 +495,164 @@ fn handle_first_esc(state: &mut FileViewerState) -> bool {
     false
 }
 
+/// Open a help file in a transient read-only rendered-markdown viewer.
+/// The viewer runs its own event loop and returns when the user presses ESC or F1.
+/// The help file is NOT added to the recent-files list.
+fn view_help_file(
+    help_path: &str,
+    settings: &Settings,
+) -> std::io::Result<()> {
+    let content = match fs::read_to_string(help_path) {
+        Ok(c) => c,
+        Err(_) => return Ok(()), // silently ignore if the file doesn't exist
+    };
+
+    let mut stdout = io::stdout();
+    let (term_width, term_height) = terminal::size()?;
+
+    // Build a minimal FileViewerState for the viewer (no undo, read-only, markdown rendered)
+    let undo = crate::undo::UndoHistory::new();
+    let mut state = FileViewerState::new(term_width, undo, settings);
+    state.is_read_only = true;
+    state.markdown_rendered = true;
+    // top_line and cursor start at 0
+
+    let lines: Vec<String> = content.lines().map(String::from).collect();
+
+    // Pre-render markdown
+    let render_width = crate::help::markdown_render_width(
+        term_width as usize,
+        &state,
+        lines.len(),
+    );
+    state.rendered_lines = crate::help::render_markdown_to_lines(&lines, render_width);
+
+    // visible_lines must be mutable so the Resize handler can update it.
+    let mut visible_lines = (term_height as usize).saturating_sub(STATUS_LINE_HEIGHT);
+    state.needs_redraw = true;
+
+    execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+
+    loop {
+        if state.needs_redraw {
+            render_screen(&mut stdout, help_path, &lines, &state, visible_lines)?;
+            state.needs_redraw = false;
+        }
+
+        if !event::poll(Duration::from_millis(100))? {
+            continue;
+        }
+
+        match event::read()? {
+            Event::Key(key_event) => {
+                let key_event = crate::event_handlers::normalize_key_event(key_event, settings);
+                use crossterm::event::KeyModifiers;
+                match key_event.code {
+                    // Exit help viewer on ESC or F1
+                    KeyCode::Esc | KeyCode::F(1) => {
+                        // Clear screen before returning so the editor can redraw cleanly
+                        execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+                        return Ok(());
+                    }
+                    // Scrolling
+                    KeyCode::Up => {
+                        state.top_line = state.top_line.saturating_sub(1);
+                        state.needs_redraw = true;
+                    }
+                    KeyCode::Down => {
+                        let max_top = state
+                            .rendered_lines
+                            .len()
+                            .saturating_sub(visible_lines);
+                        state.top_line = (state.top_line + 1).min(max_top);
+                        state.needs_redraw = true;
+                    }
+                    KeyCode::PageUp => {
+                        state.top_line = state.top_line.saturating_sub(visible_lines);
+                        state.needs_redraw = true;
+                    }
+                    KeyCode::PageDown => {
+                        let max_top = state
+                            .rendered_lines
+                            .len()
+                            .saturating_sub(visible_lines);
+                        state.top_line =
+                            (state.top_line + visible_lines).min(max_top);
+                        state.needs_redraw = true;
+                    }
+                    KeyCode::Home => {
+                        state.top_line = 0;
+                        state.needs_redraw = true;
+                    }
+                    KeyCode::End => {
+                        state.top_line = state
+                            .rendered_lines
+                            .len()
+                            .saturating_sub(visible_lines);
+                        state.needs_redraw = true;
+                    }
+                    // Mouse-style wheel scroll via Ctrl+Up/Down
+                    KeyCode::Char('u')
+                        if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        state.top_line = state.top_line.saturating_sub(visible_lines / 2);
+                        state.needs_redraw = true;
+                    }
+                    KeyCode::Char('d')
+                        if key_event.modifiers.contains(KeyModifiers::CONTROL) =>
+                    {
+                        let max_top = state
+                            .rendered_lines
+                            .len()
+                            .saturating_sub(visible_lines);
+                        state.top_line =
+                            (state.top_line + visible_lines / 2).min(max_top);
+                        state.needs_redraw = true;
+                    }
+                    _ => {}
+                }
+            }
+            Event::Mouse(mouse_event) => {
+                use crossterm::event::{MouseEventKind, MouseButton};
+                match mouse_event.kind {
+                    MouseEventKind::ScrollDown => {
+                        let max_top = state
+                            .rendered_lines
+                            .len()
+                            .saturating_sub(visible_lines);
+                        state.top_line = (state.top_line + 3).min(max_top);
+                        state.needs_redraw = true;
+                    }
+                    MouseEventKind::ScrollUp => {
+                        state.top_line = state.top_line.saturating_sub(3);
+                        state.needs_redraw = true;
+                    }
+                    MouseEventKind::Down(MouseButton::Left) => {}
+                    _ => {}
+                }
+            }
+            Event::Resize(w, h) => {
+                state.term_width = w;
+                // Update visible_lines so scroll clamping in key handlers is correct.
+                visible_lines = (h as usize).saturating_sub(STATUS_LINE_HEIGHT);
+                let render_width =
+                    crate::help::markdown_render_width(w as usize, &state, lines.len());
+                state.rendered_lines =
+                    crate::help::render_markdown_to_lines(&lines, render_width);
+                // Clamp top_line to new bounds.
+                let max_top = state
+                    .rendered_lines
+                    .len()
+                    .saturating_sub(visible_lines);
+                state.top_line = state.top_line.min(max_top);
+                execute!(stdout, terminal::Clear(terminal::ClearType::All))?;
+                state.needs_redraw = true;
+            }
+            _ => {}
+        }
+    }
+}
+
 fn editing_session(
     file: &str,
     content: String,
@@ -629,21 +787,8 @@ fn editing_session(
                 );
             }
 
-            if state.help_active {
-                // Render help screen
-                let (tw, th) = terminal::size()?;
-                let help_content =
-                    crate::help::get_help_content(state.help_context, settings, tw as usize);
-                crate::help::render_help(
-                    &mut stdout,
-                    &help_content,
-                    state.help_scroll_offset,
-                    tw,
-                    th,
-                )?;
-            } else {
-                render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
-            }
+            // help_active is no longer used for rendering; help is now shown via view_help_file.
+            render_screen(&mut stdout, file, &lines, &state, visible_lines)?;
             state.needs_redraw = false;
         } else if state.needs_footer_redraw {
             // Only redraw the footer (e.g., for status messages)
@@ -729,13 +874,6 @@ fn editing_session(
                     }
                     EscResult::None => {
                         // Not an Esc key - normal handling
-
-                        // Special handling for F1 in help mode
-                        if state.help_active && matches!(key_event.code, KeyCode::F(1)) {
-                            state.help_active = false;
-                            state.needs_redraw = true;
-                            continue;
-                        }
                     }
                 }
 
@@ -753,6 +891,33 @@ fn editing_session(
                 }
                 if should_close {
                     return Ok((state.modified, None, false, true));
+                }
+
+                // Handle open-help-file request (F1 / menu help actions)
+                if let Some(context) = state.open_help_requested.take() {
+                    if let Some(help_path) = crate::help::get_help_file_path(context) {
+                        let help_path_str = help_path.to_string_lossy().to_string();
+                        view_help_file(&help_path_str, settings)?;
+                        // Re-query terminal size: the help viewer may have consumed Resize
+                        // events that editing_session never saw, leaving visible_lines and
+                        // state.term_width stale.
+                        let (new_w, new_h) = terminal::size()?;
+                        state.term_width = new_w;
+                        visible_lines = (new_h as usize).saturating_sub(STATUS_LINE_HEIGHT);
+                        // Clamp cursor within the new viewport
+                        let (new_top, rel_cursor) = crate::coordinates::adjust_view_for_resize(
+                            state.top_line,
+                            state.absolute_line(),
+                            visible_lines,
+                            lines.len(),
+                        );
+                        state.top_line = new_top;
+                        state.cursor_line = rel_cursor;
+                        // Force a full redraw to restore the editor at the correct size
+                        execute!(stdout, terminal::Clear(ClearType::All))?;
+                        state.needs_redraw = true;
+                    }
+                    continue;
                 }
 
                 // Handle close all confirmation
@@ -1140,19 +1305,46 @@ fn editing_session(
                             }
                         }
                         MenuAction::HelpEditor => {
-                            state.help_active = true;
-                            state.help_context = crate::help::HelpContext::Editor;
-                            state.help_scroll_offset = 0;
+                            if let Some(help_path) = crate::help::get_help_file_path(crate::help::HelpContext::Editor) {
+                                let help_path_str = help_path.to_string_lossy().to_string();
+                                view_help_file(&help_path_str, settings)?;
+                                let (new_w, new_h) = terminal::size()?;
+                                state.term_width = new_w;
+                                visible_lines = (new_h as usize).saturating_sub(STATUS_LINE_HEIGHT);
+                                let (new_top, rel_cursor) = crate::coordinates::adjust_view_for_resize(state.top_line, state.absolute_line(), visible_lines, lines.len());
+                                state.top_line = new_top;
+                                state.cursor_line = rel_cursor;
+                                execute!(stdout, terminal::Clear(ClearType::All))?;
+                                state.needs_redraw = true;
+                            }
                         }
                         MenuAction::HelpFind => {
-                            state.help_active = true;
-                            state.help_context = crate::help::HelpContext::Find;
-                            state.help_scroll_offset = 0;
+                            if let Some(help_path) = crate::help::get_help_file_path(crate::help::HelpContext::Find) {
+                                let help_path_str = help_path.to_string_lossy().to_string();
+                                view_help_file(&help_path_str, settings)?;
+                                let (new_w, new_h) = terminal::size()?;
+                                state.term_width = new_w;
+                                visible_lines = (new_h as usize).saturating_sub(STATUS_LINE_HEIGHT);
+                                let (new_top, rel_cursor) = crate::coordinates::adjust_view_for_resize(state.top_line, state.absolute_line(), visible_lines, lines.len());
+                                state.top_line = new_top;
+                                state.cursor_line = rel_cursor;
+                                execute!(stdout, terminal::Clear(ClearType::All))?;
+                                state.needs_redraw = true;
+                            }
                         }
                         MenuAction::HelpAbout => {
-                            state.help_active = true;
-                            state.help_context = crate::help::HelpContext::Editor;
-                            state.help_scroll_offset = 0;
+                            if let Some(help_path) = crate::help::get_help_file_path(crate::help::HelpContext::Editor) {
+                                let help_path_str = help_path.to_string_lossy().to_string();
+                                view_help_file(&help_path_str, settings)?;
+                                let (new_w, new_h) = terminal::size()?;
+                                state.term_width = new_w;
+                                visible_lines = (new_h as usize).saturating_sub(STATUS_LINE_HEIGHT);
+                                let (new_top, rel_cursor) = crate::coordinates::adjust_view_for_resize(state.top_line, state.absolute_line(), visible_lines, lines.len());
+                                state.top_line = new_top;
+                                state.cursor_line = rel_cursor;
+                                execute!(stdout, terminal::Clear(ClearType::All))?;
+                                state.needs_redraw = true;
+                            }
                         }
                     }
                 }

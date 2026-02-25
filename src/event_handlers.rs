@@ -327,24 +327,18 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::HelpEditor => {
-                state.help_active = true;
-                state.help_context = crate::help::HelpContext::Editor;
-                state.help_scroll_offset = 0;
+                state.open_help_requested = Some(crate::help::HelpContext::Editor);
                 state.needs_redraw = true;
                 return Ok((false, false));
             }
             crate::menu::MenuAction::HelpFind => {
-                state.help_active = true;
-                state.help_context = crate::help::HelpContext::Find;
-                state.help_scroll_offset = 0;
+                state.open_help_requested = Some(crate::help::HelpContext::Find);
                 state.needs_redraw = true;
                 return Ok((false, false));
             }
             crate::menu::MenuAction::HelpAbout => {
-                // Show about dialog - for now just show editor help
-                state.help_active = true;
-                state.help_context = crate::help::HelpContext::Editor;
-                state.help_scroll_offset = 0;
+                // Show editor help for now (About re-uses editor help page)
+                state.open_help_requested = Some(crate::help::HelpContext::Editor);
                 state.needs_redraw = true;
                 return Ok((false, false));
             }
@@ -509,54 +503,23 @@ pub(crate) fn handle_key_event(
         }
     }
 
-    // Handle help (F1)
+    // Handle help (F1) — signal ui.rs to open the help file in rendered view
     if matches!(code, KeyCode::F(1)) {
         // Determine help context based on current mode
-        state.help_context = if state.find_active {
+        let context = if state.find_active {
             crate::help::HelpContext::Find
         } else {
             crate::help::HelpContext::Editor
         };
-        state.help_active = true;
-        state.help_scroll_offset = 0;
+        state.open_help_requested = Some(context);
         state.needs_redraw = true;
         return Ok((false, false));
     }
 
-    // If in help mode, handle help input
+    // Legacy help_active check — should no longer be reached, but kept for safety
     if state.help_active {
-        let key_event = KeyEvent::new(code, modifiers);
-        if crate::help::handle_help_input(key_event) {
-            state.help_active = false;
-            state.needs_redraw = true;
-        } else {
-            // Handle scrolling in help
-            match code {
-                KeyCode::Up => {
-                    state.help_scroll_offset = state.help_scroll_offset.saturating_sub(1);
-                    state.needs_redraw = true;
-                }
-                KeyCode::Down => {
-                    state.help_scroll_offset = state.help_scroll_offset.saturating_add(1);
-                    state.needs_redraw = true;
-                }
-                KeyCode::PageUp => {
-                    state.help_scroll_offset =
-                        state.help_scroll_offset.saturating_sub(visible_lines);
-                    state.needs_redraw = true;
-                }
-                KeyCode::PageDown => {
-                    state.help_scroll_offset =
-                        state.help_scroll_offset.saturating_add(visible_lines);
-                    state.needs_redraw = true;
-                }
-                KeyCode::Home => {
-                    state.help_scroll_offset = 0;
-                    state.needs_redraw = true;
-                }
-                _ => {}
-            }
-        }
+        state.help_active = false;
+        state.needs_redraw = true;
         return Ok((false, false));
     }
 
@@ -2554,13 +2517,16 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
         let mut lines = create_test_lines(10);
-        // Press F1 to activate help
+        // Press F1 — should set open_help_requested instead of help_active
         let key_event = KeyEvent::new(KeyCode::F(1), KeyModifiers::empty());
         let settings = state.settings;
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
         assert!(result.is_ok());
-        assert!(state.help_active, "Help should be active after F1");
-        assert_eq!(state.help_context, crate::help::HelpContext::Editor);
+        assert_eq!(
+            state.open_help_requested,
+            Some(crate::help::HelpContext::Editor),
+            "F1 should request opening editor help"
+        );
         assert!(state.needs_redraw);
     }
     #[test]
@@ -2575,11 +2541,10 @@ mod tests {
         let settings = state.settings;
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
         assert!(result.is_ok());
-        assert!(state.help_active, "Help should be active after F1");
         assert_eq!(
-            state.help_context,
-            crate::help::HelpContext::Find,
-            "Should show Find help when in find mode"
+            state.open_help_requested,
+            Some(crate::help::HelpContext::Find),
+            "Should request Find help when in find mode"
         );
     }
     #[test]
@@ -2587,57 +2552,45 @@ mod tests {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
         let mut lines = create_test_lines(10);
-        // Activate find mode and help
+        // Activate find mode and legacy help_active
         state.find_active = true;
         state.help_active = true;
-        println!("Before handle_key_event: help_active={}, menu_bar.active={}", state.help_active, state.menu_bar.active);
-        // Press ESC to exit help (should NOT exit find mode)
+        // Press ESC to exit help (should clear help_active)
         let key_event = KeyEvent::new(KeyCode::Esc, KeyModifiers::empty());
         let settings = state.settings;
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
-        println!("After handle_key_event: help_active={}, menu_bar.active={}, result={:?}", state.help_active, state.menu_bar.active, result);
         assert!(result.is_ok());
         assert!(!state.help_active, "Help should be closed after ESC, but help_active={}", state.help_active);
-        // Note: find_active state depends on help_active being processed first
-        // The actual protection against file selector is in ui.rs
     }
     #[test]
     fn help_exits_with_f1() {
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
         let mut lines = create_test_lines(10);
-        // Activate help
-        state.help_active = true;
-        // Press F1 to toggle help off
+        // Press F1 — should request help (open_help_requested is set)
         let key_event = KeyEvent::new(KeyCode::F(1), KeyModifiers::empty());
         let settings = state.settings;
         let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
         assert!(result.is_ok());
-        // F1 toggles, so if we're in help and press F1, it activates again (cycles)
-        // Actually checking the handler - it sets help_active = true
-        assert!(state.help_active, "F1 always activates help");
+        assert!(
+            state.open_help_requested.is_some(),
+            "F1 should always request help"
+        );
     }
     #[test]
     fn help_scroll_navigation() {
+        // With the new system, scroll navigation happens inside view_help_file (ui.rs).
+        // This test now only verifies that F1 sets open_help_requested correctly.
         let (_tmp, _guard) = set_temp_home();
         let mut state = create_test_state();
         let mut lines = create_test_lines(10);
-        // Activate help
-        state.help_active = true;
-        state.help_scroll_offset = 5;
-        // Test scrolling up
-        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let key_event = KeyEvent::new(KeyCode::F(1), KeyModifiers::empty());
         let settings = state.settings;
         let _ = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
-        assert_eq!(state.help_scroll_offset, 4, "Should scroll up");
-        // Test scrolling down
-        let key_event = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
-        let _ = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
-        assert_eq!(state.help_scroll_offset, 5, "Should scroll down");
-        // Test Home
-        let key_event = KeyEvent::new(KeyCode::Home, KeyModifiers::empty());
-        let _ = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
-        assert_eq!(state.help_scroll_offset, 0, "Should scroll to top");
+        assert!(
+            state.open_help_requested.is_some(),
+            "F1 should set open_help_requested"
+        );
     }
 
     #[test]

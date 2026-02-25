@@ -17,6 +17,12 @@ struct Cli {
 fn main() -> std::io::Result<()> {
     let _ = default_syntax::deploy_default_syntax_files();
 
+    // Deploy help files to ~/.ue/help/ with keybinding substitutions applied.
+    // This is done before the terminal takes over so file I/O doesn't race with rendering.
+    if let Ok(settings) = ue::settings::Settings::load() {
+        ue::help::deploy_help_files(&settings);
+    }
+
     let cli = Cli::parse();
 
     if cli.print_keys {
