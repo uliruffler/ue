@@ -306,9 +306,9 @@ pub(crate) fn handle_key_event(
                     state.markdown_rendered = !state.markdown_rendered;
                     if state.markdown_rendered {
                         // Populate rendered lines
-                        let term_width = state.term_width as usize;
+                        let render_width = crate::help::markdown_render_width(state.term_width as usize, state, lines.len());
                         state.rendered_lines =
-                            crate::help::render_markdown_to_lines(lines, term_width);
+                            crate::help::render_markdown_to_lines(lines, render_width);
                         // Reset scroll/cursor to top so user starts at beginning of rendered view
                         state.top_line = 0;
                         state.cursor_line = 0;

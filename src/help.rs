@@ -32,6 +32,16 @@ fn replace_keybindings(content: &str, settings: &crate::settings::Settings) -> S
         )
 }
 
+/// Compute the width (in terminal columns) that termimad should wrap to, given the
+/// full terminal width and the editor state.  The gutter (line-number digits + separator)
+/// and the scrollbar column are subtracted so that the rendered text fits exactly in the
+/// available content area without overflowing or wrapping too late.
+pub(crate) fn markdown_render_width(term_width: usize, state: &crate::editor_state::FileViewerState, line_count: usize) -> usize {
+    let gutter = crate::coordinates::line_number_display_width(state.settings, line_count) as usize;
+    let scrollbar = 1;
+    term_width.saturating_sub(gutter + scrollbar)
+}
+
 /// Render markdown document content to display lines using the same termimad pipeline
 /// as the help system. No keybinding substitution is performed — the content is rendered
 /// as-is. Suitable for showing `.md` files in "rendered" view mode.

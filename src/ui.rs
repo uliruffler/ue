@@ -932,8 +932,9 @@ fn editing_session(
                 state.desired_cursor_col = cursor_col;
                 // Regenerate rendered markdown at new width if rendered mode is active
                 if state.markdown_rendered {
+                    let render_width = crate::help::markdown_render_width(w as usize, &state, lines.len());
                     state.rendered_lines =
-                        crate::help::render_markdown_to_lines(&lines, w as usize);
+                        crate::help::render_markdown_to_lines(&lines, render_width);
                 }
                 execute!(stdout, terminal::Clear(ClearType::All))?;
                 state.needs_redraw = true;
@@ -1121,9 +1122,9 @@ fn editing_session(
                             if crate::menu::is_markdown_file(file) {
                                 state.markdown_rendered = !state.markdown_rendered;
                                 if state.markdown_rendered {
-                                    let term_width = state.term_width as usize;
+                                    let render_width = crate::help::markdown_render_width(state.term_width as usize, &state, lines.len());
                                     state.rendered_lines =
-                                        crate::help::render_markdown_to_lines(&lines, term_width);
+                                        crate::help::render_markdown_to_lines(&lines, render_width);
                                     state.top_line = 0;
                                     state.cursor_line = 0;
                                     state.cursor_col = 0;
