@@ -32,6 +32,26 @@ fn replace_keybindings(content: &str, settings: &crate::settings::Settings) -> S
         )
 }
 
+/// Render markdown document content to display lines using the same termimad pipeline
+/// as the help system. No keybinding substitution is performed — the content is rendered
+/// as-is. Suitable for showing `.md` files in "rendered" view mode.
+///
+/// Returns a `Vec<String>` of display lines that may contain ANSI escape codes.
+pub(crate) fn render_markdown_to_lines(content_lines: &[String], term_width: usize) -> Vec<String> {
+    use termimad::{Area, MadSkin};
+
+    let content = content_lines.join("\n");
+    let skin = MadSkin::default();
+    let area = Area::new(0, 0, term_width as u16, u16::MAX);
+    let fmt_text = skin.area_text(&content, &area);
+
+    fmt_text
+        .to_string()
+        .lines()
+        .map(|line| line.to_string())
+        .collect()
+}
+
 /// Load and format help content from markdown file
 /// Renders markdown (including tables) to terminal-formatted text
 fn load_help_from_md(
@@ -92,6 +112,14 @@ pub(crate) fn get_open_dialog_help(
         settings,
         term_width,
     )
+}
+
+/// Truncate a rendered (ANSI-escaped) line to fit within `max_width` visual columns.
+/// ANSI escape sequences are counted as zero-width.
+/// This is the same logic as the private `truncate_to_width` but exposed for use by
+/// `rendering.rs` when displaying rendered markdown in the editor content area.
+pub(crate) fn truncate_rendered_line(text: &str, max_width: usize) -> String {
+    truncate_to_width(text, max_width)
 }
 
 /// Truncate a string to a maximum display width, handling UTF-8 and ANSI escape codes

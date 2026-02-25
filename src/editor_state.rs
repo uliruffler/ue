@@ -161,6 +161,13 @@ pub struct FileViewerState<'a> {
     pub(crate) is_read_only: bool,
     /// Whether the editor was started with elevated privileges (sudo/root)
     pub(crate) is_sudo: bool,
+    /// Whether the current file is displayed in rendered markdown mode.
+    /// When true, `rendered_lines` are shown instead of the raw source lines.
+    /// Only active for markdown files (.md / .markdown).
+    pub(crate) markdown_rendered: bool,
+    /// Pre-rendered markdown display lines (populated when `markdown_rendered` is true).
+    /// Contains ANSI-escaped text produced by termimad; treated as read-only display content.
+    pub(crate) rendered_lines: Vec<String>,
     /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
     /// previous segment (true) or at the start of the next segment (false)
     /// Only meaningful when cursor_col is exactly at a wrap point
@@ -255,6 +262,8 @@ impl<'a> FileViewerState<'a> {
             is_untitled: false,
             is_read_only: false,
             is_sudo: false,
+            markdown_rendered: false,
+            rendered_lines: Vec::new(),
             cursor_at_wrap_end: false,
             status_message: None,
             line_number_drag_active: false,
@@ -266,17 +275,18 @@ impl<'a> FileViewerState<'a> {
     }
 
     /// Returns the effective background color for the UI chrome (header, footer, line
-    /// numbers, menu, scrollbar) based on sudo and read-only state:
+    /// numbers, menu, scrollbar) based on sudo, read-only, and rendered-markdown state:
     ///
-    /// | sudo | read-only | color      |
-    /// |------|-----------|------------|
-    /// | no   | no        | configured |
-    /// | no   | yes       | pale blue  |
-    /// | yes  | no        | deep red   |
-    /// | yes  | yes       | pale red   |
+    /// | sudo | read-only / rendered | color      |
+    /// |------|----------------------|------------|
+    /// | no   | no                   | configured |
+    /// | no   | yes                  | pale blue  |
+    /// | yes  | no                   | deep red   |
+    /// | yes  | yes                  | pale red   |
     pub(crate) fn effective_theme_bg(&self) -> crossterm::style::Color {
         use crossterm::style::Color;
-        match (self.is_sudo, self.is_read_only) {
+        let effectively_read_only = self.is_read_only || self.markdown_rendered;
+        match (self.is_sudo, effectively_read_only) {
             (false, false) => {
                 crate::settings::Settings::parse_color(&self.settings.appearance.header_bg)
                     .unwrap_or(Color::Rgb { r: 0, g: 24, b: 72 })
@@ -564,6 +574,13 @@ impl<'a> FileViewerState<'a> {
     /// Check if line wrapping is currently enabled (considers runtime override)
     pub(crate) fn is_line_wrapping_enabled(&self) -> bool {
         self.line_wrapping_override.unwrap_or(self.settings.line_wrapping)
+    }
+
+    /// Check if editing is blocked.
+    /// Editing is blocked when the file is read-only OR when the rendered markdown view is
+    /// active (the rendered view is intentionally read-only for now).
+    pub(crate) fn is_editing_blocked(&self) -> bool {
+        self.is_read_only || self.markdown_rendered
     }
 
     /// Toggle line wrapping at runtime

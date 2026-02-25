@@ -615,6 +615,14 @@ fn editing_session(
                     crate::menu::MenuAction::ViewLineWrap,
                     state.is_line_wrapping_enabled()
                 );
+                state.menu_bar.update_checkable(
+                    crate::menu::MenuAction::ViewMarkdownRendered,
+                    state.markdown_rendered,
+                );
+                state.menu_bar.set_item_enabled(
+                    crate::menu::MenuAction::ViewMarkdownRendered,
+                    crate::menu::is_markdown_file(file),
+                );
             }
 
             if state.help_active {
@@ -644,7 +652,15 @@ fn editing_session(
                 crate::menu::MenuAction::ViewLineWrap,
                 state.is_line_wrapping_enabled()
             );
-            
+            state.menu_bar.update_checkable(
+                crate::menu::MenuAction::ViewMarkdownRendered,
+                state.markdown_rendered,
+            );
+            state.menu_bar.set_item_enabled(
+                crate::menu::MenuAction::ViewMarkdownRendered,
+                crate::menu::is_markdown_file(file),
+            );
+
             // Menu is open and needs redraw - render the dropdown menu overlay
             crate::menu::render_dropdown_menu(&mut stdout, &state.menu_bar, &state, &lines, state.effective_theme_bg())?;
             state.menu_bar.needs_redraw = false;
@@ -906,6 +922,11 @@ fn editing_session(
                 state.cursor_line = rel_cursor;
                 state.cursor_col = cursor_col;
                 state.desired_cursor_col = cursor_col;
+                // Regenerate rendered markdown at new width if rendered mode is active
+                if state.markdown_rendered {
+                    state.rendered_lines =
+                        crate::help::render_markdown_to_lines(&lines, w as usize);
+                }
                 execute!(stdout, terminal::Clear(ClearType::All))?;
                 state.needs_redraw = true;
             }
@@ -1086,6 +1107,27 @@ fn editing_session(
                                 crate::menu::MenuAction::ViewLineWrap,
                                 state.is_line_wrapping_enabled()
                             );
+                        }
+                        MenuAction::ViewMarkdownRendered => {
+                            if crate::menu::is_markdown_file(file) {
+                                state.markdown_rendered = !state.markdown_rendered;
+                                if state.markdown_rendered {
+                                    let term_width = state.term_width as usize;
+                                    state.rendered_lines =
+                                        crate::help::render_markdown_to_lines(&lines, term_width);
+                                    state.top_line = 0;
+                                    state.cursor_line = 0;
+                                    state.cursor_col = 0;
+                                } else {
+                                    state.rendered_lines.clear();
+                                }
+                                // Clear the whole screen to remove ANSI artifacts from the previous mode
+                                execute!(stdout, terminal::Clear(ClearType::All))?;
+                                state.menu_bar.update_checkable(
+                                    crate::menu::MenuAction::ViewMarkdownRendered,
+                                    state.markdown_rendered,
+                                );
+                            }
                         }
                         MenuAction::HelpEditor => {
                             state.help_active = true;

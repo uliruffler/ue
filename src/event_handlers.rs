@@ -220,8 +220,8 @@ pub(crate) fn handle_key_event(
                 return Ok((true, false));
             }
             crate::menu::MenuAction::EditUndo => {
-                if state.is_read_only {
-                    state.status_message = Some("File is read-only".to_string());
+                if state.is_editing_blocked() {
+                    state.status_message = Some(if state.markdown_rendered { "Switch to plain view to edit".to_string() } else { "File is read-only".to_string() });
                     state.needs_footer_redraw = true;
                     return Ok((false, false));
                 }
@@ -231,8 +231,8 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::EditRedo => {
-                if state.is_read_only {
-                    state.status_message = Some("File is read-only".to_string());
+                if state.is_editing_blocked() {
+                    state.status_message = Some(if state.markdown_rendered { "Switch to plain view to edit".to_string() } else { "File is read-only".to_string() });
                     state.needs_footer_redraw = true;
                     return Ok((false, false));
                 }
@@ -246,8 +246,8 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::EditCut => {
-                if state.is_read_only {
-                    state.status_message = Some("File is read-only".to_string());
+                if state.is_editing_blocked() {
+                    state.status_message = Some(if state.markdown_rendered { "Switch to plain view to edit".to_string() } else { "File is read-only".to_string() });
                     state.needs_footer_redraw = true;
                     return Ok((false, false));
                 }
@@ -257,8 +257,8 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::EditPaste => {
-                if state.is_read_only {
-                    state.status_message = Some("File is read-only".to_string());
+                if state.is_editing_blocked() {
+                    state.status_message = Some(if state.markdown_rendered { "Switch to plain view to edit".to_string() } else { "File is read-only".to_string() });
                     state.needs_footer_redraw = true;
                     return Ok((false, false));
                 }
@@ -296,6 +296,32 @@ pub(crate) fn handle_key_event(
                 // Toggle line wrapping
                 state.toggle_line_wrapping();
                 state.needs_redraw = true;
+                return Ok((false, false));
+            }
+            crate::menu::MenuAction::ViewMarkdownRendered => {
+                // Toggle rendered markdown view (only active for .md files)
+                if crate::menu::is_markdown_file(filename) {
+                    state.markdown_rendered = !state.markdown_rendered;
+                    if state.markdown_rendered {
+                        // Populate rendered lines
+                        let term_width = state.term_width as usize;
+                        state.rendered_lines =
+                            crate::help::render_markdown_to_lines(lines, term_width);
+                        // Reset scroll/cursor to top so user starts at beginning of rendered view
+                        state.top_line = 0;
+                        state.cursor_line = 0;
+                        state.cursor_col = 0;
+                    } else {
+                        // Clear rendered lines to free memory
+                        state.rendered_lines.clear();
+                    }
+                    // Clear the whole screen to remove ANSI artifacts from the previous mode
+                    let _ = crossterm::execute!(
+                        std::io::stdout(),
+                        crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+                    );
+                    state.needs_redraw = true;
+                }
                 return Ok((false, false));
             }
             crate::menu::MenuAction::HelpEditor => {
@@ -790,7 +816,7 @@ pub(crate) fn handle_key_event(
 
     // Handle undo
     if settings.keybindings.undo_matches(&code, &modifiers) {
-        if !state.is_read_only {
+        if !state.is_editing_blocked() {
             if apply_undo(state, lines, filename, visible_lines) {
                 state.needs_redraw = true;
             }
@@ -800,7 +826,7 @@ pub(crate) fn handle_key_event(
 
     // Handle redo
     if settings.keybindings.redo_matches(&code, &modifiers) {
-        if !state.is_read_only {
+        if !state.is_editing_blocked() {
             if apply_redo(state, lines, filename, visible_lines) {
                 state.needs_redraw = true;
             }
@@ -816,7 +842,7 @@ pub(crate) fn handle_key_event(
 
     // Handle paste
     if settings.keybindings.paste_matches(&code, &modifiers) {
-        if !state.is_read_only {
+        if !state.is_editing_blocked() {
             if handle_paste(state, lines, filename) {
                 state.needs_redraw = true;
             }
@@ -826,7 +852,7 @@ pub(crate) fn handle_key_event(
 
     // Handle cut
     if settings.keybindings.cut_matches(&code, &modifiers) {
-        if !state.is_read_only {
+        if !state.is_editing_blocked() {
             if handle_cut(state, lines, filename) { /* already set redraw */ }
         }
         return Ok((false, false));
@@ -838,7 +864,7 @@ pub(crate) fn handle_key_event(
     if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
         && (matches!(code, KeyCode::Backspace) || matches!(code, KeyCode::Char('h')))
     {
-        if !state.is_read_only {
+        if !state.is_editing_blocked() {
             use crate::editing::delete_word_backward;
             if delete_word_backward(state, lines, filename) {
                 state.modified = true;
@@ -851,7 +877,7 @@ pub(crate) fn handle_key_event(
     if (modifiers.contains(KeyModifiers::CONTROL) || modifiers.contains(KeyModifiers::ALT))
         && matches!(code, KeyCode::Delete)
     {
-        if !state.is_read_only {
+        if !state.is_editing_blocked() {
             use crate::editing::delete_word_forward;
             if delete_word_forward(state, lines, filename) {
                 state.modified = true;
@@ -930,12 +956,22 @@ pub(crate) fn handle_key_event(
         }
     }
 
-    let did_edit = if state.is_read_only {
+    let did_edit = if state.is_editing_blocked() {
         false
     } else {
         handle_editing_keys(state, lines, &code, &modifiers, visible_lines, filename)
     };
-    let moved = handle_navigation(state, lines, code, visible_lines);
+
+    // In rendered mode, navigate the rendered display lines rather than the raw source.
+    // We need to clone to avoid borrowing state mutably while it's borrowed immutably.
+    let rendered_lines_owned: Vec<String>;
+    let effective_lines: &[String] = if state.markdown_rendered && !state.rendered_lines.is_empty() {
+        rendered_lines_owned = state.rendered_lines.clone();
+        &rendered_lines_owned
+    } else {
+        lines
+    };
+    let moved = handle_navigation(state, effective_lines, code, visible_lines);
 
     // After editing or navigation, ensure cursor is visible (handles line wrapping auto-scroll)
     if did_edit || moved {

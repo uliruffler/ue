@@ -145,21 +145,34 @@ pub(crate) fn render_screen(
     execute!(stdout, cursor::Hide)?;
     execute!(stdout, cursor::MoveTo(0, 0))?;
 
+    // When rendered markdown mode is active, use the pre-rendered lines for everything
+    // except the header title (which still uses the raw `lines` count for size info).
+    let display_lines: &[String] = if state.markdown_rendered && !state.rendered_lines.is_empty() {
+        &state.rendered_lines
+    } else {
+        lines
+    };
+
+
     render_header(stdout, file, state, lines, visible_lines)?;
 
-    // Render content first (normal rendering)
-    render_visible_lines(stdout, file, lines, state, visible_lines)?;
-    render_scrollbar(stdout, lines, state, visible_lines)?;
-    render_footer(stdout, state, lines, visible_lines)?;
+    if state.markdown_rendered && !state.rendered_lines.is_empty() {
+        // Rendered mode: display pre-formatted ANSI markdown output with line numbers/scrollbar
+        render_visible_lines_rendered(stdout, display_lines, state, visible_lines)?;
+    } else {
+        render_visible_lines(stdout, file, lines, state, visible_lines)?;
+    }
+    render_scrollbar(stdout, display_lines, state, visible_lines)?;
+    render_footer(stdout, state, display_lines, visible_lines)?;
     // Render h-scrollbar over the last content line (row visible_lines)
-    render_horizontal_scrollbar(stdout, lines, state, visible_lines)?;
+    render_horizontal_scrollbar(stdout, display_lines, state, visible_lines)?;
 
     // Then render dropdown menu OVER the content if active
     if state.menu_bar.active && state.menu_bar.dropdown_open {
         crate::menu::render_dropdown_menu(stdout, &state.menu_bar, state, lines, effective_theme_bg(state))?;
     }
 
-    position_cursor(stdout, lines, state, visible_lines)?;
+    position_cursor(stdout, display_lines, state, visible_lines)?;
 
     stdout.flush()?;
     Ok(())
@@ -289,7 +302,8 @@ fn render_header(
 
         // For untitled files, show a special indicator
         if state.is_untitled {
-            let title = format!("{} {} (unsaved)", modified_indicator, filename);
+            let rendered_tag = if state.markdown_rendered { " [Rendered]" } else { "" };
+            let title = format!("{} {} (unsaved){}", modified_indicator, filename, rendered_tag);
             // Truncate if necessary
             let truncated_title = if visual_width(&title, 4) > available_width {
                 truncate_to_width(&title, available_width)
@@ -299,11 +313,12 @@ fn render_header(
             write!(stdout, "{}", truncated_title)?;
         } else {
             // For normal files, try to fit filename and directory
+            let rendered_tag = if state.markdown_rendered { " [Rendered]" } else { "" };
             let mut display = format!("{} {} (", modified_indicator, filename);
             let base_width = visual_width(&display, 4);
 
-            // Reserve space for closing parenthesis
-            let reserved = 1; // for closing )
+            // Reserve space for closing parenthesis and optional rendered tag
+            let reserved = 1 + rendered_tag.len(); // for closing ) and rendered tag
 
             let available_for_path = available_width.saturating_sub(base_width + reserved);
 
@@ -316,6 +331,7 @@ fn render_header(
 
             display.push_str(&shortened_parent);
             display.push(')');
+            display.push_str(rendered_tag);
 
             // Final truncation of entire display if still too long
             let final_display = if visual_width(&display, 4) > available_width {
@@ -951,6 +967,103 @@ fn render_visible_lines(
     Ok(())
 }
 
+/// Render pre-formatted rendered markdown lines (from `state.rendered_lines`) in the
+/// content area with the same line-number gutter and scrollbar clearance as the normal
+/// view.  No syntax highlighting, wrapping or cursor-in-content logic is applied because
+/// the lines already contain ANSI formatting produced by termimad.
+fn render_visible_lines_rendered(
+    stdout: &mut impl Write,
+    rendered_lines: &[String],
+    state: &FileViewerState,
+    visible_lines: usize,
+) -> Result<(), std::io::Error> {
+    // In rendered mode, the horizontal scrollbar is never shown (rendered lines wrap internally).
+    let content_lines = visible_lines;
+
+    let line_num_digits = state.settings.appearance.line_number_digits as usize;
+    let total_lines = rendered_lines.len();
+    let modulus = if line_num_digits > 0 {
+        10usize.pow(state.settings.appearance.line_number_digits as u32)
+    } else {
+        1
+    };
+
+    let term_width = state.term_width as usize;
+    let gutter_width = if line_num_digits > 0 { line_num_digits + 1 } else { 0 };
+    // Reserve 1 column for the scrollbar on the right — same as clear_to_scrollbar.
+    let display_width = term_width.saturating_sub(gutter_width + 1);
+    // The scrollbar column is the last column; we stop before it.
+    let scrollbar_col = (term_width.saturating_sub(1)) as u16;
+
+    for screen_row in 0..content_lines {
+        // Row 0 is the header; content starts at row 1.
+        execute!(stdout, cursor::MoveTo(0, (screen_row + 1) as u16))?;
+
+        let logical_line_index = state.top_line + screen_row;
+        let mut current_col = 0u16;
+
+        if logical_line_index < total_lines {
+            let line = &rendered_lines[logical_line_index];
+
+            // --- Gutter (no cursor highlight in rendered/read-only view) ---
+            if line_num_digits > 0 {
+                let line_num = (logical_line_index + 1) % modulus;
+                execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
+                write!(stdout, "{:width$} ", line_num, width = line_num_digits)?;
+                execute!(stdout, ResetColor)?;
+                current_col = gutter_width as u16;
+            }
+
+            // --- Content ---
+            let display_line = crate::help::truncate_rendered_line(line, display_width);
+            write!(stdout, "{}", display_line)?;
+            // Reset any ANSI state the termimad line may have left open.
+            execute!(stdout, ResetColor)?;
+            // Measure the visual width of what we just wrote (ignoring ANSI escapes)
+            // so we know how many padding spaces are needed.
+            let content_visual_width = visual_width_of_ansi_str(&display_line) as u16;
+            current_col += content_visual_width;
+        } else {
+            // Past end of document — just write the gutter and leave the rest for padding.
+            if line_num_digits > 0 {
+                execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
+                write!(stdout, "{:width$} ", "", width = line_num_digits)?;
+                execute!(stdout, ResetColor)?;
+                current_col = gutter_width as u16;
+            }
+        }
+
+        // Pad with spaces up to (but not including) the scrollbar column.
+        // This overwrites any stale characters from a previous longer line without
+        // touching the scrollbar column, so render_scrollbar only writes it once.
+        if current_col < scrollbar_col {
+            let spaces = (scrollbar_col - current_col) as usize;
+            write!(stdout, "{}", " ".repeat(spaces))?;
+        }
+    }
+
+    Ok(())
+}
+
+/// Return the visual width of a string that may contain ANSI escape sequences.
+/// Escape sequences contribute zero columns; all other characters count as 1.
+fn visual_width_of_ansi_str(s: &str) -> usize {
+    let mut width = 0;
+    let mut in_escape = false;
+    for ch in s.chars() {
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            width += 1;
+        }
+    }
+    width
+}
+
 struct RenderContext<'a> {
     lines: &'a [String],
     state: &'a FileViewerState<'a>,
@@ -1386,6 +1499,12 @@ fn position_cursor(
 ) -> Result<(), std::io::Error> {
     // If menu is active, keep cursor hidden
     if state.menu_bar.active {
+        return Ok(());
+    }
+
+    // In rendered markdown mode the view is read-only; hide the cursor entirely.
+    if state.markdown_rendered {
+        execute!(stdout, cursor::Hide)?;
         return Ok(());
     }
 

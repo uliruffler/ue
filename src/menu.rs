@@ -19,13 +19,19 @@ pub(crate) fn check_file_has_unsaved_changes(file_path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+/// Check if a file path represents a Markdown file (.md or .markdown extension).
+pub(crate) fn is_markdown_file(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
+}
+
 /// Menu item types.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum MenuItem {
     /// A selectable action with a label.
     Action { label: String, action: MenuAction },
     /// A toggleable item with a checkmark.
-    Checkable { label: String, action: MenuAction, checked: bool },
+    Checkable { label: String, action: MenuAction, checked: bool, enabled: bool },
     /// A visual divider between groups of items.
     Separator,
 }
@@ -51,6 +57,7 @@ pub(crate) enum MenuAction {
     EditFind,
     // View menu
     ViewLineWrap,
+    ViewMarkdownRendered,
     // Help menu
     HelpEditor,
     HelpFind,
@@ -85,7 +92,7 @@ fn action(label: &str, action: MenuAction) -> MenuItem {
 
 /// Helper to create a checkable menu item.
 fn checkable(label: &str, action: MenuAction, checked: bool) -> MenuItem {
-    MenuItem::Checkable { label: label.to_string(), action, checked }
+    MenuItem::Checkable { label: label.to_string(), action, checked, enabled: true }
 }
 
 /// Count file entries in the file section of the File menu.
@@ -159,7 +166,10 @@ impl MenuBar {
             Menu::new(
                 "View",
                 'v',
-                vec![checkable("Line Wrap", MenuAction::ViewLineWrap, false)],
+                vec![
+                    checkable("Line Wrap", MenuAction::ViewLineWrap, false),
+                    checkable("Rendered", MenuAction::ViewMarkdownRendered, false),
+                ],
             ),
             Menu::new(
                 "Help",
@@ -264,12 +274,16 @@ impl MenuBar {
         let step = |i: usize| {
             if forward { (i + 1) % len } else if i == 0 { len - 1 } else { i - 1 }
         };
+        let is_skippable = |item: &MenuItem| {
+            matches!(item, MenuItem::Separator)
+                || matches!(item, MenuItem::Checkable { enabled, .. } if !enabled)
+        };
         let mut next = step(current);
         let start = next;
-        while matches!(menu.items[next], MenuItem::Separator) {
+        while is_skippable(&menu.items[next]) {
             next = step(next);
             if next == start {
-                break; // All items are separators — shouldn't happen.
+                break; // All items are separators/disabled — shouldn't happen.
             }
         }
         next
@@ -317,7 +331,9 @@ impl MenuBar {
     /// Return the action for the currently highlighted item, if any.
     pub(crate) fn get_selected_action(&self) -> Option<MenuAction> {
         match &self.menus[self.selected_menu_index].items[self.selected_item_index] {
-            MenuItem::Action { action, .. } | MenuItem::Checkable { action, .. } => Some(*action),
+            MenuItem::Action { action, .. } => Some(*action),
+            MenuItem::Checkable { action, enabled, .. } if *enabled => Some(*action),
+            MenuItem::Checkable { .. } => None,
             MenuItem::Separator => None,
         }
     }
@@ -329,6 +345,19 @@ impl MenuBar {
                 if let MenuItem::Checkable { action, checked: item_checked, .. } = item {
                     if *action == target {
                         *item_checked = checked;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update the enabled state of a checkable item (grays it out when disabled).
+    pub(crate) fn set_item_enabled(&mut self, target: MenuAction, enabled: bool) {
+        for menu in &mut self.menus {
+            for item in &mut menu.items {
+                if let MenuItem::Checkable { action, enabled: item_enabled, .. } = item {
+                    if *action == target {
+                        *item_enabled = enabled;
                     }
                 }
             }
@@ -666,9 +695,16 @@ fn render_menu_item(
         MenuItem::Action { label, .. } => {
             execute!(stdout, Print(format!(" {:<width$} ", label, width = max_width - 2)))?;
         }
-        MenuItem::Checkable { label, checked, .. } => {
+        MenuItem::Checkable { label, checked, enabled, .. } => {
             let check = if *checked { "✓" } else { " " };
-            execute!(stdout, Print(format!(" [{}] {:<width$} ", check, label, width = max_width - 6)))?;
+            if !enabled {
+                use crossterm::style::{SetForegroundColor, Color, ResetColor};
+                execute!(stdout, SetForegroundColor(Color::DarkGrey))?;
+                execute!(stdout, Print(format!(" [{}] {:<width$} ", check, label, width = max_width - 6)))?;
+                execute!(stdout, ResetColor)?;
+            } else {
+                execute!(stdout, Print(format!(" [{}] {:<width$} ", check, label, width = max_width - 6)))?;
+            }
         }
         MenuItem::Separator => {
             execute!(stdout, Print(format!(" {} ", "─".repeat(max_width - 2))))?;
@@ -888,14 +924,19 @@ fn handle_menu_label_click(
     (None, true)
 }
 
-/// Select and activate the item at the given dropdown row, if it is not a separator.
+/// Select and activate the item at the given dropdown row, if it is not a separator or disabled.
 fn handle_dropdown_item_click(
     menu_bar: &mut MenuBar,
     row: usize,
 ) -> (Option<MenuAction>, bool) {
     let item_idx = row - 1;
+    let is_disabled = matches!(
+        menu_bar.menus[menu_bar.selected_menu_index].items.get(item_idx),
+        Some(MenuItem::Checkable { enabled, .. }) if !enabled
+    );
     if item_idx < menu_bar.menus[menu_bar.selected_menu_index].items.len()
         && !matches!(menu_bar.menus[menu_bar.selected_menu_index].items[item_idx], MenuItem::Separator)
+        && !is_disabled
     {
         menu_bar.selected_item_index = item_idx;
         let action = menu_bar.get_selected_action();
@@ -915,8 +956,10 @@ fn handle_dropdown_hover(
     }
     let item_idx = row - 1;
     let items = &menu_bar.menus[menu_bar.selected_menu_index].items;
+    let is_skippable = matches!(items.get(item_idx), Some(MenuItem::Separator))
+        || matches!(items.get(item_idx), Some(MenuItem::Checkable { enabled, .. }) if !enabled);
     if item_idx < items.len()
-        && !matches!(items[item_idx], MenuItem::Separator)
+        && !is_skippable
         && menu_bar.selected_item_index != item_idx
     {
         menu_bar.selected_item_index = item_idx;
