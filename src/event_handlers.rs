@@ -293,9 +293,11 @@ pub(crate) fn handle_key_event(
                 return Ok((false, false));
             }
             crate::menu::MenuAction::ViewLineWrap => {
-                // Toggle line wrapping
-                state.toggle_line_wrapping();
-                state.needs_redraw = true;
+                // Toggle line wrapping — has no effect in rendered mode
+                if !state.markdown_rendered {
+                    state.toggle_line_wrapping();
+                    state.needs_redraw = true;
+                }
                 return Ok((false, false));
             }
             crate::menu::MenuAction::ViewMarkdownRendered => {
@@ -887,11 +889,12 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
-    // Handle toggle line wrap (Alt+w by default)
+    // Handle toggle line wrap (Alt+w by default) — no-op in rendered mode
     if settings.keybindings.toggle_line_wrap_matches(&code, &modifiers) {
-        // Toggle line wrapping at runtime (not persisted to config file)
-        state.toggle_line_wrapping();
-        state.needs_redraw = true;
+        if !state.markdown_rendered {
+            state.toggle_line_wrapping();
+            state.needs_redraw = true;
+        }
         return Ok((false, false));
     }
 

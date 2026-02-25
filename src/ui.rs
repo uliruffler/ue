@@ -615,6 +615,10 @@ fn editing_session(
                     crate::menu::MenuAction::ViewLineWrap,
                     state.is_line_wrapping_enabled()
                 );
+                state.menu_bar.set_item_enabled(
+                    crate::menu::MenuAction::ViewLineWrap,
+                    !state.markdown_rendered,
+                );
                 state.menu_bar.update_checkable(
                     crate::menu::MenuAction::ViewMarkdownRendered,
                     state.markdown_rendered,
@@ -651,6 +655,10 @@ fn editing_session(
             state.menu_bar.update_checkable(
                 crate::menu::MenuAction::ViewLineWrap,
                 state.is_line_wrapping_enabled()
+            );
+            state.menu_bar.set_item_enabled(
+                crate::menu::MenuAction::ViewLineWrap,
+                !state.markdown_rendered,
             );
             state.menu_bar.update_checkable(
                 crate::menu::MenuAction::ViewMarkdownRendered,
@@ -1101,12 +1109,13 @@ fn editing_session(
                             state.find_error = None;
                         }
                         MenuAction::ViewLineWrap => {
-                            state.toggle_line_wrapping();
-                            // Update menu checkbox to reflect new state
-                            state.menu_bar.update_checkable(
-                                crate::menu::MenuAction::ViewLineWrap,
-                                state.is_line_wrapping_enabled()
-                            );
+                            if !state.markdown_rendered {
+                                state.toggle_line_wrapping();
+                                state.menu_bar.update_checkable(
+                                    crate::menu::MenuAction::ViewLineWrap,
+                                    state.is_line_wrapping_enabled()
+                                );
+                            }
                         }
                         MenuAction::ViewMarkdownRendered => {
                             if crate::menu::is_markdown_file(file) {
