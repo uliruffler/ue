@@ -699,9 +699,57 @@ pub(crate) fn handle_continuous_auto_scroll(
     scrolled
 }
 
+/// Handle double-click word selection in rendered mode.
+/// Operates on the plain-text of the rendered line (ANSI stripped) exactly like the
+/// plain-view `handle_double_click`, using the shared `find_word_start` / `find_word_end`
+/// helpers.
+fn handle_rendered_double_click(
+    state: &mut FileViewerState,
+    rendered_line_index: usize,
+    col: usize,
+) {
+    if rendered_line_index >= state.rendered_lines.len() {
+        return;
+    }
+    let plain = crate::rendering::strip_ansi(&state.rendered_lines[rendered_line_index]);
+    let word_start = find_word_start(&plain, col);
+    let word_end = find_word_end(&plain, col);
+    state.rendered_selection_start = Some((rendered_line_index, word_start));
+    state.rendered_selection_end = Some((rendered_line_index, word_end));
+    // Do NOT set rendered_mouse_dragging here — the selection is complete.
+    state.needs_redraw = true;
+}
+
+/// Handle triple-click line selection in rendered mode.
+/// Selects from column 0 of the clicked line to column 0 of the next line (or end of
+/// document on the last line), mirroring plain-view `handle_triple_click`.
+fn handle_rendered_triple_click(
+    state: &mut FileViewerState,
+    rendered_line_index: usize,
+) {
+    let total = state.rendered_lines.len();
+    if rendered_line_index >= total {
+        return;
+    }
+    state.rendered_selection_start = Some((rendered_line_index, 0));
+    if rendered_line_index + 1 < total {
+        state.rendered_selection_end = Some((rendered_line_index + 1, 0));
+    } else {
+        let len = crate::rendering::strip_ansi(&state.rendered_lines[rendered_line_index])
+            .chars()
+            .count();
+        state.rendered_selection_end = Some((rendered_line_index, len));
+    }
+    // Do NOT set rendered_mouse_dragging here — the selection is complete.
+    // Setting it would cause the Up event to overwrite rendered_selection_end.
+    state.needs_redraw = true;
+}
+
 /// Handle mouse events in rendered markdown mode.
 /// In this mode the content is pre-rendered ANSI lines; we track a simple
 /// (line_index, visual_col) selection so the user can copy rendered text.
+/// Double-click selects the word under the cursor; triple-click selects the whole line,
+/// both mirroring the plain-view behaviour.
 fn handle_rendered_mouse_event(
     state: &mut FileViewerState,
     mouse_event: MouseEvent,
@@ -716,6 +764,8 @@ fn handle_rendered_mouse_event(
     };
     // Content columns start after the gutter.
     let content_start_col = gutter_width as u16;
+    // Whether the click landed inside the line-number gutter.
+    let on_line_number = column < content_start_col;
 
     // Map screen row to rendered_lines index (row 0 is header, content starts at row 1).
     let visual_line = (row as usize).saturating_sub(1);
@@ -730,22 +780,120 @@ fn handle_rendered_mouse_event(
 
     match kind {
         MouseEventKind::Down(MouseButton::Left) => {
-            // Start a new selection
-            state.rendered_selection_start = Some((rendered_line_index, col));
-            state.rendered_selection_end = Some((rendered_line_index, col));
-            state.rendered_mouse_dragging = true;
-            state.needs_redraw = true;
+            // A click on the line-number gutter selects the whole line and enables
+            // line-number dragging so the user can extend the selection by dragging.
+            if on_line_number {
+                let total = state.rendered_lines.len();
+                if rendered_line_index < total {
+                    // Anchor at start of clicked line.
+                    state.rendered_selection_start = Some((rendered_line_index, 0));
+                    // End: start of next line, or end of last line.
+                    state.rendered_selection_end = if rendered_line_index + 1 < total {
+                        Some((rendered_line_index + 1, 0))
+                    } else {
+                        let len = crate::rendering::strip_ansi(&state.rendered_lines[rendered_line_index])
+                            .chars().count();
+                        Some((rendered_line_index, len))
+                    };
+                    state.rendered_mouse_dragging = true;
+                    state.line_number_drag_active = true;
+                    state.needs_redraw = true;
+                }
+                state.click_count = 1;
+                state.last_click_time = Some(Instant::now());
+                state.last_click_pos = Some((visual_line, column as usize));
+                return;
+            }
+
+            let current_pos = (visual_line, column as usize);
+
+            // Detect multi-click: same location within 500 ms.
+            let is_multiclick = if let Some(last_time) = state.last_click_time {
+                last_time.elapsed().as_millis() <= 500
+                    && is_same_click_location(state.last_click_pos, current_pos)
+            } else {
+                false
+            };
+
+            if !is_multiclick {
+                // Single click — start a fresh selection.
+                state.click_count = 1;
+                state.line_number_drag_active = false;
+                state.rendered_selection_start = Some((rendered_line_index, col));
+                state.rendered_selection_end = Some((rendered_line_index, col));
+                state.rendered_mouse_dragging = true;
+                state.needs_redraw = true;
+            } else {
+                state.click_count += 1;
+                state.line_number_drag_active = false;
+                match state.click_count {
+                    2 => handle_rendered_double_click(state, rendered_line_index, col),
+                    _ => {
+                        // Triple-click or beyond: select whole line, cap counter.
+                        handle_rendered_triple_click(state, rendered_line_index);
+                        state.click_count = 3;
+                    }
+                }
+            }
+
+            state.last_click_time = Some(Instant::now());
+            state.last_click_pos = Some(current_pos);
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             if state.rendered_mouse_dragging {
-                state.rendered_selection_end = Some((rendered_line_index, col));
+                if state.line_number_drag_active {
+                    // Extend whole-line selection from anchor to current line.
+                    let total = state.rendered_lines.len();
+                    let anchor_line = state.rendered_selection_start
+                        .map(|(l, _)| l)
+                        .unwrap_or(rendered_line_index);
+                    let drag_line = rendered_line_index.min(total.saturating_sub(1));
+                    let (sel_start_line, sel_end_line) = if drag_line >= anchor_line {
+                        (anchor_line, drag_line)
+                    } else {
+                        (drag_line, anchor_line)
+                    };
+                    state.rendered_selection_start = Some((sel_start_line, 0));
+                    state.rendered_selection_end = if sel_end_line + 1 < total {
+                        Some((sel_end_line + 1, 0))
+                    } else {
+                        let len = crate::rendering::strip_ansi(&state.rendered_lines[sel_end_line])
+                            .chars().count();
+                        Some((sel_end_line, len))
+                    };
+                } else {
+                    state.rendered_selection_end = Some((rendered_line_index, col));
+                }
                 state.needs_redraw = true;
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             if state.rendered_mouse_dragging {
-                state.rendered_selection_end = Some((rendered_line_index, col));
+                if state.line_number_drag_active {
+                    // Final extend — same logic as Drag.
+                    let total = state.rendered_lines.len();
+                    let anchor_line = state.rendered_selection_start
+                        .map(|(l, _)| l)
+                        .unwrap_or(rendered_line_index);
+                    let drag_line = rendered_line_index.min(total.saturating_sub(1));
+                    let (sel_start_line, sel_end_line) = if drag_line >= anchor_line {
+                        (anchor_line, drag_line)
+                    } else {
+                        (drag_line, anchor_line)
+                    };
+                    state.rendered_selection_start = Some((sel_start_line, 0));
+                    state.rendered_selection_end = if sel_end_line + 1 < total {
+                        Some((sel_end_line + 1, 0))
+                    } else {
+                        let len = crate::rendering::strip_ansi(&state.rendered_lines[sel_end_line])
+                            .chars().count();
+                        Some((sel_end_line, len))
+                    };
+                } else {
+                    state.rendered_selection_end = Some((rendered_line_index, col));
+                }
                 state.rendered_mouse_dragging = false;
+                state.line_number_drag_active = false;
                 state.needs_redraw = true;
             }
         }

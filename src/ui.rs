@@ -490,6 +490,13 @@ fn handle_first_esc(state: &mut FileViewerState) -> bool {
         return true;
     }
 
+    // Clear rendered-mode selection
+    if state.rendered_selection_start.is_some() || state.rendered_selection_end.is_some() {
+        state.clear_rendered_selection();
+        state.needs_redraw = true;
+        return true;
+    }
+
     // In normal mode - Esc should open menu
     // Let it pass through to handle_key_event which will call handle_menu_key
     false
