@@ -63,8 +63,8 @@ Press **{help}** or **ESC** to close this help.
 - **Close**: Close current file
 
 **View Menu:**
-- **Line Wrap**: Toggle line wrapping on/off
-- **Rendered**: Toggle markdown rendered view (only available for `.md` files)
+- **Line Wrap**: Toggle line wrapping on/off (**{toggle_line_wrap}**)
+- **Rendered**: Toggle markdown rendered view (**{render_toggle}**, only available for `.md` files)
   - Shows the document rendered as formatted markdown (bold, italic, tables, etc.)
   - Rendered view is read-only — switch back to plain to edit
   - Search (`{find}`) and scrolling still work in rendered view

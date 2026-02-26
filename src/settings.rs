@@ -34,6 +34,8 @@ pub(crate) struct KeyBindings {
     pub(crate) toggle_line_wrap: String,
     #[serde(default = "default_new_file")]
     pub(crate) new_file: String,
+    #[serde(default = "default_render_toggle")]
+    pub(crate) render_toggle: String,
     #[serde(default = "default_cursor_down")]
     pub(crate) cursor_down: String,
     #[serde(default = "default_cursor_up")]
@@ -48,6 +50,10 @@ pub(crate) struct KeyBindings {
 
 fn default_new_file() -> String {
     "Ctrl+n".into()
+}
+
+fn default_render_toggle() -> String {
+    "Alt+r".into()
 }
 
 fn default_cursor_down() -> String {
@@ -313,6 +319,9 @@ impl KeyBindings {
     pub fn toggle_line_wrap_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.toggle_line_wrap, code, modifiers)
     }
+    pub fn render_toggle_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
+        parse_keybinding(&self.render_toggle, code, modifiers)
+    }
     pub fn cursor_down_matches(&self, code: &KeyCode, modifiers: &KeyModifiers) -> bool {
         parse_keybinding(&self.cursor_down, code, modifiers)
     }
@@ -464,6 +473,7 @@ mod tests {
             save_and_quit: "Ctrl+q".into(),
             toggle_line_wrap: "Alt+w".into(),
             new_file: "Ctrl+n".into(),
+            render_toggle: "Alt+r".into(),
             cursor_down: "Alt+j".into(),
             cursor_up: "Alt+k".into(),
             cursor_left: "Alt+h".into(),

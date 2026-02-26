@@ -66,6 +66,8 @@ fn replace_keybindings(content: &str, settings: &crate::settings::Settings) -> S
         .replace("{save}", &settings.keybindings.save)
         .replace("{close}", &settings.keybindings.close)
         .replace("{quit}", &settings.keybindings.quit)
+        .replace("{toggle_line_wrap}", &settings.keybindings.toggle_line_wrap)
+        .replace("{render_toggle}", &settings.keybindings.render_toggle)
         .replace(
             "{double_tap_speed_ms}",
             &settings.double_tap_speed_ms.to_string(),

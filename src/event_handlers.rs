@@ -861,6 +861,32 @@ pub(crate) fn handle_key_event(
         return Ok((false, false));
     }
 
+    // Handle toggle rendered markdown view (Alt+r by default) — only for .md files
+    if settings.keybindings.render_toggle_matches(&code, &modifiers) {
+        if crate::menu::is_markdown_file(filename) {
+            state.markdown_rendered = !state.markdown_rendered;
+            if state.markdown_rendered {
+                let render_width = crate::help::markdown_render_width(
+                    state.term_width as usize,
+                    state,
+                    lines.len(),
+                );
+                state.rendered_lines = crate::help::render_markdown_to_lines(lines, render_width);
+                state.top_line = 0;
+                state.cursor_line = 0;
+                state.cursor_col = 0;
+            } else {
+                state.rendered_lines.clear();
+            }
+            let _ = crossterm::execute!(
+                std::io::stdout(),
+                crossterm::terminal::Clear(crossterm::terminal::ClearType::All)
+            );
+            state.needs_redraw = true;
+        }
+        return Ok((false, false));
+    }
+
     // Handle cursor movement keybindings (Ctrl+J/K/H/L)
     if settings.keybindings.cursor_down_matches(&code, &modifiers) {
         handle_down_navigation(state, lines, visible_lines);
