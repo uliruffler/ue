@@ -35,6 +35,38 @@ fn save_undo_with_timestamp(state: &mut FileViewerState, filename: &str) {
 }
 
 pub(crate) fn handle_copy(state: &FileViewerState, lines: &[String]) -> Result<(), std::io::Error> {
+    // In rendered markdown mode, copy from the rendered (displayed) lines instead of the
+    // raw source.  All characters — including table borders, bullet decorations, etc. — are
+    // treated as plain text (ANSI escape sequences are stripped).
+    if state.markdown_rendered {
+        if let Some(((sl, sc), (el, ec))) = state.rendered_selection_normalized() {
+            let rendered = &state.rendered_lines;
+            let mut text = String::new();
+            for line_idx in sl..=el {
+                if let Some(line) = rendered.get(line_idx) {
+                    let plain = crate::rendering::strip_ansi(line);
+                    let chars: Vec<char> = plain.chars().collect();
+                    let col_start = if line_idx == sl { sc.min(chars.len()) } else { 0 };
+                    let col_end = if line_idx == el { ec.min(chars.len()) } else { chars.len() };
+                    let segment: String = chars[col_start..col_end].iter().collect();
+                    text.push_str(&segment);
+                    if line_idx < el {
+                        text.push('\n');
+                    }
+                }
+            }
+            if !text.is_empty() {
+                let mut clipboard_guard = get_clipboard().lock().unwrap();
+                if let Some(ref mut cb) = *clipboard_guard {
+                    if let Err(e) = cb.set_text(text) {
+                        eprintln!("Failed to copy to clipboard: {}", e);
+                    }
+                }
+            }
+        }
+        return Ok(());
+    }
+
     if let (Some(sel_start), Some(sel_end)) = (state.selection_start, state.selection_end) {
         let lines_refs: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
         let selected_text = if state.block_selection {

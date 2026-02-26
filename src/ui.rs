@@ -1295,6 +1295,7 @@ fn editing_session(
                                     state.cursor_col = 0;
                                 } else {
                                     state.rendered_lines.clear();
+                                    state.clear_rendered_selection();
                                 }
                                 // Clear the whole screen to remove ANSI artifacts from the previous mode
                                 execute!(stdout, terminal::Clear(ClearType::All))?;

@@ -173,6 +173,12 @@ pub struct FileViewerState<'a> {
     /// Pre-rendered markdown display lines (populated when `markdown_rendered` is true).
     /// Contains ANSI-escaped text produced by termimad; treated as read-only display content.
     pub(crate) rendered_lines: Vec<String>,
+    /// Selection start within rendered_lines (line_index, visual_col) — only valid in rendered mode.
+    pub(crate) rendered_selection_start: Option<(usize, usize)>,
+    /// Selection end within rendered_lines (line_index, visual_col) — only valid in rendered mode.
+    pub(crate) rendered_selection_end: Option<(usize, usize)>,
+    /// Whether a mouse drag selection is active in rendered mode.
+    pub(crate) rendered_mouse_dragging: bool,
     /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
     /// previous segment (true) or at the start of the next segment (false)
     /// Only meaningful when cursor_col is exactly at a wrap point
@@ -270,6 +276,9 @@ impl<'a> FileViewerState<'a> {
             is_sudo: false,
             markdown_rendered: false,
             rendered_lines: Vec::new(),
+            rendered_selection_start: None,
+            rendered_selection_end: None,
+            rendered_mouse_dragging: false,
             cursor_at_wrap_end: false,
             status_message: None,
             line_number_drag_active: false,
@@ -587,6 +596,24 @@ impl<'a> FileViewerState<'a> {
     /// active (the rendered view is intentionally read-only for now).
     pub(crate) fn is_editing_blocked(&self) -> bool {
         self.is_read_only || self.markdown_rendered
+    }
+
+    /// Clear the rendered-mode selection.
+    pub(crate) fn clear_rendered_selection(&mut self) {
+        self.rendered_selection_start = None;
+        self.rendered_selection_end = None;
+        self.rendered_mouse_dragging = false;
+    }
+
+    /// Return the normalized (start <= end) rendered selection, if any.
+    pub(crate) fn rendered_selection_normalized(&self) -> Option<((usize, usize), (usize, usize))> {
+        let start = self.rendered_selection_start?;
+        let end = self.rendered_selection_end?;
+        if start.0 < end.0 || (start.0 == end.0 && start.1 <= end.1) {
+            Some((start, end))
+        } else {
+            Some((end, start))
+        }
     }
 
     /// Toggle line wrapping at runtime

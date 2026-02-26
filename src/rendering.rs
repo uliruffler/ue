@@ -1016,13 +1016,58 @@ fn render_visible_lines_rendered(
 
             // --- Content ---
             let display_line = crate::help::truncate_rendered_line(line, display_width);
-            write!(stdout, "{}", display_line)?;
-            // Reset any ANSI state the termimad line may have left open.
-            execute!(stdout, ResetColor)?;
-            // Measure the visual width of what we just wrote (ignoring ANSI escapes)
-            // so we know how many padding spaces are needed.
-            let content_visual_width = visual_width_of_ansi_str(&display_line) as u16;
-            current_col += content_visual_width;
+
+            // Determine if this line is (partially) selected.
+            let sel = state.rendered_selection_normalized();
+            let (sel_start_col, sel_end_col): (Option<usize>, Option<usize>) = if let Some(((sl, sc), (el, ec))) = sel {
+                if logical_line_index >= sl && logical_line_index <= el {
+                    let col_start = if logical_line_index == sl { sc } else { 0 };
+                    // For the last selected line, end col is exclusive.
+                    // If sel ends on a later line, select to end-of-line (usize::MAX).
+                    let col_end = if logical_line_index == el { ec } else { usize::MAX };
+                    (Some(col_start), Some(col_end))
+                } else {
+                    (None, None)
+                }
+            } else {
+                (None, None)
+            };
+
+            if let (Some(sc), Some(ec)) = (sel_start_col, sel_end_col) {
+                // Render with selection highlighting.
+                // Strip ANSI from display_line to get printable chars with their visual positions.
+                let plain = strip_ansi(&display_line);
+                let chars: Vec<char> = plain.chars().collect();
+                let line_visual_len = chars.len();
+                let actual_ec = ec.min(line_visual_len);
+
+                // Before selection
+                if sc > 0 {
+                    let before: String = chars[..sc.min(line_visual_len)].iter().collect();
+                    write!(stdout, "{}", before)?;
+                }
+                // Selected region (highlighted)
+                if sc < actual_ec {
+                    let selected: String = chars[sc..actual_ec].iter().collect();
+                    execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::Reverse))?;
+                    write!(stdout, "{}", selected)?;
+                    execute!(stdout, crossterm::style::SetAttribute(crossterm::style::Attribute::NoReverse))?;
+                }
+                // After selection
+                if actual_ec < line_visual_len {
+                    let after: String = chars[actual_ec..].iter().collect();
+                    write!(stdout, "{}", after)?;
+                }
+                execute!(stdout, ResetColor)?;
+                current_col += line_visual_len as u16;
+            } else {
+                // No selection on this line — render with original ANSI formatting.
+                write!(stdout, "{}", display_line)?;
+                // Reset any ANSI state the termimad line may have left open.
+                execute!(stdout, ResetColor)?;
+                let content_visual_width = visual_width_of_ansi_str(&display_line) as u16;
+                current_col += content_visual_width;
+            }
         } else {
             // Past end of document — just write the gutter and leave the rest for padding.
             if line_num_digits > 0 {
@@ -1043,6 +1088,24 @@ fn render_visible_lines_rendered(
     }
 
     Ok(())
+}
+
+/// Strip ANSI escape sequences from a string, returning only the printable characters.
+pub(crate) fn strip_ansi(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for ch in s.chars() {
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
 }
 
 /// Return the visual width of a string that may contain ANSI escape sequences.

@@ -699,6 +699,72 @@ pub(crate) fn handle_continuous_auto_scroll(
     scrolled
 }
 
+/// Handle mouse events in rendered markdown mode.
+/// In this mode the content is pre-rendered ANSI lines; we track a simple
+/// (line_index, visual_col) selection so the user can copy rendered text.
+fn handle_rendered_mouse_event(
+    state: &mut FileViewerState,
+    mouse_event: MouseEvent,
+    visible_lines: usize,
+) {
+    let MouseEvent { kind, column, row, .. } = mouse_event;
+
+    let gutter_width = if state.settings.appearance.line_number_digits > 0 {
+        state.settings.appearance.line_number_digits as usize + 1
+    } else {
+        0
+    };
+    // Content columns start after the gutter.
+    let content_start_col = gutter_width as u16;
+
+    // Map screen row to rendered_lines index (row 0 is header, content starts at row 1).
+    let visual_line = (row as usize).saturating_sub(1);
+    let rendered_line_index = state.top_line + visual_line;
+
+    // Clamp column to the content area (after gutter, before scrollbar).
+    let col = if column > content_start_col {
+        (column - content_start_col) as usize
+    } else {
+        0
+    };
+
+    match kind {
+        MouseEventKind::Down(MouseButton::Left) => {
+            // Start a new selection
+            state.rendered_selection_start = Some((rendered_line_index, col));
+            state.rendered_selection_end = Some((rendered_line_index, col));
+            state.rendered_mouse_dragging = true;
+            state.needs_redraw = true;
+        }
+        MouseEventKind::Drag(MouseButton::Left) => {
+            if state.rendered_mouse_dragging {
+                state.rendered_selection_end = Some((rendered_line_index, col));
+                state.needs_redraw = true;
+            }
+        }
+        MouseEventKind::Up(MouseButton::Left) => {
+            if state.rendered_mouse_dragging {
+                state.rendered_selection_end = Some((rendered_line_index, col));
+                state.rendered_mouse_dragging = false;
+                state.needs_redraw = true;
+            }
+        }
+        MouseEventKind::ScrollDown => {
+            let scroll_amount = state.settings.mouse_scroll_lines;
+            let total_lines = state.rendered_lines.len();
+            let max_top = total_lines.saturating_sub(visible_lines);
+            state.top_line = (state.top_line + scroll_amount).min(max_top);
+            state.needs_redraw = true;
+        }
+        MouseEventKind::ScrollUp => {
+            let scroll_amount = state.settings.mouse_scroll_lines;
+            state.top_line = state.top_line.saturating_sub(scroll_amount);
+            state.needs_redraw = true;
+        }
+        _ => {}
+    }
+}
+
 pub(crate) fn handle_mouse_event(
     state: &mut FileViewerState,
     lines: &mut Vec<String>,
@@ -755,6 +821,12 @@ pub(crate) fn handle_mouse_event(
         // For other event types (scrolling, etc.), fall through to normal handling
     }
 
+    // In rendered markdown mode, content mouse events are handled separately.
+    // Only rows > 0 (actual content rows) need the rendered handler.
+    if state.markdown_rendered && row > 0 {
+        handle_rendered_mouse_event(state, mouse_event, visible_lines);
+        return;
+    }
 
     // Check if click is on h-scrollbar row (last content line when h-scrollbar is shown)
     let h_scrollbar_row = visible_lines as u16;

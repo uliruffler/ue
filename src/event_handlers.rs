@@ -316,6 +316,7 @@ pub(crate) fn handle_key_event(
                     } else {
                         // Clear rendered lines to free memory
                         state.rendered_lines.clear();
+                        state.clear_rendered_selection();
                     }
                     // Clear the whole screen to remove ANSI artifacts from the previous mode
                     let _ = crossterm::execute!(
@@ -365,6 +366,16 @@ pub(crate) fn handle_key_event(
         // If in find or replace mode, don't handle it here - let those modes handle it
         if state.find_active || state.replace_active {
             // Don't return - continue to let find/replace handlers process it
+        } else if state.markdown_rendered {
+            // In rendered mode, select all rendered content
+            let total = state.rendered_lines.len();
+            if total > 0 {
+                let last_line_len = crate::rendering::strip_ansi(&state.rendered_lines[total - 1]).chars().count();
+                state.rendered_selection_start = Some((0, 0));
+                state.rendered_selection_end = Some((total - 1, last_line_len));
+                state.needs_redraw = true;
+            }
+            return Ok((false, false));
         } else {
             // Normal document select all
             if !lines.is_empty() {
@@ -877,6 +888,7 @@ pub(crate) fn handle_key_event(
                 state.cursor_col = 0;
             } else {
                 state.rendered_lines.clear();
+                state.clear_rendered_selection();
             }
             let _ = crossterm::execute!(
                 std::io::stdout(),
