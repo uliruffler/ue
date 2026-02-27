@@ -237,23 +237,30 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
                 if !current_line.is_empty() {
                     push_line!();
                 }
-                let bar_fill = effective_width.saturating_sub(code_block_lang.len() + 4);
+                // Total box width = effective_width.
+                // Top:    ╔══ lang ══...══╗   fixed overhead = "╔══ " (4) + " " (1) + "══╗" (3) = 8 + lang
+                //         ╔══════════════╗    fixed overhead = "╔══" (3) + "══╗" (3) = 6
                 let label = if code_block_lang.is_empty() {
-                    format!("{}{}╔ code {}{}",
-                        CODE_BG, CODE_FG, "═".repeat(effective_width.saturating_sub(7)), RESET)
+                    let fill = effective_width.saturating_sub(6); // ╔══ + fill + ══╗
+                    format!("{}{}╔══{}══╗{}", CODE_BG, CODE_FG, "═".repeat(fill), RESET)
                 } else {
-                    format!("{}{}╔ {} {}{}",
-                        CODE_BG, CODE_FG, code_block_lang, "═".repeat(bar_fill), RESET)
+                    let lang = &code_block_lang;
+                    let overhead = 8 + lang.len(); // ╔══ (3) + space + lang + space + ══╗ (3) → "╔══ lang ══╗" = 3+1+lang+1+3=8+lang, but we want extra fill
+                    let fill = effective_width.saturating_sub(overhead);
+                    format!("{}{}╔══ {} {}══╗{}", CODE_BG, CODE_FG, lang, "═".repeat(fill), RESET)
                 };
                 lines.push(label);
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
+                if !current_line.is_empty() {
+                    push_line!();
+                }
+                // Bottom: ╚══════════════╝  — same width as top without lang
+                let fill = effective_width.saturating_sub(6); // ╚══ + fill + ══╝
                 lines.push(format!(
-                    "{}{}╚{}{}",
-                    CODE_BG, CODE_FG,
-                    "═".repeat(effective_width.saturating_sub(2)),
-                    RESET
+                    "{}{}╚══{}══╝{}",
+                    CODE_BG, CODE_FG, "═".repeat(fill), RESET
                 ));
                 lines.push(String::new());
             }
@@ -401,9 +408,31 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
             // ── Leaf events ───────────────────────────────────────────────
             Event::Text(text) => {
                 if in_code_block {
-                    for (i, code_line) in text.lines().enumerate() {
-                        if i > 0 { push_line!(); }
-                        current_line.push_str(&format!("{}{} {}{}", CODE_BG, CODE_FG, code_line, RESET));
+                    // Box inner width: effective_width - 4  ("║ " prefix + " ║" suffix)
+                    let inner_w = effective_width.saturating_sub(4);
+                    for code_line in text.lines() {
+                        if !current_line.is_empty() {
+                            push_line!();
+                        }
+                        // Hard-wrap long lines at inner_w
+                        let mut remaining = code_line.to_string();
+                        loop {
+                            let (chunk, rest) = split_at_visual_width(&remaining, inner_w);
+                            let chunk_vis = visual_len(&chunk);
+                            let pad = inner_w.saturating_sub(chunk_vis);
+                            // ║ + space + content + padding + space + ║
+                            current_line.push_str(&format!(
+                                "{}{}║ {}{}{} ║{}",
+                                CODE_BG, CODE_FG,
+                                chunk,
+                                " ".repeat(pad),
+                                CODE_FG,  // re-assert colour after chunk (which may reset)
+                                RESET
+                            ));
+                            push_line!();
+                            if rest.is_empty() { break; }
+                            remaining = rest;
+                        }
                     }
                 } else if in_table {
                     current_cell.push_str(&text);
@@ -862,6 +891,84 @@ mod tests {
         let joined = lines.join("\n");
         assert!(joined.contains("fn main()"));
         assert!(joined.contains("rust"));
+    }
+
+    #[test]
+    fn test_code_block_content_between_borders() {
+        // Opening ╔ border must come before code content; closing ╚ must come after.
+        let md = "```sh\necho hello\necho world\n```\n";
+        let lines = PulldownRenderer.render(md, 80);
+        let plain: Vec<String> = lines.iter().map(|l| strip_ansi(l)).collect();
+
+        let open_idx  = plain.iter().position(|l| l.contains('╔')).expect("opening border");
+        let close_idx = plain.iter().position(|l| l.contains('╚')).expect("closing border");
+        let hello_idx = plain.iter().position(|l| l.contains("echo hello")).expect("first code line");
+        let world_idx = plain.iter().position(|l| l.contains("echo world")).expect("second code line");
+
+        assert!(open_idx  < hello_idx, "opening border must precede first code line");
+        assert!(hello_idx < world_idx, "first code line must precede second");
+        assert!(world_idx < close_idx, "closing border must follow all code lines");
+    }
+
+    #[test]
+    fn test_code_block_box_geometry() {
+        // Every line of the code block must be exactly term_width wide.
+        // Top border:     starts with ╔, ends with ╗
+        // Content lines:  start with ║, end with ║
+        // Bottom border:  starts with ╚, ends with ╝
+        let md = "```rust\nlet x = 1;\nlet y = 2;\n```\n";
+        let term_w = 60usize;
+        let lines = PulldownRenderer.render(md, term_w);
+        let plain: Vec<String> = lines.iter().map(|l| strip_ansi(l)).collect();
+
+        let open_idx  = plain.iter().position(|l| l.starts_with('╔')).expect("top border");
+        let close_idx = plain.iter().position(|l| l.starts_with('╚')).expect("bottom border");
+
+        // Top border
+        let top = &plain[open_idx];
+        assert!(top.ends_with('╗'), "top border must end with ╗: {top:?}");
+        assert_eq!(visual_len(&lines[open_idx]), term_w,
+            "top border must be exactly term_w wide");
+
+        // Bottom border
+        let bot = &plain[close_idx];
+        assert!(bot.ends_with('╝'), "bottom border must end with ╝: {bot:?}");
+        assert_eq!(visual_len(&lines[close_idx]), term_w,
+            "bottom border must be exactly term_w wide");
+
+        // Content lines
+        for i in (open_idx + 1)..close_idx {
+            let l = &plain[i];
+            assert!(l.starts_with('║'), "content line must start with ║: {l:?}");
+            assert!(l.ends_with('║'),   "content line must end with ║: {l:?}");
+            assert_eq!(visual_len(&lines[i]), term_w,
+                "content line {i} must be exactly term_w wide");
+        }
+    }
+
+    #[test]
+    fn test_code_block_long_line_wraps_inside_borders() {
+        // A line longer than term_width must wrap; all wrapped pieces must appear
+        // between the opening and closing borders.
+        let long_line = "x".repeat(200);
+        let md = format!("```\n{}\n```\n", long_line);
+        let lines = PulldownRenderer.render(&md, 40);
+        let plain: Vec<String> = lines.iter().map(|l| strip_ansi(l)).collect();
+
+        let open_idx  = plain.iter().position(|l| l.contains('╔')).expect("opening border");
+        let close_idx = plain.iter().position(|l| l.contains('╚')).expect("closing border");
+
+        for (i, l) in plain.iter().enumerate() {
+            if l.contains('x') {
+                assert!(i > open_idx,  "code content at line {i} must be after opening border");
+                assert!(i < close_idx, "code content at line {i} must be before closing border");
+            }
+        }
+        let content_lines: Vec<&str> = plain[open_idx+1..close_idx].iter()
+            .map(String::as_str)
+            .filter(|l| l.contains('x'))
+            .collect();
+        assert!(content_lines.len() >= 2, "long line should wrap into multiple display lines");
     }
 
     #[test]
