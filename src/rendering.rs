@@ -1370,6 +1370,11 @@ fn get_search_matches(line: &str, pattern: &str, regex_mode: bool) -> Vec<(usize
         return vec![];
     }
 
+    // Multi-line patterns (containing \n) cannot match within a single line — skip
+    if pattern.contains("\\n") {
+        return vec![];
+    }
+
     // Try to use cached regex
     SEARCH_REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();

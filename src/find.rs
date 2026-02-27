@@ -41,6 +41,160 @@ pub(crate) fn pattern_to_regex(pattern: &str, regex_mode: bool) -> Result<Regex,
     Regex::new(&regex_pattern).map_err(|e| Box::new(e) as Box<dyn std::error::Error>)
 }
 
+/// Returns true if the pattern contains a literal `\n` (i.e. the two-character
+/// sequence backslash-n as typed by the user), meaning it needs multi-line search.
+fn pattern_is_multiline(pattern: &str) -> bool {
+    pattern.contains("\\n")
+}
+
+/// Expand user-typed `\n` into a real newline character so the regex engine
+/// can match across line boundaries in a joined text.
+fn expand_newline_escapes(pattern: &str) -> String {
+    pattern.replace("\\n", "\n")
+}
+
+/// Build a single string by joining `lines[min_line..=max_line]` with `\n`.
+/// Also returns a `Vec<usize>` where `line_starts[i]` is the byte offset of
+/// `lines[min_line + i]` in the joined string.
+fn build_joined_text(lines: &[String], min_line: usize, max_line: usize) -> (String, Vec<usize>) {
+    let max_line = max_line.min(lines.len().saturating_sub(1));
+    let mut joined = String::new();
+    let mut line_starts = Vec::new();
+    for idx in min_line..=max_line {
+        line_starts.push(joined.len());
+        joined.push_str(&lines[idx]);
+        if idx < max_line {
+            joined.push('\n');
+        }
+    }
+    (joined, line_starts)
+}
+
+/// Convert a byte offset in the joined string back to `(absolute_line, char_col)`.
+/// `line_starts[i]` is the byte offset of `lines[min_line + i]`.
+fn byte_offset_to_position(
+    byte_offset: usize,
+    line_starts: &[usize],
+    lines: &[String],
+    min_line: usize,
+) -> Position {
+    // Binary-search for the line whose start is <= byte_offset
+    let rel = match line_starts.binary_search(&byte_offset) {
+        Ok(i) => i,
+        Err(i) => i.saturating_sub(1),
+    };
+    let abs_line = min_line + rel;
+    let line_byte_offset = byte_offset - line_starts[rel];
+    // Convert byte offset to character index
+    let col = lines[abs_line][..line_byte_offset].chars().count();
+    (abs_line, col)
+}
+
+/// Find the next multi-line match (pattern contains `\n`) starting after `start`.
+/// Returns `(line, col)` of the match start, or `None`.
+fn find_next_multiline(
+    lines: &[String],
+    start: Position,
+    regex: &Regex,
+    force_wrap: bool,
+    scope: Option<(Position, Position)>,
+) -> Option<Position> {
+    let (min_line, max_line) = if let Some(((sl, _), (el, _))) = scope {
+        (sl, el)
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
+
+    let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
+    let (start_line, start_col) = start;
+
+    // Convert start position to a byte offset in the joined string (search *after* this point)
+    let start_byte = if start_line >= min_line && start_line <= max_line {
+        let rel = start_line - min_line;
+        let col_byte = lines[start_line]
+            .char_indices()
+            .nth(start_col)
+            .map_or(lines[start_line].len(), |(b, _)| b);
+        line_starts[rel] + col_byte + 1 // +1 to skip the current position
+    } else {
+        0
+    };
+
+    // Search forward from start_byte
+    if start_byte <= joined.len() {
+        for m in regex.find_iter(&joined[start_byte..]) {
+            let abs_byte = start_byte + m.start();
+            return Some(byte_offset_to_position(abs_byte, &line_starts, lines, min_line));
+        }
+    }
+
+    if !force_wrap {
+        return None;
+    }
+
+    // Wrap: search from the beginning up to start_byte
+    let wrap_end = start_byte.min(joined.len());
+    for m in regex.find_iter(&joined[..wrap_end]) {
+        return Some(byte_offset_to_position(m.start(), &line_starts, lines, min_line));
+    }
+
+    None
+}
+
+/// Find the previous multi-line match starting before `start`.
+fn find_prev_multiline(
+    lines: &[String],
+    start: Position,
+    regex: &Regex,
+    force_wrap: bool,
+    scope: Option<(Position, Position)>,
+) -> Option<Position> {
+    let (min_line, max_line) = if let Some(((sl, _), (el, _))) = scope {
+        (sl, el)
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
+
+    let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
+    let (start_line, start_col) = start;
+
+    // Convert start position to a byte offset (search *before* this point)
+    let start_byte = if start_line >= min_line && start_line <= max_line {
+        let rel = start_line - min_line;
+        let col_byte = lines[start_line]
+            .char_indices()
+            .nth(start_col)
+            .map_or(lines[start_line].len(), |(b, _)| b);
+        line_starts[rel] + col_byte
+    } else {
+        joined.len()
+    };
+
+    // Find last match that ends before start_byte (i.e. starts before start_byte)
+    let before = &joined[..start_byte];
+    let last_before = regex.find_iter(before).last();
+    if let Some(m) = last_before {
+        return Some(byte_offset_to_position(m.start(), &line_starts, lines, min_line));
+    }
+
+    if !force_wrap {
+        return None;
+    }
+
+    // Wrap: find last match in the whole joined text after start_byte
+    let after = if start_byte < joined.len() {
+        &joined[start_byte..]
+    } else {
+        return None;
+    };
+    let last_after = regex.find_iter(after).last();
+    if let Some(m) = last_after {
+        return Some(byte_offset_to_position(start_byte + m.start(), &line_starts, lines, min_line));
+    }
+
+    None
+}
+
 /// Handle find mode key events
 /// Returns true if find mode should exit
 pub(crate) fn handle_find_input(
@@ -71,9 +225,18 @@ pub(crate) fn handle_find_input(
         KeyCode::Enter => {
             // Exit find mode and activate search highlighting (don't jump to match)
             if !state.find_pattern.is_empty() {
-                // Compile pattern with current find mode
-                match pattern_to_regex(&state.find_pattern, state.find_regex_mode) {
-                    Ok(_regex) => {
+                // Validate pattern (multiline patterns use the expanded form)
+                let pattern_valid = if pattern_is_multiline(&state.find_pattern) {
+                    let expanded = expand_newline_escapes(&state.find_pattern);
+                    let ml_pat = format!("(?i)(?ms){}", expanded);
+                    Regex::new(&ml_pat).map(|_| ()).map_err(|e| e.to_string())
+                } else {
+                    pattern_to_regex(&state.find_pattern, state.find_regex_mode)
+                        .map(|_| ())
+                        .map_err(|e| e.to_string())
+                };
+                match pattern_valid {
+                    Ok(()) => {
                         // Set last_search_pattern for highlighting
                         state.last_search_pattern = Some(state.find_pattern.clone());
                         state.last_search_regex_mode = state.find_regex_mode;
@@ -334,37 +497,54 @@ pub(crate) fn find_next_occurrence(
     visible_lines: usize,
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
-        // Compile pattern with current find mode
-        if let Ok(regex) = pattern_to_regex(pattern, state.find_regex_mode) {
-            if let Some(pos) = find_next(
-                lines,
-                state.current_position(),
-                &regex,
-                false,
-                state.find_scope,
-            ) {
-                // Found a match without wrapping
-                move_to_position(state, pos, lines.len(), lines, visible_lines);
-                state.search_wrapped = false;
-                state.wrap_warning_pending = None;
-                state.find_error = None;
-                update_search_hit_count(state, lines);
-            } else {
-                // No match found forward - wrap immediately
-                if let Some(pos) = find_next(
-                    lines,
-                    state.current_position(),
-                    &regex,
-                    true,
-                    state.find_scope,
-                ) {
+        if pattern_is_multiline(pattern) {
+            // Multi-line search: expand \n and compile with (?s) dot-all + (?m) multiline flags
+            let expanded = expand_newline_escapes(pattern);
+            let ml_pattern = format!("(?i)(?ms){}", expanded);
+            if let Ok(regex) = Regex::new(&ml_pattern) {
+                let pos = find_next_multiline(lines, state.current_position(), &regex, false, state.find_scope)
+                    .or_else(|| find_next_multiline(lines, state.current_position(), &regex, true, state.find_scope));
+                if let Some(pos) = pos {
                     move_to_position(state, pos, lines.len(), lines, visible_lines);
-                    state.search_wrapped = true;
+                    state.search_wrapped = false;
                     state.wrap_warning_pending = None;
                     state.find_error = None;
                     update_search_hit_count(state, lines);
                 }
-                // If still no match, just stay at current position (no error message)
+            }
+        } else {
+            // Compile pattern with current find mode
+            if let Ok(regex) = pattern_to_regex(pattern, state.find_regex_mode) {
+                if let Some(pos) = find_next(
+                    lines,
+                    state.current_position(),
+                    &regex,
+                    false,
+                    state.find_scope,
+                ) {
+                    // Found a match without wrapping
+                    move_to_position(state, pos, lines.len(), lines, visible_lines);
+                    state.search_wrapped = false;
+                    state.wrap_warning_pending = None;
+                    state.find_error = None;
+                    update_search_hit_count(state, lines);
+                } else {
+                    // No match found forward - wrap immediately
+                    if let Some(pos) = find_next(
+                        lines,
+                        state.current_position(),
+                        &regex,
+                        true,
+                        state.find_scope,
+                    ) {
+                        move_to_position(state, pos, lines.len(), lines, visible_lines);
+                        state.search_wrapped = true;
+                        state.wrap_warning_pending = None;
+                        state.find_error = None;
+                        update_search_hit_count(state, lines);
+                    }
+                    // If still no match, just stay at current position (no error message)
+                }
             }
         }
     }
@@ -378,37 +558,53 @@ pub(crate) fn find_prev_occurrence(
     visible_lines: usize,
 ) {
     if let Some(ref pattern) = state.last_search_pattern.clone() {
-        // Compile pattern with current find mode
-        if let Ok(regex) = pattern_to_regex(pattern, state.find_regex_mode) {
-            if let Some(pos) = find_prev(
-                lines,
-                state.current_position(),
-                &regex,
-                false,
-                state.find_scope,
-            ) {
-                // Found a match without wrapping
-                move_to_position(state, pos, lines.len(), lines, visible_lines);
-                state.search_wrapped = false;
-                state.wrap_warning_pending = None;
-                state.find_error = None;
-                update_search_hit_count(state, lines);
-            } else {
-                // No match found backward - wrap immediately
-                if let Some(pos) = find_prev(
-                    lines,
-                    state.current_position(),
-                    &regex,
-                    true,
-                    state.find_scope,
-                ) {
+        if pattern_is_multiline(pattern) {
+            let expanded = expand_newline_escapes(pattern);
+            let ml_pattern = format!("(?i)(?ms){}", expanded);
+            if let Ok(regex) = Regex::new(&ml_pattern) {
+                let pos = find_prev_multiline(lines, state.current_position(), &regex, false, state.find_scope)
+                    .or_else(|| find_prev_multiline(lines, state.current_position(), &regex, true, state.find_scope));
+                if let Some(pos) = pos {
                     move_to_position(state, pos, lines.len(), lines, visible_lines);
-                    state.search_wrapped = true;
+                    state.search_wrapped = false;
                     state.wrap_warning_pending = None;
                     state.find_error = None;
                     update_search_hit_count(state, lines);
                 }
-                // If still no match, just stay at current position (no error message)
+            }
+        } else {
+            // Compile pattern with current find mode
+            if let Ok(regex) = pattern_to_regex(pattern, state.find_regex_mode) {
+                if let Some(pos) = find_prev(
+                    lines,
+                    state.current_position(),
+                    &regex,
+                    false,
+                    state.find_scope,
+                ) {
+                    // Found a match without wrapping
+                    move_to_position(state, pos, lines.len(), lines, visible_lines);
+                    state.search_wrapped = false;
+                    state.wrap_warning_pending = None;
+                    state.find_error = None;
+                    update_search_hit_count(state, lines);
+                } else {
+                    // No match found backward - wrap immediately
+                    if let Some(pos) = find_prev(
+                        lines,
+                        state.current_position(),
+                        &regex,
+                        true,
+                        state.find_scope,
+                    ) {
+                        move_to_position(state, pos, lines.len(), lines, visible_lines);
+                        state.search_wrapped = true;
+                        state.wrap_warning_pending = None;
+                        state.find_error = None;
+                        update_search_hit_count(state, lines);
+                    }
+                    // If still no match, just stay at current position (no error message)
+                }
             }
         }
     }
@@ -423,15 +619,20 @@ pub(crate) fn update_live_highlights(state: &mut FileViewerState) {
         state.search_hit_count = 0;
         state.search_current_hit = 0;
     } else {
-        // Try to compile as regex or wildcard - if valid, update highlights
-        if pattern_to_regex(&state.find_pattern, state.find_regex_mode).is_ok() {
+        // Validate pattern: for multiline patterns, check with the expanded form
+        let valid = if pattern_is_multiline(&state.find_pattern) {
+            let expanded = expand_newline_escapes(&state.find_pattern);
+            let ml_pat = format!("(?i)(?ms){}", expanded);
+            Regex::new(&ml_pat).is_ok()
+        } else {
+            pattern_to_regex(&state.find_pattern, state.find_regex_mode).is_ok()
+        };
+        if valid {
             state.last_search_pattern = Some(state.find_pattern.clone());
             state.last_search_regex_mode = state.find_regex_mode;
             state.find_error = None;
-        } else {
-            // Invalid pattern - don't update highlights but don't show error yet
-            // (let user finish typing)
         }
+        // Invalid pattern - don't update highlights but don't show error yet (let user finish typing)
     }
 }
 
@@ -748,15 +949,7 @@ pub(crate) fn calculate_search_hits(
     regex_mode: bool,
     scope: Option<(Position, Position)>,
 ) -> (usize, usize) {
-    // Compile pattern with the specified mode
-    let Ok(regex) = pattern_to_regex(pattern, regex_mode) else {
-        return (0, 0);
-    };
-
     let (cursor_line, cursor_col) = cursor_pos;
-    let mut total_hits = 0;
-    let mut current_hit = 0;
-    let mut found_cursor_hit = false;
 
     // Determine search boundaries
     let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
@@ -764,6 +957,35 @@ pub(crate) fn calculate_search_hits(
     } else {
         (0, lines.len().saturating_sub(1))
     };
+
+    if pattern_is_multiline(pattern) {
+        // Multi-line: join text, find all matches, map back to positions
+        let expanded = expand_newline_escapes(pattern);
+        let ml_pat = format!("(?i)(?ms){}", expanded);
+        let Ok(regex) = Regex::new(&ml_pat) else {
+            return (0, 0);
+        };
+        let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
+        let mut total_hits = 0;
+        let mut current_hit = 0;
+        for m in regex.find_iter(&joined) {
+            let (hit_line, hit_col) = byte_offset_to_position(m.start(), &line_starts, lines, min_line);
+            total_hits += 1;
+            if hit_line == cursor_line && hit_col == cursor_col {
+                current_hit = total_hits;
+            }
+        }
+        return (current_hit, total_hits);
+    }
+
+    // Compile pattern with the specified mode (single-line)
+    let Ok(regex) = pattern_to_regex(pattern, regex_mode) else {
+        return (0, 0);
+    };
+
+    let mut total_hits = 0;
+    let mut current_hit = 0;
+    let mut found_cursor_hit = false;
 
     for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
         let line = &lines[line_idx];
@@ -895,12 +1117,6 @@ pub fn get_lines_with_matches_and_context(
     context_before: usize,
     context_after: usize,
 ) -> Vec<usize> {
-    // Compile pattern with the specified mode
-    let Ok(regex) = pattern_to_regex(pattern, regex_mode) else {
-        return Vec::new();
-    };
-
-
     // Determine search boundaries
     let (min_line, max_line) = if let Some(((scope_start_line, _), (scope_end_line, _))) = scope {
         (scope_start_line, scope_end_line)
@@ -909,34 +1125,65 @@ pub fn get_lines_with_matches_and_context(
     };
 
     // First, find all lines with actual matches
-    let mut hit_lines = Vec::new();
-    for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
-        let line = &lines[line_idx];
+    let mut hit_lines: Vec<usize> = Vec::new();
 
-        // Determine search boundaries for this line based on scope
-        let (search_start, search_end) =
-            if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
-                scope
-            {
-                let start_offset = if line_idx == scope_start_line {
-                    scope_start_col
-                } else {
-                    0
-                };
-                let end_offset = if line_idx == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
+    if pattern_is_multiline(pattern) {
+        // Multi-line: join and find all match start lines
+        let expanded = expand_newline_escapes(pattern);
+        let ml_pat = format!("(?i)(?ms){}", expanded);
+        let Ok(regex) = Regex::new(&ml_pat) else {
+            return Vec::new();
+        };
+        let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
+        for m in regex.find_iter(&joined) {
+            let (hit_line, _) = byte_offset_to_position(m.start(), &line_starts, lines, min_line);
+            // Also mark every line that the match spans
+            let (end_line, _) = byte_offset_to_position(
+                m.end().saturating_sub(1).max(m.start()),
+                &line_starts,
+                lines,
+                min_line,
+            );
+            for l in hit_line..=end_line {
+                if !hit_lines.contains(&l) {
+                    hit_lines.push(l);
+                }
+            }
+        }
+    } else {
+        // Compile pattern with the specified mode
+        let Ok(regex) = pattern_to_regex(pattern, regex_mode) else {
+            return Vec::new();
+        };
 
-        if search_start < search_end {
-            let search_slice = &line[search_start..search_end];
-            if regex.is_match(search_slice) {
-                hit_lines.push(line_idx);
+        for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
+            let line = &lines[line_idx];
+
+            // Determine search boundaries for this line based on scope
+            let (search_start, search_end) =
+                if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
+                    scope
+                {
+                    let start_offset = if line_idx == scope_start_line {
+                        scope_start_col
+                    } else {
+                        0
+                    };
+                    let end_offset = if line_idx == scope_end_line {
+                        scope_end_col.min(line.len())
+                    } else {
+                        line.len()
+                    };
+                    (start_offset, end_offset)
+                } else {
+                    (0, line.len())
+                };
+
+            if search_start < search_end {
+                let search_slice = &line[search_start..search_end];
+                if regex.is_match(search_slice) {
+                    hit_lines.push(line_idx);
+                }
             }
         }
     }
@@ -1120,40 +1367,97 @@ pub(crate) fn replace_current_occurrence(
     lines: &mut Vec<String>,
     visible_lines: usize,
 ) {
-    if let Some(ref pattern) = state.last_search_pattern {
-        // Make search case-insensitive by default
-        let pattern_with_flags = format!("(?i){}", pattern);
-        if let Ok(regex) = Regex::new(&pattern_with_flags) {
-            let (line, col) = state.current_position();
-
-            // Check if cursor is currently on a match
-            if line < lines.len() {
-                let line_text = &lines[line];
-
-                // Check scope
-                let in_scope = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = state.find_scope {
-                    line >= scope_start_line && line <= scope_end_line &&
-                    (line != scope_start_line || col >= scope_start_col) &&
-                    (line != scope_end_line || col < scope_end_col)
+    if let Some(ref pattern) = state.last_search_pattern.clone() {
+        if pattern_is_multiline(pattern) {
+            // --- Multi-line replace current ---
+            let expanded = expand_newline_escapes(pattern);
+            // (?m) makes ^ and $ match line boundaries; (?s) makes . match newlines
+            let ml_pat = format!("(?i)(?ms){}", expanded);
+            if let Ok(regex) = Regex::new(&ml_pat) {
+                let (min_line, max_line) = if let Some(((sl, _), (el, _))) = state.find_scope {
+                    (sl, el)
                 } else {
-                    true
+                    (0, lines.len().saturating_sub(1))
+                };
+                let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
+                let (cursor_line, cursor_col) = state.current_position();
+
+                // Find the cursor byte offset in the joined text
+                let cursor_byte = if cursor_line >= min_line && cursor_line <= max_line {
+                    let rel = cursor_line - min_line;
+                    let col_byte = lines[cursor_line]
+                        .char_indices()
+                        .nth(cursor_col)
+                        .map_or(lines[cursor_line].len(), |(b, _)| b);
+                    line_starts[rel] + col_byte
+                } else {
+                    0
                 };
 
-                if in_scope {
-                    // Find match at current position
-                    if let Some(m) = regex.find(line_text) {
-                        if m.start() == col {
-                            // We're at a match - replace it
+                // Find a match that starts at the cursor byte offset
+                if let Some(m) = regex.find_iter(&joined).find(|m| m.start() == cursor_byte) {
+                    let replace_str = expand_newline_escapes(&state.replace_pattern);
+                    let before = &joined[..m.start()];
+                    let after = &joined[m.end()..];
+                    let replaced_segment = regex.replace(m.as_str(), replace_str.as_str()).to_string();
+                    let new_joined = format!("{}{}{}", before, replaced_segment, after);
+
+                    // Snapshot the whole file before/after for single-step undo
+                    let before_snap = lines.clone();
+                    let new_region: Vec<String> = new_joined.split('\n').map(|s| s.to_string()).collect();
+                    let max_clamped = max_line.min(lines.len().saturating_sub(1));
+                    let region_len = max_clamped - min_line + 1;
+                    lines.splice(min_line..min_line + region_len, new_region);
+                    let after_snap = lines.clone();
+
+                    // Single undo step via DragBlock snapshot
+                    state.undo_history.push(crate::undo::Edit::DragBlock {
+                        before: before_snap,
+                        after: after_snap,
+                        source_start: (cursor_line, cursor_col),
+                        source_end: (cursor_line, cursor_col),
+                        dest: (cursor_line, cursor_col),
+                        copy: false,
+                    });
+
+                    state.modified = true;
+                    state.needs_redraw = true;
+                }
+            }
+        } else {
+            // --- Single-line replace current ---
+            let pattern_with_flags = format!("(?i){}", pattern);
+            if let Ok(regex) = Regex::new(&pattern_with_flags) {
+                let (line, col) = state.current_position();
+
+                if line < lines.len() {
+                    let line_text = &lines[line];
+
+                    // Check scope
+                    let in_scope = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = state.find_scope {
+                        line >= scope_start_line && line <= scope_end_line &&
+                        (line != scope_start_line || col >= scope_start_col) &&
+                        (line != scope_end_line || col < scope_end_col)
+                    } else {
+                        true
+                    };
+
+                    if in_scope {
+                        // Find match at current position (search from start of line to find match at cursor)
+                        let match_at_cursor = regex.find_iter(line_text).find(|m| m.start() == col);
+                        if let Some(m) = match_at_cursor {
+                            // We're at a match - replace it, expanding capture group references ($1, $2, etc.)
                             let before = &line_text[..m.start()];
                             let after = &line_text[m.end()..];
-                            let new_line = format!("{}{}{}", before, state.replace_pattern, after);
+                            let replaced_segment = regex
+                                .replace(m.as_str(), state.replace_pattern.as_str())
+                                .to_string();
+                            let new_line = format!("{}{}{}", before, replaced_segment, after);
 
-                            // Record the edit
                             let old_line = lines[line].clone();
                             lines[line] = new_line.clone();
                             state.modified = true;
 
-                            // Add to undo history
                             state.undo_history.push(crate::undo::Edit::ReplaceLine {
                                 line,
                                 old_content: old_line,
@@ -1165,13 +1469,11 @@ pub(crate) fn replace_current_occurrence(
                     }
                 }
             }
-
-            // Jump to next occurrence
-            find_next_occurrence(state, lines, visible_lines);
-
-            // Update hit count
-            update_search_hit_count(state, lines);
         }
+
+        // Jump to next occurrence
+        find_next_occurrence(state, lines, visible_lines);
+        update_search_hit_count(state, lines);
     }
 }
 
@@ -1180,81 +1482,103 @@ pub(crate) fn replace_all_occurrences(
     state: &mut FileViewerState,
     lines: &mut Vec<String>,
 ) {
-    if let Some(ref pattern) = state.last_search_pattern {
-        // Make search case-insensitive by default
-        let pattern_with_flags = format!("(?i){}", pattern);
-        if let Ok(regex) = Regex::new(&pattern_with_flags) {
-            let mut replaced_count = 0;
-
-            // Determine search boundaries
-            let (min_line, max_line, scope) = if let Some(((scope_start_line, _), (scope_end_line, _))) = state.find_scope {
-                (scope_start_line, scope_end_line, state.find_scope)
-            } else {
-                (0, lines.len().saturating_sub(1), None)
-            };
-
-            // Replace in each line within scope
-            for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
-                let line_text = &lines[line_idx];
-
-                // Determine search boundaries for this line
-                let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
-                    let start_offset = if line_idx == scope_start_line {
-                        scope_start_col
-                    } else {
-                        0
-                    };
-                    let end_offset = if line_idx == scope_end_line {
-                        scope_end_col.min(line_text.len())
-                    } else {
-                        line_text.len()
-                    };
-                    (start_offset, end_offset)
+    if let Some(ref pattern) = state.last_search_pattern.clone() {
+        if pattern_is_multiline(pattern) {
+            // --- Multi-line replace all ---
+            let expanded = expand_newline_escapes(pattern);
+            // (?m) makes ^ and $ match line boundaries; (?s) makes . match newlines
+            let ml_pat = format!("(?i)(?ms){}", expanded);
+            if let Ok(regex) = Regex::new(&ml_pat) {
+                let (min_line, max_line) = if let Some(((sl, _), (el, _))) = state.find_scope {
+                    (sl, el)
                 } else {
-                    (0, line_text.len())
+                    (0, lines.len().saturating_sub(1))
+                };
+                let max_line_clamped = max_line.min(lines.len().saturating_sub(1));
+                let (joined, _) = build_joined_text(lines, min_line, max_line_clamped);
+
+                let replace_str = expand_newline_escapes(&state.replace_pattern);
+                let replaced_count = regex.find_iter(&joined).count();
+                if replaced_count > 0 {
+                    let new_joined = regex.replace_all(&joined, replace_str.as_str()).to_string();
+                    let new_region: Vec<String> = new_joined.split('\n').map(|s| s.to_string()).collect();
+
+                    // Snapshot the whole file before/after for single-step undo
+                    let before_snap = lines.clone();
+                    let region_len = max_line_clamped - min_line + 1;
+                    lines.splice(min_line..min_line + region_len, new_region);
+                    let after_snap = lines.clone();
+
+                    // Single undo step via DragBlock snapshot
+                    let (cursor_line, cursor_col) = state.current_position();
+                    state.undo_history.push(crate::undo::Edit::DragBlock {
+                        before: before_snap,
+                        after: after_snap,
+                        source_start: (cursor_line, cursor_col),
+                        source_end: (cursor_line, cursor_col),
+                        dest: (cursor_line, cursor_col),
+                        copy: false,
+                    });
+
+                    state.modified = true;
+                    state.needs_redraw = true;
+                }
+                update_search_hit_count(state, lines);
+            }
+        } else {
+            // --- Single-line replace all ---
+            let pattern_with_flags = format!("(?i){}", pattern);
+            if let Ok(regex) = Regex::new(&pattern_with_flags) {
+                let mut replaced_count = 0;
+
+                let (min_line, max_line, scope) = if let Some(((scope_start_line, _), (scope_end_line, _))) = state.find_scope {
+                    (scope_start_line, scope_end_line, state.find_scope)
+                } else {
+                    (0, lines.len().saturating_sub(1), None)
                 };
 
-                if search_start < search_end {
-                    let before_scope = &line_text[..search_start];
-                    let search_slice = &line_text[search_start..search_end];
-                    let after_scope = &line_text[search_end..];
+                for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
+                    let line_text = &lines[line_idx];
 
-                    // Replace all matches in the search slice
-                    let replaced_slice = regex.replace_all(search_slice, state.replace_pattern.as_str()).to_string();
+                    let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+                        let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
+                        let end_offset = if line_idx == scope_end_line { scope_end_col.min(line_text.len()) } else { line_text.len() };
+                        (start_offset, end_offset)
+                    } else {
+                        (0, line_text.len())
+                    };
 
-                    if replaced_slice != search_slice {
-                        let new_line = format!("{}{}{}", before_scope, replaced_slice, after_scope);
+                    if search_start < search_end {
+                        let before_scope = &line_text[..search_start];
+                        let search_slice = &line_text[search_start..search_end];
+                        let after_scope = &line_text[search_end..];
 
-                        // Count replacements in this line
-                        let line_replacements = regex.find_iter(search_slice).count();
-                        replaced_count += line_replacements;
+                        let replaced_slice = regex.replace_all(search_slice, state.replace_pattern.as_str()).to_string();
 
-                        // Record the edit
-                        let old_line = lines[line_idx].clone();
-                        lines[line_idx] = new_line.clone();
+                        if replaced_slice != search_slice {
+                            let new_line = format!("{}{}{}", before_scope, replaced_slice, after_scope);
+                            let line_replacements = regex.find_iter(search_slice).count();
+                            replaced_count += line_replacements;
 
-                        // Add to undo history
-                        state.undo_history.push(crate::undo::Edit::ReplaceLine {
-                            line: line_idx,
-                            old_content: old_line,
-                            new_content: new_line,
-                        });
+                            let old_line = lines[line_idx].clone();
+                            lines[line_idx] = new_line.clone();
+
+                            state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                line: line_idx,
+                                old_content: old_line,
+                                new_content: new_line,
+                            });
+                        }
                     }
                 }
+
+                if replaced_count > 0 {
+                    state.modified = true;
+                    state.needs_redraw = true;
+                }
+
+                update_search_hit_count(state, lines);
             }
-
-            if replaced_count > 0 {
-                state.modified = true;
-                state.needs_redraw = true;
-            }
-
-            // Don't exit replace mode - let user exit when they want
-            // state.replace_active = false;
-            // state.replace_pattern.clear();
-            // state.replace_cursor_pos = 0;
-
-            // Update hit count
-            update_search_hit_count(state, lines);
         }
     }
 }
@@ -2021,5 +2345,172 @@ mod tests {
         let wildcard_star = pattern_to_regex("test*file", false).unwrap();
         assert!(wildcard_star.is_match("testfile")); // zero chars
         assert!(wildcard_star.is_match("test123file")); // multiple chars
+    }
+
+    /// Helper: build a minimal FileViewerState with a given search pattern and replace pattern,
+    /// with cursor placed at the given position.
+    fn make_state_for_replace(
+        pattern: &str,
+        replace_pattern: &str,
+        cursor_line: usize,
+        cursor_col: usize,
+    ) -> FileViewerState<'static> {
+        let settings = Box::leak(Box::new(crate::settings::Settings::default()));
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, settings);
+        state.last_search_pattern = Some(pattern.to_string());
+        state.replace_pattern = replace_pattern.to_string();
+        state.cursor_line = cursor_line;
+        state.cursor_col = cursor_col;
+        state.find_scope = None;
+        state
+    }
+
+    #[test]
+    fn replace_current_expands_capture_groups() {
+        // Pattern: test([0-9]+)  Replace: Hello$1
+        // "this is test15" → "this is Hello15"
+        let mut lines = vec!["this is test15".to_string()];
+        let mut state = make_state_for_replace("test([0-9]+)", "Hello$1", 0, 8);
+        replace_current_occurrence(&mut state, &mut lines, 24);
+        assert_eq!(lines[0], "this is Hello15");
+    }
+
+    #[test]
+    fn replace_current_expands_two_capture_groups() {
+        // Pattern: (\w+), (\w+)  Replace: $2 $1  (swap first and last name)
+        let mut lines = vec!["Smith, John".to_string()];
+        let mut state = make_state_for_replace(r"(\w+), (\w+)", "$2 $1", 0, 0);
+        replace_current_occurrence(&mut state, &mut lines, 24);
+        assert_eq!(lines[0], "John Smith");
+    }
+
+    #[test]
+    fn replace_all_expands_capture_groups() {
+        // Pattern: v([0-9]+)  Replace: version-$1
+        let mut lines = vec!["v1 and v2 and v3".to_string()];
+        let mut state = make_state_for_replace("v([0-9]+)", "version-$1", 0, 0);
+        replace_all_occurrences(&mut state, &mut lines);
+        assert_eq!(lines[0], "version-1 and version-2 and version-3");
+    }
+
+    #[test]
+    fn replace_current_at_non_first_match() {
+        // Cursor is at the second occurrence of "test([0-9]+)" in the line
+        let mut lines = vec!["test1 and test2".to_string()];
+        // "test2" starts at byte offset 10
+        let mut state = make_state_for_replace("test([0-9]+)", "Hello$1", 0, 10);
+        replace_current_occurrence(&mut state, &mut lines, 24);
+        assert_eq!(lines[0], "test1 and Hello2");
+    }
+
+    // ---- Multi-line (\n) tests ----
+
+    #[test]
+    fn pattern_is_multiline_detects_backslash_n() {
+        assert!(pattern_is_multiline("foo\\nbar"));
+        assert!(pattern_is_multiline("^\\n"));
+        assert!(!pattern_is_multiline("foobar"));
+        assert!(!pattern_is_multiline(r"\d+"));
+    }
+
+    #[test]
+    fn expand_newline_escapes_replaces_backslash_n() {
+        let result = expand_newline_escapes("foo\\nbar");
+        assert_eq!(result, "foo\nbar");
+        let result = expand_newline_escapes("no newline here");
+        assert_eq!(result, "no newline here");
+    }
+
+    #[test]
+    fn build_joined_text_basic() {
+        let lines = vec!["hello".to_string(), "world".to_string(), "foo".to_string()];
+        let (joined, starts) = build_joined_text(&lines, 0, 2);
+        assert_eq!(joined, "hello\nworld\nfoo");
+        assert_eq!(starts, vec![0, 6, 12]);
+    }
+
+    #[test]
+    fn byte_offset_to_position_basic() {
+        let lines = vec!["hello".to_string(), "world".to_string(), "foo".to_string()];
+        let (_, starts) = build_joined_text(&lines, 0, 2);
+        // byte 0 → line 0, col 0
+        assert_eq!(byte_offset_to_position(0, &starts, &lines, 0), (0, 0));
+        // byte 6 → line 1, col 0  ("world" starts at byte 6)
+        assert_eq!(byte_offset_to_position(6, &starts, &lines, 0), (1, 0));
+        // byte 8 → line 1, col 2  ("r" in "world")
+        assert_eq!(byte_offset_to_position(8, &starts, &lines, 0), (1, 2));
+        // byte 12 → line 2, col 0
+        assert_eq!(byte_offset_to_position(12, &starts, &lines, 0), (2, 0));
+    }
+
+    #[test]
+    fn find_next_multiline_matches_across_lines() {
+        let lines = vec![
+            "hello".to_string(),
+            "".to_string(),       // empty line
+            "world".to_string(),
+        ];
+        // Search for "hello\n\nworld" (two newlines, empty line in between)
+        let expanded = "hello\n\nworld";
+        let regex = Regex::new(&format!("(?i)(?ms){}", expanded)).unwrap();
+        // find_next_multiline searches *after* the start position; wrap from (2,5) to find at (0,0)
+        let result = find_next_multiline(&lines, (2, 5), &regex, true, None);
+        assert_eq!(result, Some((0, 0)));
+    }
+
+    #[test]
+    fn replace_all_removes_empty_lines() {
+        // Pattern "\\n\\n" → "" replaces consecutive newlines (empty lines) with nothing,
+        // joining the surrounding lines.  "foo\n\nbar" → "foobar"
+        let mut lines = vec![
+            "foo".to_string(),
+            "".to_string(),
+            "bar".to_string(),
+        ];
+        // Pattern "\\n\\n" with empty replacement collapses empty lines
+        let mut state = make_state_for_replace("\\n\\n", "", 0, 0);
+        replace_all_occurrences(&mut state, &mut lines);
+        // "foo\n\nbar" → "foobar" (the empty line is gone and lines are merged)
+        assert_eq!(lines, vec!["foobar".to_string()]);
+    }
+
+    #[test]
+    fn replace_all_rider_style_caret_n_removes_empty_lines() {
+        // Rider-style: search "^\n" removes empty lines.
+        // With (?m), ^ matches start of each line, so "^\n" matches an empty line's newline.
+        // "foo\n\nbar\n\nbaz" has two empty lines; removing their newlines gives "foo\nbar\nbaz".
+        let mut lines = vec![
+            "foo".to_string(),
+            "".to_string(),
+            "bar".to_string(),
+            "".to_string(),
+            "baz".to_string(),
+        ];
+        let mut state = make_state_for_replace("^\\n", "", 0, 0);
+        replace_all_occurrences(&mut state, &mut lines);
+        assert_eq!(lines, vec!["foo".to_string(), "bar".to_string(), "baz".to_string()]);
+    }
+
+    #[test]
+    fn multiline_replace_all_is_single_undo_step() {
+        // Replacing with a multiline pattern should produce exactly one undo entry (DragBlock)
+        let mut lines = vec!["foo".to_string(), "".to_string(), "bar".to_string()];
+        let mut state = make_state_for_replace("\\n\\n", "", 0, 0);
+        replace_all_occurrences(&mut state, &mut lines);
+        assert_eq!(lines, vec!["foobar".to_string()]);
+        // Should be exactly one undo entry
+        assert_eq!(state.undo_history.edits.len(), 1);
+        // Should be a DragBlock (file snapshot) for single-step undo
+        assert!(matches!(state.undo_history.edits[0], crate::undo::Edit::DragBlock { .. }));
+    }
+
+    #[test]
+    fn replace_all_multiline_cross_line_pattern() {
+        // Pattern "hello\\nworld" → "greetings"
+        let mut lines = vec!["hello".to_string(), "world".to_string(), "end".to_string()];
+        let mut state = make_state_for_replace("hello\\nworld", "greetings", 0, 0);
+        replace_all_occurrences(&mut state, &mut lines);
+        assert_eq!(lines, vec!["greetings".to_string(), "end".to_string()]);
     }
 }

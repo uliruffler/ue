@@ -58,6 +58,41 @@ Press **{replace}** to enter find-and-replace workflow:
 
 **Note:** Replace respects search scope - if you searched within a selection, only that selection will be affected.
 
+**Capture Group References in Replacement:**
+
+When using Regex mode, you can reference captured groups in the replacement text using `$N` syntax:
+
+| Syntax | Description |
+|--------|-------------|
+| `$1`, `$2`, ... | Insert the text matched by capture group 1, 2, ... |
+| `$0` | Insert the entire match |
+| `${name}` | Insert the text matched by named group `(?P<name>...)` |
+
+**Example:** Search `test([0-9]+)` → Replace `Hello$1`
+- Input:  `this is test15`
+- Result: `this is Hello15`
+
+**Example:** Search `(\w+), (\w+)` → Replace `$2 $1`
+- Input:  `Smith, John`
+- Result: `John Smith`
+
+**Example:** Search `(?P<year>\d{4})-(?P<month>\d{2})` → Replace `${month}/${year}`
+- Input:  `2024-03`
+- Result: `03/2024`
+
+**Newline Matching (`\n`):**
+
+Use `\n` in search and replace patterns to match or insert real line breaks:
+
+| Pattern | Replace | Effect |
+|---------|---------|--------|
+| `^\n` | *(empty)* | Remove empty lines (Rider-style) — searches `\n\n` equivalent |
+| `\n\n` | *(empty)* | Merge empty-line gaps (join surrounding lines) |
+| `hello\nworld` | `greetings` | Replace a two-line phrase with one line |
+| `foo` | `line1\nline2` | Split a match across two lines |
+
+> **Note:** `\n` in the search box is always treated as a literal line break, enabling cross-line matching. Highlighting of multi-line matches is not shown in the editor (the cursor is placed at the match start). Use **Replace All** (`{replace_all}`) for the most reliable experience with multi-line patterns.
+
 ### Navigation in Find
 
 | Key | Action |
