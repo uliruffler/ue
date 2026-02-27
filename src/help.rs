@@ -74,63 +74,40 @@ fn replace_keybindings(content: &str, settings: &crate::settings::Settings) -> S
         )
 }
 
-/// Compute the width (in terminal columns) that termimad should wrap to, given the
-/// full terminal width and the editor state.  The gutter (line-number digits + separator)
-/// and the scrollbar column are subtracted so that the rendered text fits exactly in the
-/// available content area without overflowing or wrapping too late.
+/// Compute the render width for markdown, given the full terminal width and editor state.
+/// The gutter (line-number digits + separator) and the scrollbar column are subtracted so
+/// that rendered text fits exactly in the available content area.
 pub(crate) fn markdown_render_width(term_width: usize, state: &crate::editor_state::FileViewerState, line_count: usize) -> usize {
     let gutter = crate::coordinates::line_number_display_width(state.settings, line_count) as usize;
     let scrollbar = 1;
     term_width.saturating_sub(gutter + scrollbar)
 }
 
-/// Render markdown document content to display lines using the same termimad pipeline
-/// as the help system. No keybinding substitution is performed — the content is rendered
-/// as-is. Suitable for showing `.md` files in "rendered" view mode.
+/// Render markdown document content to display lines using the configured renderer.
+/// No keybinding substitution is performed — the content is rendered as-is.
+/// Suitable for showing `.md` files in "rendered" view mode.
 ///
 /// Returns a `Vec<String>` of display lines that may contain ANSI escape codes.
 pub(crate) fn render_markdown_to_lines(content_lines: &[String], term_width: usize) -> Vec<String> {
-    use termimad::{Area, MadSkin};
-
     let content = content_lines.join("\n");
-    let skin = MadSkin::default();
-    let area = Area::new(0, 0, term_width as u16, u16::MAX);
-    let fmt_text = skin.area_text(&content, &area);
-
-    fmt_text
-        .to_string()
-        .lines()
-        .map(|line| line.to_string())
-        .collect()
+    crate::markdown_renderer::default_renderer().render(&content, term_width)
 }
 
-/// Load and format help content from markdown file
-/// Renders markdown (including tables) to terminal-formatted text
+/// Load and format help content from a markdown string.
+/// Replaces keybinding placeholders, then renders to terminal display lines.
 fn load_help_from_md(
     content: &str,
     settings: &crate::settings::Settings,
     term_width: usize,
 ) -> Vec<String> {
-    use termimad::{Area, MadSkin};
-
-    // First replace keybinding placeholders
     let replaced = replace_keybindings(content, settings);
+    crate::markdown_renderer::default_renderer().render(&replaced, term_width)
+}
 
-    // Create a skin for rendering
-    let skin = MadSkin::default();
-
-    // Create an area for the text to fit within
-    let area = Area::new(0, 0, term_width as u16, u16::MAX);
-
-    // Render markdown to formatted text
-    let fmt_text = skin.area_text(&replaced, &area);
-
-    // Split into lines for scrolling
-    fmt_text
-        .to_string()
-        .lines()
-        .map(|line| line.to_string())
-        .collect()
+/// Public re-export of `replace_keybindings` for use in tests inside other modules.
+#[cfg(test)]
+pub(crate) fn replace_keybindings_pub(content: &str, settings: &crate::settings::Settings) -> String {
+    replace_keybindings(content, settings)
 }
 
 /// Get help content for the given context (used in tests; production now opens deployed files)

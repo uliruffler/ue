@@ -15,6 +15,7 @@ pub mod env;
 pub mod event_handlers;
 pub mod find;
 pub mod help;
+pub mod markdown_renderer;
 pub mod menu;
 pub mod mouse_handlers;
 pub mod open_dialog;
