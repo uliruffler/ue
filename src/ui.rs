@@ -1047,22 +1047,30 @@ fn editing_session(
                                         // User selected a path - save the file there
                                         use crate::editing::{save_file, delete_file_history};
 
-                                        // Delete the old untitled undo file and remove from recent files
-                                        let _ = delete_file_history(file);
+                                        match save_file(target_path, &lines) {
+                                            Err(e) => {
+                                                // Show error (e.g. permission denied) and continue editing
+                                                let _ = crate::event_handlers::show_save_error(target_path, &e);
+                                                state.needs_redraw = true;
+                                            }
+                                            Ok(()) => {
+                                                // Delete the old untitled undo file and remove from recent files
+                                                let _ = delete_file_history(file);
 
-                                        save_file(target_path, &lines)?;
-                                        state.modified = false;
-                                        state.undo_history.clear_unsaved_state();
-                                        let abs = state.absolute_line();
-                                        state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
-                                        state.undo_history.find_history = state.find_history.clone();
+                                                state.modified = false;
+                                                state.undo_history.clear_unsaved_state();
+                                                let abs = state.absolute_line();
+                                                state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                                                state.undo_history.find_history = state.find_history.clone();
 
-                                        // Save undo history to the NEW file location
-                                        let _ = state.undo_history.save(target_path);
-                                        state.last_save_time = Some(Instant::now());
+                                                // Save undo history to the NEW file location
+                                                let _ = state.undo_history.save(target_path);
+                                                state.last_save_time = Some(Instant::now());
 
-                                        // Switch to the new filename - don't persist to old file, it's deleted
-                                        return Ok((false, Some(path.to_string_lossy().to_string()), false, false));
+                                                // Switch to the new filename - don't persist to old file, it's deleted
+                                                return Ok((false, Some(path.to_string_lossy().to_string()), false, false));
+                                            }
+                                        }
                                     }
                                     crate::open_dialog::OpenDialogResult::Cancelled => {
                                         // User cancelled - just redraw
@@ -1182,22 +1190,30 @@ fn editing_session(
                                         // User selected a path - save the file there
                                         use crate::editing::delete_file_history;
 
-                                        // Delete the old untitled undo file and remove from recent files
-                                        let _ = delete_file_history(file);
+                                        match save_file(target_path, &lines) {
+                                            Err(e) => {
+                                                // Show error (e.g. permission denied) and continue editing
+                                                let _ = crate::event_handlers::show_save_error(target_path, &e);
+                                                state.needs_redraw = true;
+                                            }
+                                            Ok(()) => {
+                                                // Delete the old untitled undo file and remove from recent files
+                                                let _ = delete_file_history(file);
 
-                                        save_file(target_path, &lines)?;
-                                        state.modified = false;
-                                        state.undo_history.clear_unsaved_state();
-                                        let abs = state.absolute_line();
-                                        state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
-                                        state.undo_history.find_history = state.find_history.clone();
+                                                state.modified = false;
+                                                state.undo_history.clear_unsaved_state();
+                                                let abs = state.absolute_line();
+                                                state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
+                                                state.undo_history.find_history = state.find_history.clone();
 
-                                        // Save undo history to the NEW file location
-                                        let _ = state.undo_history.save(target_path);
-                                        state.last_save_time = Some(Instant::now());
+                                                // Save undo history to the NEW file location
+                                                let _ = state.undo_history.save(target_path);
+                                                state.last_save_time = Some(Instant::now());
 
-                                        // Switch to the new filename - don't persist to old file, it's deleted
-                                        return Ok((false, Some(path.to_string_lossy().to_string()), false, false));
+                                                // Switch to the new filename - don't persist to old file, it's deleted
+                                                return Ok((false, Some(path.to_string_lossy().to_string()), false, false));
+                                            }
+                                        }
                                     }
                                     crate::open_dialog::OpenDialogResult::Cancelled => {
                                         // User cancelled - just redraw

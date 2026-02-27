@@ -1903,6 +1903,48 @@ pub(crate) fn show_undo_conflict_confirmation(settings: &Settings) -> Result<boo
     }
 }
 
+/// Show an error message in the footer and wait for any key press to dismiss
+#[allow(dead_code)] // Used in ui.rs for save error handling
+pub(crate) fn show_save_error(
+    filename: &str,
+    error: &std::io::Error,
+) -> Result<(), std::io::Error> {
+    use crossterm::event;
+    use crossterm::terminal;
+
+    let mut stdout = std::io::stdout();
+    let (_, term_height) = terminal::size()?;
+    let footer_row = term_height - 1;
+
+    // Extract just the filename from the path
+    let path = std::path::Path::new(filename);
+    let display_name = path.file_name().and_then(|n| n.to_str()).unwrap_or(filename);
+
+    let error_msg = if error.kind() == std::io::ErrorKind::PermissionDenied {
+        format!("Cannot save '{}': Permission denied  [Press any key]", display_name)
+    } else {
+        format!("Cannot save '{}': {}  [Press any key]", display_name, error)
+    };
+
+    // Display error message in footer
+    execute!(
+        stdout,
+        crossterm::cursor::MoveTo(0, footer_row),
+        crossterm::terminal::Clear(crossterm::terminal::ClearType::CurrentLine),
+        crossterm::style::SetForegroundColor(crossterm::style::Color::Red)
+    )?;
+    write!(&mut stdout, "{}", error_msg)?;
+    execute!(stdout, crossterm::style::ResetColor)?;
+    stdout.flush()?;
+
+    // Wait for any key press to dismiss
+    loop {
+        if let event::Event::Key(_) = event::read()? {
+            return Ok(());
+        }
+    }
+}
+
 fn word_left(state: &mut FileViewerState, lines: &[String]) -> bool {
     let abs = state.absolute_line();
     if abs >= lines.len() {
