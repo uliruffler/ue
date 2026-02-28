@@ -463,14 +463,21 @@ pub(crate) fn render_footer(
         left_side.push(':');
         left_side.push(' ');
 
-        // pattern_start_col in CHARACTERS (not visual columns)
-        // This is correct for where text gets inserted in the buffer
-        let pattern_start_col = left_side.len();
+        // pattern_start_col in visual columns (where the pattern text starts)
+        let pattern_start_col = left_side.chars().count();
 
         // Build the right side (hit count + arrows + position)
         let line_num = state.absolute_line() + 1;
         let col_num = state.cursor_col + 1;
-        let position_info = format!("{}:{}", line_num, col_num);
+
+        // Pad line/col to their maximum possible widths so the right side has a
+        // constant character count and the hit display never shifts position.
+        let total_lines = lines.len().max(1);
+        let max_line_w = ((total_lines as f64).log10().floor() as usize) + 1;
+        let max_col = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) + 1;
+        let max_col_w = if max_col == 0 { 1 } else { ((max_col as f64).log10().floor() as usize) + 1 };
+        let position_info = format!("{:>width_l$}:{:<width_c$}", line_num, col_num,
+            width_l = max_line_w, width_c = max_col_w);
 
         // Always show hit count with arrows
         let hit_display = if state.search_hit_count > 0 {
@@ -532,8 +539,8 @@ pub(crate) fn render_footer(
         }
 
         // Update left_side length to account for the pattern we just wrote
-        // Add +1 because ⇄ character displays as 2 visual columns
-        let full_left_len = left_side.len() + state.find_pattern.chars().count() + 1;
+        // Use chars().count() so multi-byte chars like ⇄ are counted as 1 column each
+        let full_left_len = left_side.chars().count() + state.find_pattern.chars().count();
 
         // Calculate right-aligned position (same method as normal mode)
         // In normal mode: remaining_width = total_width - left_len
@@ -545,7 +552,8 @@ pub(crate) fn render_footer(
         let written_after_digits = error_offset + full_left_len - digit_area_len;
 
         // Right-align: pad to push right_side to right edge
-        let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.len());
+        // Use chars().count() to correctly count multi-byte Unicode chars (e.g. ↑↓) as 1 column each
+        let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.chars().count());
         for _ in 0..pad {
             write!(stdout, " ")?;
         }
@@ -565,8 +573,7 @@ pub(crate) fn render_footer(
         };
         let chars: Vec<char> = state.find_pattern.chars().collect();
         let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
-        // Adjust for visual positioning - test with -2
-        let cursor_x = (error_offset + pattern_start_col + cursor_offset - 2) as u16;
+        let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
         execute!(stdout, cursor::MoveTo(cursor_x, footer_row))?;
         apply_cursor_shape(stdout, state.settings)?;
         execute!(stdout, cursor::Show)?;
@@ -631,7 +638,8 @@ pub(crate) fn render_footer(
         let written_after_digits = full_left_len - digit_area_len;
 
         // Right-align: pad to push right_side to right edge
-        let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.len());
+        // Use chars().count() to correctly count multi-byte Unicode chars (e.g. ↑↓) as 1 column each
+        let pad = remaining_width.saturating_sub(written_after_digits).saturating_sub(right_side.chars().count());
         for _ in 0..pad {
             write!(stdout, " ")?;
         }
@@ -657,16 +665,16 @@ pub(crate) fn render_footer(
     let line_num = state.absolute_line() + 1;
     let col_num = state.cursor_col + 1;
 
-    // In goto_line mode, use the input instead of actual line number
-    let position_info = if state.goto_line_active {
-        format!("{}:{}", state.goto_line_input, col_num)
-    } else {
-        format!("{}:{}", line_num, col_num)
-    };
-
-    // Build position string with hit count first (if active search), then position
-    // Add trailing space for better right margin
+    // When a search is active, pad line/col numbers to their maximum possible widths so
+    // that the hit display never shifts position as the cursor moves through the document.
     let position_info = if state.last_search_pattern.is_some() {
+        // Max line-number width: digits needed for the last line
+        let total_lines = lines.len().max(1);
+        let max_line_w = ((total_lines as f64).log10().floor() as usize) + 1;
+        // Max col width: digits needed for the longest line (+1 for 1-based display)
+        let max_col = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) + 1;
+        let max_col_w = if max_col == 0 { 1 } else { ((max_col as f64).log10().floor() as usize) + 1 };
+
         let hit_display = if state.search_hit_count > 0 {
             if state.search_current_hit > 0 {
                 format!("({}/{}) ↑↓", state.search_current_hit, state.search_hit_count)
@@ -676,9 +684,26 @@ pub(crate) fn render_footer(
         } else {
             "(0) ↑↓".to_string()
         };
-        format!("{}  {} ", hit_display, position_info)
+
+        // In goto_line mode keep the raw input; otherwise pad both numbers to fixed widths
+        let pos_str = if state.goto_line_active {
+            format!("{}:{}", state.goto_line_input, col_num)
+        } else {
+            format!("{:>width_l$}:{:<width_c$}", line_num, col_num, width_l = max_line_w, width_c = max_col_w)
+        };
+        format!("{}  {} ", hit_display, pos_str)
     } else {
-        format!("{} ", position_info)
+        // No search active – pad to fixed widths so the position never shifts
+        let total_lines = lines.len().max(1);
+        let max_line_w = ((total_lines as f64).log10().floor() as usize) + 1;
+        let max_col = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) + 1;
+        let max_col_w = if max_col == 0 { 1 } else { ((max_col as f64).log10().floor() as usize) + 1 };
+        let pos_str = if state.goto_line_active {
+            format!("{}:{}", state.goto_line_input, col_num)
+        } else {
+            format!("{:>width_l$}:{:<width_c$}", line_num, col_num, width_l = max_line_w, width_c = max_col_w)
+        };
+        format!("{} ", pos_str)
     };
 
     let total_width = state.term_width as usize;
@@ -761,13 +786,15 @@ pub(crate) fn render_footer(
         write!(stdout, "Filter: ")?;
         left_len += 8; // "Filter: " is 8 characters
 
+        // Pad context numbers to 2 digits (max value is 99) so the spinner has constant
+        // character width and the position display never shifts.
         let spinner_text = format!(
-            "Before:{}▲▼ After:{}▲▼  ",
+            "Before:{:2}▲▼ After:{:2}▲▼  ",
             state.filter_context_before,
             state.filter_context_after
         );
         write!(stdout, "{}", spinner_text)?;
-        left_len += spinner_text.len();
+        left_len += spinner_text.chars().count(); // use chars() so ▲▼ (multi-byte) count as 1 column each
     }
 
     let remaining_width = total_width.saturating_sub(left_len);
@@ -790,7 +817,7 @@ pub(crate) fn render_footer(
         write!(stdout, "{}", error)?;
         execute!(stdout, ResetColor)?;
         execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
-    } else if position_info.len() >= remaining_width {
+    } else if position_info.chars().count() >= remaining_width {
         let truncated = &position_info[position_info.len() - remaining_width..];
         if state.goto_line_active {
             // Render with line number portion highlighted only if not yet typing
@@ -800,7 +827,7 @@ pub(crate) fn render_footer(
             write!(stdout, "{}", truncated)?;
         }
     } else {
-        let pad = remaining_width - position_info.len();
+        let pad = remaining_width - position_info.chars().count();
         for _ in 0..pad {
             write!(stdout, " ")?;
         }

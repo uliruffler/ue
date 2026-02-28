@@ -461,28 +461,29 @@ fn handle_footer_click(
         let digits = state.settings.appearance.line_number_digits as usize;
         let line_num_offset = if digits > 0 { digits + 1 } else { 0 };
 
-        // Format in footer: "[digits] Filter: Before:X▲▼ After:Y▲▼  "
+        // Format in footer: "[digits] Filter: Before: X▲▼ After: Y▲▼  "
         // Calculate positions accounting for "Filter: " prefix
         let filter_label = "Filter: ";
         let filter_label_len = filter_label.len();
         
         let before_label = "Before:";
-        let before_num_str = state.filter_context_before.to_string();
+        // Context numbers are padded to 2 digits (matching the renderer)
+        let before_num_w = 2usize;
         let after_label = " After:"; // Note: includes leading space
-        let after_num_str = state.filter_context_after.to_string();
+        let after_num_w = 2usize;
 
         // Position after line numbers and "Filter: " label
         let content_start = line_num_offset + filter_label_len;
         
-        // Calculate exact column positions in the rendered string "Before:X▲▼ After:Y▲▼  "
+        // Calculate exact column positions in the rendered string "Before: X▲▼ After: Y▲▼  "
         let before_label_start = content_start;
         let before_num_start = before_label_start + before_label.len();
-        let before_arrow_start = before_num_start + before_num_str.len();
+        let before_arrow_start = before_num_start + before_num_w;
         let before_arrow_end = before_arrow_start + 2; // ▲▼ is 2 characters
 
         let after_label_start = before_arrow_end;
         let after_num_start = after_label_start + after_label.len();
-        let after_arrow_start = after_num_start + after_num_str.len();
+        let after_arrow_start = after_num_start + after_num_w;
 
         let click_col = column as usize;
 
@@ -572,7 +573,14 @@ fn handle_footer_click(
     // Calculate where the search info is displayed in the footer
     let line_num = state.absolute_line() + 1;
     let col_num = state.cursor_col + 1;
-    let position_info = format!("{}:{}", line_num, col_num);
+
+    // Use the same fixed-width padding as the renderer so click targets stay stable
+    let total_lines = lines.len().max(1);
+    let max_line_w = ((total_lines as f64).log10().floor() as usize) + 1;
+    let max_col = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) + 1;
+    let max_col_w = if max_col == 0 { 1 } else { ((max_col as f64).log10().floor() as usize) + 1 };
+    let position_info = format!("{:>width_l$}:{:<width_c$}", line_num, col_num,
+        width_l = max_line_w, width_c = max_col_w);
 
     let hit_display = if state.search_hit_count > 0 {
         if state.search_current_hit > 0 {
@@ -584,7 +592,7 @@ fn handle_footer_click(
         "(0) ↑↓".to_string()
     };
 
-    // Format: hit_display  position_info (with double space)
+    // Format: hit_display  position_info (with double space) — matches renderer exactly
     let full_info = format!("{}  {}", hit_display, position_info);
 
     let total_width = state.term_width as usize;
@@ -592,27 +600,36 @@ fn handle_footer_click(
     let left_len = if digits > 0 { digits + 1 } else { 0 };
     let remaining_width = total_width.saturating_sub(left_len);
 
+    // Use chars().count() so multi-byte chars (↑↓) count as 1 column each
+    let full_info_cols = full_info.chars().count();
+
     // Calculate where the arrows are displayed
-    let info_start = if full_info.len() >= remaining_width {
+    let info_start = if full_info_cols >= remaining_width {
         left_len // Truncated, starts at left edge
     } else {
-        left_len + (remaining_width - full_info.len()) // Padded, right-aligned
+        left_len + (remaining_width - full_info_cols) // Padded, right-aligned
     };
 
-    // Find the position of the arrows
+    // Find the position of the arrows within full_info (char-column offset)
     let arrow_text = "↑↓";
-    let arrow_start = if full_info.len() >= remaining_width {
-        // In truncated case, find where arrows would be
-        let visible_part = &full_info[full_info.len() - remaining_width..];
-        if let Some(pos) = visible_part.find(arrow_text) {
-            info_start + pos
+    let arrow_start = if full_info_cols >= remaining_width {
+        // Truncated case: find byte offset of arrows then convert to char-column offset
+        // The visible portion starts at (full_info.len() - remaining_width) bytes from the right,
+        // but since arrows are always near the start (in hit_display), find in full string.
+        if let Some(byte_pos) = full_info.find(arrow_text) {
+            let col_pos = full_info[..byte_pos].chars().count();
+            if col_pos >= full_info_cols.saturating_sub(remaining_width) {
+                info_start + col_pos - (full_info_cols - remaining_width)
+            } else {
+                return; // Arrows scrolled out of view
+            }
         } else {
-            return; // Arrows not visible
+            return;
         }
     } else {
-        // Normal case
-        if let Some(pos) = full_info.find(arrow_text) {
-            info_start + pos
+        // Normal (non-truncated) case: convert byte offset to char-column offset
+        if let Some(byte_pos) = full_info.find(arrow_text) {
+            info_start + full_info[..byte_pos].chars().count()
         } else {
             return;
         }
