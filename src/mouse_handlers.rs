@@ -592,12 +592,19 @@ fn handle_footer_click(
         "(0) ↑↓".to_string()
     };
 
-    // Format: hit_display  position_info (with double space) — matches renderer exactly
-    let full_info = format!("{}  {}", hit_display, position_info);
+    // Format: hit_display  position_info (with double space and trailing space) — matches renderer exactly
+    let full_info = format!("{}  {} ", hit_display, position_info);
 
     let total_width = state.term_width as usize;
     let digits = state.settings.appearance.line_number_digits as usize;
-    let left_len = if digits > 0 { digits + 1 } else { 0 };
+    // Match the renderer's bottom_number_str width: max(actual digit count, digits setting)
+    let left_len = if digits > 0 {
+        let total_lines = lines.len();
+        let actual_width = if total_lines == 0 { 1 } else { ((total_lines as f64).log10().floor() as usize) + 1 };
+        actual_width.max(digits) + 1 // +1 for the space separator
+    } else {
+        0
+    };
     let remaining_width = total_width.saturating_sub(left_len);
 
     // Use chars().count() so multi-byte chars (↑↓) count as 1 column each
