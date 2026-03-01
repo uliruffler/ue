@@ -1447,23 +1447,40 @@ pub(crate) fn replace_current_occurrence(
                         let match_at_cursor = regex.find_iter(line_text).find(|m| m.start() == col);
                         if let Some(m) = match_at_cursor {
                             // We're at a match - replace it, expanding capture group references ($1, $2, etc.)
+                            // and \n escape sequences in the replacement string
+                            let replace_str = expand_newline_escapes(&state.replace_pattern);
                             let before = &line_text[..m.start()];
                             let after = &line_text[m.end()..];
                             let replaced_segment = regex
-                                .replace(m.as_str(), state.replace_pattern.as_str())
+                                .replace(m.as_str(), replace_str.as_str())
                                 .to_string();
-                            let new_line = format!("{}{}{}", before, replaced_segment, after);
 
-                            let old_line = lines[line].clone();
-                            lines[line] = new_line.clone();
+                            if replaced_segment.contains('\n') {
+                                // Replacement introduces newlines — split into multiple lines
+                                let combined = format!("{}{}{}", before, replaced_segment, after);
+                                let new_lines: Vec<String> = combined.split('\n').map(|s| s.to_string()).collect();
+                                let before_snap = lines.clone();
+                                lines.splice(line..=line, new_lines);
+                                let after_snap = lines.clone();
+                                state.undo_history.push(crate::undo::Edit::DragBlock {
+                                    before: before_snap,
+                                    after: after_snap,
+                                    source_start: (line, col),
+                                    source_end: (line, col),
+                                    dest: (line, col),
+                                    copy: false,
+                                });
+                            } else {
+                                let new_line = format!("{}{}{}", before, replaced_segment, after);
+                                let old_line = lines[line].clone();
+                                lines[line] = new_line.clone();
+                                state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                    line,
+                                    old_content: old_line,
+                                    new_content: new_line,
+                                });
+                            }
                             state.modified = true;
-
-                            state.undo_history.push(crate::undo::Edit::ReplaceLine {
-                                line,
-                                old_content: old_line,
-                                new_content: new_line,
-                            });
-
                             state.needs_redraw = true;
                         }
                     }
@@ -1537,8 +1554,12 @@ pub(crate) fn replace_all_occurrences(
                     (0, lines.len().saturating_sub(1), None)
                 };
 
+                // Track extra lines inserted due to \n in replacement to keep indices correct
+                let mut insert_offset: usize = 0;
+
                 for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
-                    let line_text = &lines[line_idx];
+                    let actual_idx = line_idx + insert_offset;
+                    let line_text = lines[actual_idx].clone();
 
                     let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
                         let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
@@ -1553,21 +1574,33 @@ pub(crate) fn replace_all_occurrences(
                         let search_slice = &line_text[search_start..search_end];
                         let after_scope = &line_text[search_end..];
 
-                        let replaced_slice = regex.replace_all(search_slice, state.replace_pattern.as_str()).to_string();
+                        let replace_str = expand_newline_escapes(&state.replace_pattern);
+                        let replaced_slice = regex.replace_all(search_slice, replace_str.as_str()).to_string();
 
                         if replaced_slice != search_slice {
-                            let new_line = format!("{}{}{}", before_scope, replaced_slice, after_scope);
                             let line_replacements = regex.find_iter(search_slice).count();
                             replaced_count += line_replacements;
 
-                            let old_line = lines[line_idx].clone();
-                            lines[line_idx] = new_line.clone();
-
-                            state.undo_history.push(crate::undo::Edit::ReplaceLine {
-                                line: line_idx,
-                                old_content: old_line,
-                                new_content: new_line,
-                            });
+                            let combined = format!("{}{}{}", before_scope, replaced_slice, after_scope);
+                            if combined.contains('\n') {
+                                // Replacement introduces newlines — splice into multiple lines
+                                let new_lines: Vec<String> = combined.split('\n').map(|s| s.to_string()).collect();
+                                let extra = new_lines.len() - 1;
+                                lines.splice(actual_idx..=actual_idx, new_lines.clone());
+                                insert_offset += extra;
+                                state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                    line: actual_idx,
+                                    old_content: line_text.clone(),
+                                    new_content: new_lines.join("\n"),
+                                });
+                            } else {
+                                lines[actual_idx] = combined.clone();
+                                state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                    line: actual_idx,
+                                    old_content: line_text.clone(),
+                                    new_content: combined,
+                                });
+                            }
                         }
                     }
                 }
@@ -2473,6 +2506,24 @@ mod tests {
         replace_all_occurrences(&mut state, &mut lines);
         // "foo\n\nbar" → "foobar" (the empty line is gone and lines are merged)
         assert_eq!(lines, vec!["foobar".to_string()]);
+    }
+
+    #[test]
+    fn replace_current_with_newline_in_replacement_splits_line() {
+        // Replacing "foo" with "foo\nbar" on a single line should split it into two lines
+        let mut lines = vec!["prefix foo suffix".to_string()];
+        let mut state = make_state_for_replace("foo", "foo\\nbar", 0, 7);
+        replace_current_occurrence(&mut state, &mut lines, 24);
+        assert_eq!(lines, vec!["prefix foo".to_string(), "bar suffix".to_string()]);
+    }
+
+    #[test]
+    fn replace_all_with_newline_in_replacement_splits_lines() {
+        // Replacing "," with "\n" across multiple lines should split at each comma
+        let mut lines = vec!["a,b".to_string(), "c,d".to_string()];
+        let mut state = make_state_for_replace(",", "\\n", 0, 0);
+        replace_all_occurrences(&mut state, &mut lines);
+        assert_eq!(lines, vec!["a".to_string(), "b".to_string(), "c".to_string(), "d".to_string()]);
     }
 
     #[test]
