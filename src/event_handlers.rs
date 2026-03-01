@@ -288,7 +288,6 @@ pub(crate) fn handle_key_event(
                 state.find_active = true;
                 state.find_pattern.clear();
                 state.find_cursor_pos = 0;
-                state.find_error = None;
                 state.needs_redraw = true;
                 return Ok((false, false));
             }
@@ -573,7 +572,6 @@ pub(crate) fn handle_key_event(
             state.find_via_replace = false; // Clear flag - this is normal find mode
             state.find_pattern.clear();
             state.find_cursor_pos = 0;
-            state.find_error = None;
             state.needs_redraw = true;
         }
         return Ok((false, false));
@@ -584,7 +582,6 @@ pub(crate) fn handle_key_event(
         if state.find_active {
             // Toggle between regex and wildcard mode while in find mode
             state.find_regex_mode = !state.find_regex_mode;
-            state.find_error = None;
             // Update highlights with the new mode - CRITICAL!
             crate::find::update_live_highlights(state);
             crate::find::update_search_hit_count(state, lines);
@@ -697,15 +694,18 @@ pub(crate) fn handle_key_event(
 
     // If in find mode, handle find input
     if state.find_active {
-        let exited = crate::find::handle_find_input(state, lines, key_event, visible_lines);
+        match crate::find::handle_find_input(state, lines, key_event, visible_lines) {
+            Err(error_msg) => {
+                // Invalid pattern: show error on footer, wait for key, then redraw
+                show_find_error(&error_msg, state.effective_theme_bg(), state.settings.appearance.line_number_digits as usize)?;
+                state.needs_redraw = true;
+            }
+            Ok(_exited) => {}
+        }
         // Save undo history to persist find history changes
         state.undo_history.find_history = state.find_history.clone();
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
-        // If find mode was exited, the return value indicates this
-        if exited {
-            // Find mode was closed, continue normal processing
-        }
         return Ok((false, false));
     }
 
@@ -1899,6 +1899,51 @@ pub(crate) fn show_undo_conflict_confirmation(settings: &Settings) -> Result<boo
                     // Ignore other keys, wait for Enter or Esc
                 }
             }
+        }
+    }
+}
+
+/// Show a find pattern error in the footer and wait for any key press to dismiss,
+/// then signal that the editor needs a full redraw.
+pub(crate) fn show_find_error(
+    error_msg: &str,
+    bg_color: crossterm::style::Color,
+    line_number_digits: usize,
+) -> Result<(), std::io::Error> {
+    use crossterm::event;
+    use crossterm::terminal;
+
+    let mut stdout = std::io::stdout();
+    let (term_width, term_height) = terminal::size()?;
+    let footer_row = term_height - 1;
+
+    // Indent to match the find/replace footer: digit gutter + one space
+    let indent = if line_number_digits > 0 {
+        format!("{:width$} ", "", width = line_number_digits)
+    } else {
+        String::new()
+    };
+
+    let display = format!("{}{}  [Press any key]", indent, error_msg);
+
+    // Set background first, then move and write — this ensures the whole line
+    // gets the theme background color. Pad with spaces to fill the entire width.
+    let padded = format!("{:<width$}", display, width = term_width as usize);
+
+    execute!(
+        stdout,
+        crossterm::style::SetBackgroundColor(bg_color),
+        crossterm::style::SetForegroundColor(crossterm::style::Color::Red),
+        crossterm::cursor::MoveTo(0, footer_row),
+    )?;
+    write!(&mut stdout, "{}", padded)?;
+    execute!(stdout, crossterm::style::ResetColor)?;
+    stdout.flush()?;
+
+    // Wait for any key press to dismiss
+    loop {
+        if let event::Event::Key(_) = event::read()? {
+            return Ok(());
         }
     }
 }

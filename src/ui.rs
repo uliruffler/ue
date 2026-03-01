@@ -426,7 +426,6 @@ fn handle_first_esc(state: &mut FileViewerState) -> bool {
     if state.find_active {
         state.find_active = false;
         state.find_pattern.clear();
-        state.find_error = None;
         state.find_history_index = None;
         state.last_search_pattern = state.saved_search_pattern.clone();
         state.saved_search_pattern = None;
@@ -442,7 +441,6 @@ fn handle_first_esc(state: &mut FileViewerState) -> bool {
         // Also clear find mode and search highlights
         state.find_active = false;
         state.find_pattern.clear();
-        state.find_error = None;
         state.find_history_index = None;
         state.last_search_pattern = None;
         state.saved_search_pattern = None;
@@ -458,7 +456,6 @@ fn handle_first_esc(state: &mut FileViewerState) -> bool {
     if state.last_search_pattern.is_some() {
         state.last_search_pattern = None;
         state.find_scope = None;
-        state.find_error = None;
         state.search_hit_count = 0;
         state.search_current_hit = 0;
         state.filter_active = false; // Also clear filter mode
@@ -1295,7 +1292,6 @@ fn editing_session(
                             state.find_active = true;
                             state.find_pattern.clear();
                             state.find_cursor_pos = 0;
-                            state.find_error = None;
                         }
                         MenuAction::ViewLineWrap => {
                             if !state.markdown_rendered {

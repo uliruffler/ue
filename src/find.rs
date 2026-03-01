@@ -47,6 +47,16 @@ fn pattern_is_multiline(pattern: &str) -> bool {
     pattern.contains("\\n")
 }
 
+/// Extract a single-line summary from a regex error message.
+/// The `regex` crate produces verbose multi-line output; we pull out the
+/// `error: …` line which contains the human-readable description.
+fn summarize_regex_error(e: &str) -> String {
+    e.lines()
+        .find(|l| l.trim_start().starts_with("error:"))
+        .map(|l| l.trim().to_string())
+        .unwrap_or_else(|| e.lines().next().unwrap_or(e).trim().to_string())
+}
+
 /// Expand user-typed `\n` into a real newline character so the regex engine
 /// can match across line boundaries in a joined text.
 fn expand_newline_escapes(pattern: &str) -> String {
@@ -187,13 +197,14 @@ fn find_prev_multiline(
 }
 
 /// Handle find mode key events
-/// Returns true if find mode should exit
+/// Returns Ok(true) if find mode should exit, Ok(false) to stay in find mode,
+/// Err(msg) if the pattern is invalid and the caller should show an error.
 pub(crate) fn handle_find_input(
     state: &mut FileViewerState,
     lines: &[String],
     key_event: KeyEvent,
     _visible_lines: usize,
-) -> bool {
+) -> Result<bool, String> {
 
     let KeyEvent { code, modifiers, .. } = key_event;
 
@@ -203,7 +214,6 @@ pub(crate) fn handle_find_input(
             state.find_active = false;
             state.find_via_replace = false; // Clear the flag
             state.find_pattern.clear();
-            state.find_error = None;
             state.find_history_index = None;
             // Note: Don't clear selection - keep it visible to show the search scope
             // Note: Don't clear find_scope here - keep it so highlighting remains scoped
@@ -211,7 +221,7 @@ pub(crate) fn handle_find_input(
             state.last_search_pattern = state.saved_search_pattern.clone();
             state.saved_search_pattern = None;
             state.needs_redraw = true;
-            true
+            Ok(true)
         }
         KeyCode::Enter => {
             // Exit find mode and activate search highlighting (don't jump to match)
@@ -238,7 +248,6 @@ pub(crate) fn handle_find_input(
 
                         state.search_wrapped = false;
                         state.wrap_warning_pending = None;
-                        state.find_error = None;
                         state.find_active = false;
                         state.find_history_index = None;
                         state.saved_search_pattern = None;
@@ -256,16 +265,14 @@ pub(crate) fn handle_find_input(
                         state.needs_redraw = true;
                     }
                     Err(e) => {
-                        state.find_error = Some(format!("Invalid pattern: {}", e));
-                        state.needs_redraw = true;
-                        return false;
+                        // Signal the caller to show an error message and wait for key press
+                        return Err(format!("Invalid pattern: {}", summarize_regex_error(&e)));
                     }
                 }
             } else {
                 // Empty search - clear highlights and scope
                 state.find_active = false;
                 state.find_via_replace = false; // Clear the flag
-                state.find_error = None;
                 state.find_history_index = None;
                 state.wrap_warning_pending = None;
                 state.last_search_pattern = None; // Clear highlights
@@ -273,12 +280,12 @@ pub(crate) fn handle_find_input(
                 state.find_scope = None; // Clear search scope for next search
                 state.needs_redraw = true;
             }
-            true
+            Ok(true)
         }
         KeyCode::Up => {
             // Navigate to previous search in history
             if state.find_history.is_empty() {
-                return false;
+                return Ok(false);
             }
 
             if let Some(index) = state.find_history_index {
@@ -293,12 +300,11 @@ pub(crate) fn handle_find_input(
                 state.find_pattern = state.find_history[0].clone();
                 state.find_cursor_pos = state.find_pattern.chars().count();
             }
-            state.find_error = None;
             // Update highlights in real-time
             update_live_highlights(state);
             update_search_hit_count(state, lines);
             state.needs_redraw = true;
-            false
+            Ok(false)
         }
         KeyCode::Down => {
             // Navigate to next search in history (or back to empty)
@@ -313,13 +319,12 @@ pub(crate) fn handle_find_input(
                     state.find_pattern.clear();
                     state.find_cursor_pos = 0;
                 }
-                state.find_error = None;
                 // Update highlights in real-time
                 update_live_highlights(state);
                 update_search_hit_count(state, lines);
                 state.needs_redraw = true;
             }
-            false
+            Ok(false)
         }
         KeyCode::Backspace => {
             if state.find_cursor_pos > 0 {
@@ -334,14 +339,13 @@ pub(crate) fn handle_find_input(
                 state.find_pattern = new_pattern;
                 state.find_cursor_pos -= 1;
                 state.find_selection = None; // Clear selection
-                state.find_error = None;
                 state.find_history_index = None;
                 // Update highlights in real-time
                 update_live_highlights(state);
                 update_search_hit_count(state, lines);
                 state.needs_redraw = true;
             }
-            false
+            Ok(false)
         }
         KeyCode::Left => {
             if state.find_cursor_pos > 0 {
@@ -349,7 +353,7 @@ pub(crate) fn handle_find_input(
                 state.find_selection = None; // Clear selection
                 state.needs_redraw = true;
             }
-            false
+            Ok(false)
         }
         KeyCode::Right => {
             let pattern_len = state.find_pattern.chars().count();
@@ -358,19 +362,19 @@ pub(crate) fn handle_find_input(
                 state.find_selection = None; // Clear selection
                 state.needs_redraw = true;
             }
-            false
+            Ok(false)
         }
         KeyCode::Home => {
             state.find_cursor_pos = 0;
             state.find_selection = None; // Clear selection
             state.needs_redraw = true;
-            false
+            Ok(false)
         }
         KeyCode::End => {
             state.find_cursor_pos = state.find_pattern.chars().count();
             state.find_selection = None; // Clear selection
             state.needs_redraw = true;
-            false
+            Ok(false)
         }
         KeyCode::Char(c) => {
             // Handle Ctrl+F to toggle filter mode (when there's a pattern)
@@ -386,7 +390,6 @@ pub(crate) fn handle_find_input(
                         update_search_hit_count(state, lines);
                         state.search_wrapped = false;
                         state.wrap_warning_pending = None;
-                        state.find_error = None;
                         state.find_active = false;
                         state.find_history_index = None;
                         state.saved_search_pattern = None;
@@ -398,9 +401,9 @@ pub(crate) fn handle_find_input(
 
                         state.needs_redraw = true;
                     }
-                    return true;
+                    return Ok(true);
                 }
-                return false;
+                return Ok(false);
             }
 
             // Handle Ctrl+A to select all text in find pattern
@@ -412,7 +415,7 @@ pub(crate) fn handle_find_input(
                     state.find_cursor_pos = pattern_len;
                 }
                 state.needs_redraw = true;
-                return false;
+                return Ok(false);
             }
 
             // Clear selection if typing
@@ -426,7 +429,7 @@ pub(crate) fn handle_find_input(
             let has_alt = modifiers.contains(KeyModifiers::ALT);
             let is_control_char = (c as u32) < 0x20;
             if has_control || has_alt || is_control_char {
-                return false;
+                return Ok(false);
             }
 
             // If there's a selection, delete it and insert the new character at selection start
@@ -469,15 +472,14 @@ pub(crate) fn handle_find_input(
                 state.find_cursor_pos += 1;
             }
 
-            state.find_error = None;
             state.find_history_index = None;
             // Update highlights in real-time
             update_live_highlights(state);
             update_search_hit_count(state, lines);
             state.needs_redraw = true;
-            false
+            Ok(false)
         }
-        _ => false,
+        _ => Ok(false),
     }
 }
 
@@ -499,7 +501,6 @@ pub(crate) fn find_next_occurrence(
                     move_to_position(state, pos, lines.len(), lines, visible_lines);
                     state.search_wrapped = false;
                     state.wrap_warning_pending = None;
-                    state.find_error = None;
                     update_search_hit_count(state, lines);
                 }
             }
@@ -517,7 +518,6 @@ pub(crate) fn find_next_occurrence(
                     move_to_position(state, pos, lines.len(), lines, visible_lines);
                     state.search_wrapped = false;
                     state.wrap_warning_pending = None;
-                    state.find_error = None;
                     update_search_hit_count(state, lines);
                 } else {
                     // No match found forward - wrap immediately
@@ -531,7 +531,6 @@ pub(crate) fn find_next_occurrence(
                         move_to_position(state, pos, lines.len(), lines, visible_lines);
                         state.search_wrapped = true;
                         state.wrap_warning_pending = None;
-                        state.find_error = None;
                         update_search_hit_count(state, lines);
                     }
                     // If still no match, just stay at current position (no error message)
@@ -559,7 +558,6 @@ pub(crate) fn find_prev_occurrence(
                     move_to_position(state, pos, lines.len(), lines, visible_lines);
                     state.search_wrapped = false;
                     state.wrap_warning_pending = None;
-                    state.find_error = None;
                     update_search_hit_count(state, lines);
                 }
             }
@@ -577,7 +575,6 @@ pub(crate) fn find_prev_occurrence(
                     move_to_position(state, pos, lines.len(), lines, visible_lines);
                     state.search_wrapped = false;
                     state.wrap_warning_pending = None;
-                    state.find_error = None;
                     update_search_hit_count(state, lines);
                 } else {
                     // No match found backward - wrap immediately
@@ -591,7 +588,6 @@ pub(crate) fn find_prev_occurrence(
                         move_to_position(state, pos, lines.len(), lines, visible_lines);
                         state.search_wrapped = true;
                         state.wrap_warning_pending = None;
-                        state.find_error = None;
                         update_search_hit_count(state, lines);
                     }
                     // If still no match, just stay at current position (no error message)
@@ -621,7 +617,6 @@ pub(crate) fn update_live_highlights(state: &mut FileViewerState) {
         if valid {
             state.last_search_pattern = Some(state.find_pattern.clone());
             state.last_search_regex_mode = state.find_regex_mode;
-            state.find_error = None;
         }
         // Invalid pattern - don't update highlights but don't show error yet (let user finish typing)
     }
@@ -1701,7 +1696,6 @@ mod tests {
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 0); // cursor should move to line 0
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(state.find_error, None); // No error message
     }
 
     #[test]
@@ -1727,7 +1721,6 @@ mod tests {
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 2); // cursor should move to line 2
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(state.find_error, None); // No error message
     }
 
     #[test]
@@ -1753,7 +1746,6 @@ mod tests {
         find_next_occurrence(&mut state, &lines, 10);
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 1); // cursor should move to line 1
-        assert_eq!(state.find_error, None); // no error message
     }
 
     #[test]
@@ -1779,7 +1771,6 @@ mod tests {
         assert_eq!(state.wrap_warning_pending, None);
         assert_eq!(state.absolute_line(), 2);
         assert_eq!(state.cursor_col, 0);
-        assert_eq!(state.find_error, None); // No error message
     }
 
     #[test]
@@ -2119,7 +2110,7 @@ mod tests {
         let exited = handle_find_input(&mut state, &lines, key_event, 10);
 
         // Should exit find mode
-        assert!(exited);
+        assert!(exited.unwrap_or(false));
         assert!(!state.find_active);
 
         // Cursor should NOT have moved
@@ -2164,7 +2155,6 @@ mod tests {
         assert_eq!(state.wrap_warning_pending, None);
 
         // No error message
-        assert_eq!(state.find_error, None);
     }
 
     #[test]
@@ -2192,7 +2182,6 @@ mod tests {
         assert_eq!(state.cursor_col, 0);
 
         // Should NOT have an error message
-        assert_eq!(state.find_error, None);
     }
 
     #[test]
@@ -2218,7 +2207,7 @@ mod tests {
             crossterm::event::KeyCode::Enter,
             crossterm::event::KeyModifiers::empty(),
         );
-        handle_find_input(&mut state, &lines, key_event, 10);
+        handle_find_input(&mut state, &lines, key_event, 10).ok();
 
         // Hit count should be set to 0
         assert_eq!(state.search_hit_count, 0);
@@ -2258,7 +2247,6 @@ mod tests {
         assert_eq!(state.wrap_warning_pending, None);
 
         // No error message
-        assert_eq!(state.find_error, None);
     }
 
     #[test]

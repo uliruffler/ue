@@ -67,8 +67,6 @@ pub struct FileViewerState<'a> {
     pub(crate) find_cursor_pos: usize,
     /// Selection in find pattern: (start_pos, end_pos) in character indices
     pub(crate) find_selection: Option<(usize, usize)>,
-    /// Error message for invalid regex
-    pub(crate) find_error: Option<String>,
     /// Find history (last 100 searches)
     pub(crate) find_history: Vec<String>,
     /// Current position in find history (when navigating with Up/Down)
@@ -230,7 +228,6 @@ impl<'a> FileViewerState<'a> {
             find_pattern: String::new(),
             find_cursor_pos: 0,
             find_selection: None,
-            find_error: None,
             find_history: Vec::new(),
             find_history_index: None,
             last_search_pattern: None,

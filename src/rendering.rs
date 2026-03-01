@@ -496,18 +496,6 @@ pub(crate) fn render_footer(
         // Render the footer
         write!(stdout, "\r")?;
 
-        // Show error in red if present
-        let error_offset = if let Some(ref error) = state.find_error {
-            use crossterm::style::SetForegroundColor;
-            execute!(stdout, SetForegroundColor(crossterm::style::Color::Red))?;
-            write!(stdout, "[{}] ", error)?;
-            execute!(stdout, ResetColor)?;
-            execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
-            error.len() + 3 // "[error] "
-        } else {
-            0
-        };
-
         // Write left side (prompt + mode toggle buttons)
         // Render the left side up to the mode buttons
         let find_or_filter = if state.filter_active { "Filter " } else { "Find " };
@@ -549,7 +537,7 @@ pub(crate) fn render_footer(
         let remaining_width = total_width.saturating_sub(digit_area_len);
 
         // Calculate how much content we've written after the digit area
-        let written_after_digits = error_offset + full_left_len - digit_area_len;
+        let written_after_digits = full_left_len - digit_area_len;
 
         // Right-align: pad to push right_side to right edge
         // Use chars().count() to correctly count multi-byte Unicode chars (e.g. ↑↓) as 1 column each
@@ -566,14 +554,9 @@ pub(crate) fn render_footer(
         execute!(stdout, ResetColor)?;
 
         // Position cursor at find_cursor_pos within the search pattern
-        let error_offset = if let Some(ref error) = state.find_error {
-            error.len() + 3 // "[" + error + "] "
-        } else {
-            0
-        };
         let chars: Vec<char> = state.find_pattern.chars().collect();
         let cursor_offset = chars.iter().take(state.find_cursor_pos).count();
-        let cursor_x = (error_offset + pattern_start_col + cursor_offset) as u16;
+        let cursor_x = (pattern_start_col + cursor_offset) as u16;
         execute!(stdout, cursor::MoveTo(cursor_x, footer_row))?;
         apply_cursor_shape(stdout, state.settings)?;
         execute!(stdout, cursor::Show)?;
@@ -799,22 +782,11 @@ pub(crate) fn render_footer(
 
     let remaining_width = total_width.saturating_sub(left_len);
 
-    // Show status message, error/info message, or position
+    // Show status message or position
     if let Some(ref message) = state.status_message {
         use crossterm::style::SetForegroundColor;
         execute!(stdout, SetForegroundColor(crossterm::style::Color::Yellow))?;
         write!(stdout, "{}", message)?;
-        execute!(stdout, ResetColor)?;
-        execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
-    } else if let Some(ref error) = state.find_error {
-        use crossterm::style::SetForegroundColor;
-        let color = if error.contains("wrapped") {
-            crossterm::style::Color::Yellow
-        } else {
-            crossterm::style::Color::Red
-        };
-        execute!(stdout, SetForegroundColor(color))?;
-        write!(stdout, "{}", error)?;
         execute!(stdout, ResetColor)?;
         execute!(stdout, SetBackgroundColor(effective_theme_bg(state)))?;
     } else if position_info.chars().count() >= remaining_width {

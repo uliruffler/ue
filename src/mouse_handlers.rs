@@ -448,7 +448,6 @@ fn handle_footer_click(
         if click_col >= toggle_start && click_col < toggle_end {
             // Toggle the mode
             state.find_regex_mode = !state.find_regex_mode;
-            state.find_error = None;
             // Update highlights with new mode
             crate::find::update_live_highlights(state);
             crate::find::update_search_hit_count(state, lines);
