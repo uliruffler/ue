@@ -636,8 +636,8 @@ fn add_to_history(state: &mut FileViewerState, pattern: String) {
     }
 }
 
-/// Find the next occurrence of the pattern starting from the given position
-/// If scope is Some, only search within the specified range
+/// Find the next occurrence of the pattern starting from the given position.
+/// Searches the full line text (never slices) so that ^ and $ anchors work correctly.
 fn find_next(
     lines: &[String],
     start: Position,
@@ -654,118 +654,69 @@ fn find_next(
         (0, lines.len().saturating_sub(1))
     };
 
+    /// Return the first match in `line` whose start is within [col_from, col_to)
+    /// and whose start is strictly > after_col. Searches the full line so anchors work.
+    fn first_match_after(
+        line: &str,
+        regex: &Regex,
+        after_col: usize,
+        col_from: usize,
+        col_to: usize,
+    ) -> Option<usize> {
+        regex
+            .find_iter(line)
+            .find(|m| m.start() >= col_from && m.start() < col_to && m.start() > after_col)
+            .map(|m| m.start())
+    }
+
     if !force_wrap {
-        // Search from current position to end of current line
+        // Search current line for a match strictly after start_col
         if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-            // Start searching from next character position
-            let search_from = start_col + 1;
-
-            // Determine search end for this line based on scope
-            let search_to = if let Some((
-                (_scope_start_line, _scope_start_col),
-                (scope_end_line, scope_end_col),
-            )) = scope
-            {
-                if start_line == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                }
-            } else {
-                line.len()
-            };
-
-            if search_from < search_to {
-                let search_slice = &line[search_from..search_to];
-                if let Some(m) = regex.find(search_slice) {
-                    return Some((start_line, search_from + m.start()));
-                }
+            let (col_from, col_to) = scope_col_range(start_line, line.len(), scope);
+            if let Some(col) = first_match_after(line, regex, start_col, col_from, col_to) {
+                return Some((start_line, col));
             }
         }
 
-        // Search remaining lines within scope
+        // Search subsequent lines
         let end_line = max_line.min(lines.len().saturating_sub(1));
         for line_idx in (start_line + 1)..=end_line {
-            if line_idx >= lines.len() {
-                break;
-            }
             let line = &lines[line_idx];
-
-            // Determine search boundaries for this line
-            let (search_start, search_end) = if let Some((
-                (scope_start_line, scope_start_col),
-                (scope_end_line, scope_end_col),
-            )) = scope
+            let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+            if let Some(col) = regex
+                .find_iter(line)
+                .find(|m| m.start() >= col_from && m.start() < col_to)
+                .map(|m| m.start())
             {
-                let start_offset = if line_idx == scope_start_line {
-                    scope_start_col
-                } else {
-                    0
-                };
-                let end_offset = if line_idx == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
-
-            if search_start < search_end {
-                let search_slice = &line[search_start..search_end];
-                if let Some(m) = regex.find(search_slice) {
-                    return Some((line_idx, search_start + m.start()));
-                }
+                return Some((line_idx, col));
             }
         }
 
-        // Don't wrap when force_wrap is false
         return None;
     }
 
-    // Wrap around to beginning (only when force_wrap is true)
-    // When scope is set, wrap within scope; otherwise wrap to file beginning
-    for line_idx in min_line..=(start_line.min(max_line)) {
+    // Wrap: search from min_line up to and including start_line
+    for line_idx in min_line..=start_line.min(max_line) {
         if line_idx >= lines.len() {
             break;
         }
         let line = &lines[line_idx];
-
-        // Determine search boundaries for this line
-        let (search_start, search_end) =
-            if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
-                scope
-            {
-                let start_offset = if line_idx == scope_start_line {
-                    scope_start_col
-                } else {
-                    0
-                };
-                let end_offset = if line_idx == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
-
-        if search_start < search_end {
-            let search_slice = &line[search_start..search_end];
-            if let Some(m) = regex.find(search_slice) {
-                return Some((line_idx, search_start + m.start()));
-            }
+        let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+        if let Some(col) = regex
+            .find_iter(line)
+            .find(|m| m.start() >= col_from && m.start() < col_to)
+            .map(|m| m.start())
+        {
+            return Some((line_idx, col));
         }
     }
 
     None
 }
 
-/// Find the previous occurrence of the pattern starting from the given position
-/// If scope is Some, only search within the specified range
+/// Find the previous occurrence of the pattern starting from the given position.
+/// Searches the full line text (never slices) so that ^ and $ anchors work correctly.
 fn find_prev(
     lines: &[String],
     start: Position,
@@ -783,129 +734,75 @@ fn find_prev(
     };
 
     if !force_wrap {
-        // Search backwards in current line
+        // Search current line for the last match strictly before start_col
         if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-
-            // Determine search boundaries for this line
-            let (search_start, search_end) = if let Some((
-                (scope_start_line, scope_start_col),
-                (scope_end_line, scope_end_col),
-            )) = scope
+            let (col_from, col_to) = scope_col_range(start_line, line.len(), scope);
+            if let Some(col) = regex
+                .find_iter(line)
+                .filter(|m| m.start() >= col_from && m.start() < col_to && m.start() < start_col)
+                .last()
+                .map(|m| m.start())
             {
-                let start_offset = if start_line == scope_start_line {
-                    scope_start_col
-                } else {
-                    0
-                };
-                let end_offset = if start_line == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
-
-            // Find all matches in current line before cursor within scope
-            let mut last_match: Option<usize> = None;
-            if search_start < search_end {
-                let search_slice = &line[search_start..search_end];
-                for m in regex.find_iter(search_slice) {
-                    let absolute_pos = search_start + m.start();
-                    if absolute_pos < start_col {
-                        last_match = Some(absolute_pos);
-                    } else {
-                        break;
-                    }
-                }
-            }
-            if let Some(col) = last_match {
                 return Some((start_line, col));
             }
         }
 
-        // Search previous lines (reverse order) within scope
-        let start_search_line = min_line.max(start_line.saturating_sub(1));
-        for line_idx in (min_line..=start_search_line).rev() {
-            if line_idx >= start_line || line_idx >= lines.len() {
-                continue;
-            }
-            let line = &lines[line_idx];
-
-            // Determine search boundaries for this line
-            let (search_start, search_end) = if let Some((
-                (scope_start_line, scope_start_col),
-                (scope_end_line, scope_end_col),
-            )) = scope
-            {
-                let start_offset = if line_idx == scope_start_line {
-                    scope_start_col
-                } else {
-                    0
-                };
-                let end_offset = if line_idx == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
-
-            // Find last match in this line within scope
-            if search_start < search_end {
-                let search_slice = &line[search_start..search_end];
-                if let Some(last_match) = regex.find_iter(search_slice).last() {
-                    return Some((line_idx, search_start + last_match.start()));
+        // Search previous lines in reverse
+        if start_line > min_line {
+            for line_idx in (min_line..start_line).rev() {
+                if line_idx >= lines.len() {
+                    continue;
+                }
+                let line = &lines[line_idx];
+                let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+                if let Some(col) = regex
+                    .find_iter(line)
+                    .filter(|m| m.start() >= col_from && m.start() < col_to)
+                    .last()
+                    .map(|m| m.start())
+                {
+                    return Some((line_idx, col));
                 }
             }
         }
 
-        // Don't wrap when force_wrap is false
         return None;
     }
 
-    // Wrap around to end (only when force_wrap is true)
-    // When scope is set, wrap within scope; otherwise wrap to file end
+    // Wrap: search from max_line down to start_line
     for line_idx in (start_line..=max_line).rev() {
         if line_idx >= lines.len() {
             continue;
         }
         let line = &lines[line_idx];
-
-        // Determine search boundaries for this line
-        let (search_start, search_end) =
-            if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
-                scope
-            {
-                let start_offset = if line_idx == scope_start_line {
-                    scope_start_col
-                } else {
-                    0
-                };
-                let end_offset = if line_idx == scope_end_line {
-                    scope_end_col.min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
-
-        // Find last match in this line within scope
-        if search_start < search_end {
-            let search_slice = &line[search_start..search_end];
-            if let Some(last_match) = regex.find_iter(search_slice).last() {
-                return Some((line_idx, search_start + last_match.start()));
-            }
+        let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+        if let Some(col) = regex
+            .find_iter(line)
+            .filter(|m| m.start() >= col_from && m.start() < col_to)
+            .last()
+            .map(|m| m.start())
+        {
+            return Some((line_idx, col));
         }
     }
 
     None
+}
+
+/// Return the (from, to) column range to search within a line, clamped by scope.
+fn scope_col_range(
+    line_idx: usize,
+    line_len: usize,
+    scope: Option<(Position, Position)>,
+) -> (usize, usize) {
+    if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+        let from = if line_idx == scope_start_line { scope_start_col } else { 0 };
+        let to = if line_idx == scope_end_line { scope_end_col.min(line_len) } else { line_len };
+        (from, to)
+    } else {
+        (0, line_len)
+    }
 }
 
 /// Move cursor to the specified position, adjusting viewport if needed
@@ -997,9 +894,11 @@ pub(crate) fn calculate_search_hits(
             };
 
         if search_start < search_end {
-            let search_slice = &line[search_start..search_end];
-            for m in regex.find_iter(search_slice) {
-                let match_col = search_start + m.start();
+            for m in regex.find_iter(line) {
+                let match_col = m.start();
+                if match_col < search_start || match_col >= search_end {
+                    continue;
+                }
                 total_hits += 1;
 
                 // Check if this match is at the cursor position
@@ -1166,8 +1065,7 @@ pub fn get_lines_with_matches_and_context(
                 };
 
             if search_start < search_end {
-                let search_slice = &line[search_start..search_end];
-                if regex.is_match(search_slice) {
+                if regex.find_iter(line).any(|m| m.start() >= search_start && m.start() < search_end) {
                     hit_lines.push(line_idx);
                 }
             }
@@ -2250,7 +2148,53 @@ mod tests {
     }
 
     #[test]
-    fn test_wildcard_to_regex_star() {
+    fn find_next_with_caret_anchor_jumps_to_next_line_not_next_char() {
+        // Regression: ^[a-s] was matching mid-line because find_next sliced the line
+        // starting at start_col+1, making ^ match the start of the slice.
+        let lines = vec!["asdf".to_string(), "asdf".to_string()];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        state.cursor_line = 0;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.last_search_pattern = Some("^[a-s]".to_string());
+
+        // From col 0 (on the match), next should go to line 1 col 0
+        find_next_occurrence(&mut state, &lines, 10);
+        assert_eq!(state.absolute_line(), 1, "should jump to line 1, not stay on line 0");
+        assert_eq!(state.cursor_col, 0);
+
+        // From line 1 col 0, next should wrap back to line 0 col 0
+        find_next_occurrence(&mut state, &lines, 10);
+        assert_eq!(state.absolute_line(), 0, "should wrap to line 0");
+        assert_eq!(state.cursor_col, 0);
+    }
+
+    #[test]
+    fn find_prev_with_caret_anchor_jumps_to_prev_line_not_prev_char() {
+        // Same regression for find_prev
+        let lines = vec!["asdf".to_string(), "asdf".to_string()];
+
+        let settings = crate::settings::Settings::default();
+        let undo_history = crate::undo::UndoHistory::new();
+        let mut state = FileViewerState::new(80, undo_history, &settings);
+
+        state.cursor_line = 1;
+        state.top_line = 0;
+        state.cursor_col = 0;
+        state.last_search_pattern = Some("^[a-s]".to_string());
+
+        // From line 1 col 0 (on the match), prev should go to line 0 col 0
+        find_prev_occurrence(&mut state, &lines, 10);
+        assert_eq!(state.absolute_line(), 0, "should jump to line 0");
+        assert_eq!(state.cursor_col, 0);
+    }
+
+    #[test]
+    fn find_wildcard_to_regex_star() {
         // Test that * matches any number of characters
         let regex = pattern_to_regex("hello*world", false).unwrap();
 
