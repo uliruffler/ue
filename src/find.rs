@@ -1498,6 +1498,18 @@ pub(crate) fn replace_all_occurrences(
             }
         }
     }
+
+    // Exit replace mode and find mode after replacing all occurrences
+    state.replace_active = false;
+    state.find_active = false;
+    state.find_pattern.clear();
+    state.find_history_index = None;
+    state.last_search_pattern = None;
+    state.search_hit_count = 0;
+    state.search_current_hit = 0;
+    state.replace_pattern.clear();
+    state.replace_cursor_pos = 0;
+    state.needs_redraw = true;
 }
 
 #[cfg(test)]
