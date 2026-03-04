@@ -171,8 +171,8 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
                 let indent: &'static str = match lvl {
                     1 => "  ",
                     2 => "  ",
-                    3 => "  ▸ ",
-                    _ => "  › ",
+                    3 => "  ",
+                    _ => "  ",
                 };
                 heading_level = Some((lvl, indent));
                 current_line.push_str(color);
@@ -437,7 +437,18 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
                 } else if in_table {
                     current_cell.push_str(&text);
                 } else {
-                    let prefix = if in_blockquote {
+                    let prefix = if let Some((lvl, indent)) = heading_level {
+                        // Continuation lines of a wrapped heading must repeat
+                        // the heading colour and indent so they look identical
+                        // to the first line.
+                        let color = match lvl {
+                            1 => H1,
+                            2 => H2,
+                            3 => H3,
+                            _ => H4,
+                        };
+                        format!("{}{}", color, indent)
+                    } else if in_blockquote {
                         format!("{}▌ {}", QUOTE_FG, RESET)
                     } else if !list_stack.is_empty() {
                         list_continuation_indent.clone()
@@ -872,6 +883,39 @@ mod tests {
         assert!(joined.contains("Hello"), "heading text should be present");
         // Should have ANSI colour for H1
         assert!(joined.contains(H1), "H1 colour code expected");
+    }
+
+    #[test]
+    fn test_wrapped_heading_preserves_color_and_indent() {
+        // Render an H1 heading that is long enough to wrap at a narrow terminal width.
+        // Every output line that carries heading text must start with the H1 colour code
+        // (possibly preceded by a blank-line spacer which is fine).
+        let long_heading = format!("# {}", "Word ".repeat(30));
+        let term_w = 40usize;
+        let lines = PulldownRenderer.render(&long_heading, term_w);
+
+        // Collect non-empty lines that contain heading text (strip ANSI to detect "Word")
+        let heading_lines: Vec<&String> = lines
+            .iter()
+            .filter(|l| strip_ansi(l).contains("Word"))
+            .collect();
+
+        assert!(
+            heading_lines.len() >= 2,
+            "heading must wrap into at least 2 lines at width {term_w}"
+        );
+
+        for (i, line) in heading_lines.iter().enumerate() {
+            assert!(
+                line.contains(H1),
+                "heading continuation line {i} must contain H1 colour code; got: {line:?}"
+            );
+            // The indent ("  ") must appear right after the colour code
+            assert!(
+                line.contains(&format!("{H1}  ")),
+                "heading continuation line {i} must start with H1 colour + indent; got: {line:?}"
+            );
+        }
     }
 
     #[test]
