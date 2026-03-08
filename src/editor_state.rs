@@ -833,6 +833,31 @@ impl<'a> FileViewerState<'a> {
             self.cursor_line = target_line - self.top_line;
         }
 
+        // When line wrapping is enabled the simple logical-line count above can
+        // place the cursor off the bottom of the visual viewport: e.g. 10 logical
+        // lines fit the count but each wraps twice, consuming 20 visual rows.
+        // Advance top_line until calculate_visual_lines_to_cursor (the same
+        // function used by is_cursor_visible / the out-of-view cursor marker)
+        // confirms the cursor is actually on screen.
+        if self.is_line_wrapping_enabled() {
+            use crate::coordinates::calculate_text_width;
+            use crate::coordinates::calculate_visual_lines_to_cursor;
+            let text_width = calculate_text_width(self, lines, visible_lines);
+            let effective_visible = if self.should_show_h_scrollbar(lines, visible_lines) {
+                visible_lines.saturating_sub(1)
+            } else {
+                visible_lines
+            };
+            while self.top_line < target_line {
+                let visual_used = calculate_visual_lines_to_cursor(lines, self, text_width);
+                if visual_used <= effective_visible {
+                    break;
+                }
+                self.top_line += 1;
+                self.cursor_line = target_line - self.top_line;
+            }
+        }
+
         // Set cursor column
         self.cursor_col = target_col;
         self.desired_cursor_col = target_col;
