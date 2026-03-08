@@ -303,7 +303,7 @@ fn render_header(
         // For untitled files, show a special indicator
         if state.is_untitled {
             let rendered_tag = if state.markdown_rendered { " [Rendered]" } else { "" };
-            let title = format!("{} {} (unsaved){}", modified_indicator, filename, rendered_tag);
+            let title = format!("{} {} {}", modified_indicator, filename, rendered_tag);
             // Truncate if necessary
             let truncated_title = if visual_width(&title, 4) > available_width {
                 truncate_to_width(&title, available_width)

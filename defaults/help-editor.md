@@ -69,8 +69,6 @@ Press **{help}** or **ESC** to close this help.
   - Rendered view is read-only — switch back to plain to edit
   - Search (`{find}`) and scrolling still work in rendered view
 
-Untitled files show as "(unsaved)" in the header until you save them with a real filename.
-
 ## Other
 
 | Key | Action |
