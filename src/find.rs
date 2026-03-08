@@ -5,6 +5,19 @@ use crate::editor_state::{FileViewerState, Position};
 
 const MAX_FIND_HISTORY: usize = 100;
 
+/// Convert a byte offset within `s` to the corresponding character index.
+fn byte_to_char(s: &str, byte_offset: usize) -> usize {
+    s[..byte_offset.min(s.len())].chars().count()
+}
+
+/// Convert a character index within `s` to the corresponding byte offset.
+fn char_to_byte(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(b, _)| b)
+        .unwrap_or(s.len())
+}
+
 /// Convert a wildcard pattern (* = any characters, ? = any single character) to a regex pattern
 /// This escapes regex special characters and replaces wildcards with their regex equivalents
 pub(crate) fn wildcard_to_regex(pattern: &str) -> Result<String, Box<dyn std::error::Error>> {
@@ -654,27 +667,30 @@ fn find_next(
         (0, lines.len().saturating_sub(1))
     };
 
-    /// Return the first match in `line` whose start is within [col_from, col_to)
-    /// and whose start is strictly > after_col. Searches the full line so anchors work.
+    /// Return the first match in `line` whose byte-offset start is within [col_from, col_to)
+    /// and whose byte-offset start is strictly > after_byte.
+    /// Returns the match position as a **char index**.
     fn first_match_after(
         line: &str,
         regex: &Regex,
-        after_col: usize,
-        col_from: usize,
-        col_to: usize,
+        after_byte: usize, // byte offset derived from cursor char-index
+        col_from: usize,   // byte offset
+        col_to: usize,     // byte offset
     ) -> Option<usize> {
         regex
             .find_iter(line)
-            .find(|m| m.start() >= col_from && m.start() < col_to && m.start() > after_col)
-            .map(|m| m.start())
+            .find(|m| m.start() >= col_from && m.start() < col_to && m.start() > after_byte)
+            .map(|m| byte_to_char(line, m.start()))
     }
 
     if !force_wrap {
-        // Search current line for a match strictly after start_col
+        // Search current line for a match strictly after start_col.
+        // Convert start_col (char index) to a byte offset for comparison with m.start().
         if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-            let (col_from, col_to) = scope_col_range(start_line, line.len(), scope);
-            if let Some(col) = first_match_after(line, regex, start_col, col_from, col_to) {
+            let (col_from, col_to) = scope_col_range(start_line, line, scope);
+            let after_byte = char_to_byte(line, start_col);
+            if let Some(col) = first_match_after(line, regex, after_byte, col_from, col_to) {
                 return Some((start_line, col));
             }
         }
@@ -683,11 +699,11 @@ fn find_next(
         let end_line = max_line.min(lines.len().saturating_sub(1));
         for line_idx in (start_line + 1)..=end_line {
             let line = &lines[line_idx];
-            let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+            let (col_from, col_to) = scope_col_range(line_idx, line, scope);
             if let Some(col) = regex
                 .find_iter(line)
                 .find(|m| m.start() >= col_from && m.start() < col_to)
-                .map(|m| m.start())
+                .map(|m| byte_to_char(line, m.start()))
             {
                 return Some((line_idx, col));
             }
@@ -702,11 +718,11 @@ fn find_next(
             break;
         }
         let line = &lines[line_idx];
-        let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+        let (col_from, col_to) = scope_col_range(line_idx, line, scope);
         if let Some(col) = regex
             .find_iter(line)
             .find(|m| m.start() >= col_from && m.start() < col_to)
-            .map(|m| m.start())
+            .map(|m| byte_to_char(line, m.start()))
         {
             return Some((line_idx, col));
         }
@@ -734,15 +750,17 @@ fn find_prev(
     };
 
     if !force_wrap {
-        // Search current line for the last match strictly before start_col
+        // Search current line for the last match strictly before start_col.
+        // Convert start_col (char index) to a byte offset for comparison with m.start().
         if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-            let (col_from, col_to) = scope_col_range(start_line, line.len(), scope);
+            let (col_from, col_to) = scope_col_range(start_line, line, scope);
+            let before_byte = char_to_byte(line, start_col);
             if let Some(col) = regex
                 .find_iter(line)
-                .filter(|m| m.start() >= col_from && m.start() < col_to && m.start() < start_col)
+                .filter(|m| m.start() >= col_from && m.start() < col_to && m.start() < before_byte)
                 .last()
-                .map(|m| m.start())
+                .map(|m| byte_to_char(line, m.start()))
             {
                 return Some((start_line, col));
             }
@@ -755,12 +773,12 @@ fn find_prev(
                     continue;
                 }
                 let line = &lines[line_idx];
-                let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+                let (col_from, col_to) = scope_col_range(line_idx, line, scope);
                 if let Some(col) = regex
                     .find_iter(line)
                     .filter(|m| m.start() >= col_from && m.start() < col_to)
                     .last()
-                    .map(|m| m.start())
+                    .map(|m| byte_to_char(line, m.start()))
                 {
                     return Some((line_idx, col));
                 }
@@ -776,12 +794,12 @@ fn find_prev(
             continue;
         }
         let line = &lines[line_idx];
-        let (col_from, col_to) = scope_col_range(line_idx, line.len(), scope);
+        let (col_from, col_to) = scope_col_range(line_idx, line, scope);
         if let Some(col) = regex
             .find_iter(line)
             .filter(|m| m.start() >= col_from && m.start() < col_to)
             .last()
-            .map(|m| m.start())
+            .map(|m| byte_to_char(line, m.start()))
         {
             return Some((line_idx, col));
         }
@@ -790,18 +808,20 @@ fn find_prev(
     None
 }
 
-/// Return the (from, to) column range to search within a line, clamped by scope.
+/// Return the (from, to) byte-offset range to search within a line, clamped by scope.
+/// Scope boundaries are stored as char indices and are converted to byte offsets here so
+/// that all comparisons against `m.start()` (which is always a byte offset) are consistent.
 fn scope_col_range(
     line_idx: usize,
-    line_len: usize,
+    line: &str,
     scope: Option<(Position, Position)>,
 ) -> (usize, usize) {
     if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
-        let from = if line_idx == scope_start_line { scope_start_col } else { 0 };
-        let to = if line_idx == scope_end_line { scope_end_col.min(line_len) } else { line_len };
+        let from = if line_idx == scope_start_line { char_to_byte(line, scope_start_col) } else { 0 };
+        let to = if line_idx == scope_end_line { char_to_byte(line, scope_end_col).min(line.len()) } else { line.len() };
         (from, to)
     } else {
-        (0, line_len)
+        (0, line.len())
     }
 }
 
@@ -874,17 +894,18 @@ pub(crate) fn calculate_search_hits(
         let line = &lines[line_idx];
 
         // Determine search boundaries for this line based on scope
+        // Compute byte-offset bounds for this line (consistent with m.start() which is a byte offset)
         let (search_start, search_end) =
             if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
                 scope
             {
                 let start_offset = if line_idx == scope_start_line {
-                    scope_start_col
+                    char_to_byte(line, scope_start_col)
                 } else {
                     0
                 };
                 let end_offset = if line_idx == scope_end_line {
-                    scope_end_col.min(line.len())
+                    char_to_byte(line, scope_end_col).min(line.len())
                 } else {
                     line.len()
                 };
@@ -895,10 +916,12 @@ pub(crate) fn calculate_search_hits(
 
         if search_start < search_end {
             for m in regex.find_iter(line) {
-                let match_col = m.start();
-                if match_col < search_start || match_col >= search_end {
+                // m.start() is a byte offset; convert to char index for position tracking
+                let match_byte = m.start();
+                if match_byte < search_start || match_byte >= search_end {
                     continue;
                 }
+                let match_col = byte_to_char(line, match_byte);
                 total_hits += 1;
 
                 // Check if this match is at the cursor position
