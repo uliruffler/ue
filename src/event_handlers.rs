@@ -516,7 +516,7 @@ pub(crate) fn handle_key_event(
     // Handle help (F1) — signal ui.rs to open the help file in rendered view
     if matches!(code, KeyCode::F(1)) {
         // Determine help context based on current mode
-        let context = if state.find_active {
+        let context = if state.find_active || state.replace_active {
             crate::help::HelpContext::Find
         } else {
             crate::help::HelpContext::Editor
@@ -742,6 +742,10 @@ pub(crate) fn handle_key_event(
         .keybindings
         .save_and_quit_matches(&code, &modifiers)
     {
+        // Untitled files are never saved automatically - just exit like Esc Esc
+        if state.is_untitled {
+            return Ok((true, false));
+        }
         // For read-only files, skip saving and just quit
         if !state.is_read_only {
             save_file(filename, lines)?;
@@ -2670,6 +2674,24 @@ mod tests {
             state.open_help_requested,
             Some(crate::help::HelpContext::Find),
             "Should request Find help when in find mode"
+        );
+    }
+    #[test]
+    fn help_shows_find_context_when_in_replace_mode() {
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        let mut lines = create_test_lines(10);
+        // Activate replace mode (find_active is false in replace mode)
+        state.replace_active = true;
+        // Press F1 to activate help
+        let key_event = KeyEvent::new(KeyCode::F(1), KeyModifiers::empty());
+        let settings = state.settings;
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+        assert_eq!(
+            state.open_help_requested,
+            Some(crate::help::HelpContext::Find),
+            "Should request Find help when in replace mode"
         );
     }
     #[test]

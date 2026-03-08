@@ -50,15 +50,11 @@ pub fn generate_untitled_filename() -> String {
         .map(|s| s.to_lowercase())
         .collect();
 
-    // Find the lowest available untitled / untitled-N name, starting from 1.
+    // Find the lowest available untitled-N name, starting from 1.
     // This reuses numbers freed when files are closed.
     let mut n: usize = 1;
     loop {
-        let candidate = if n == 1 {
-            "untitled".to_string()
-        } else {
-            format!("untitled-{}", n)
-        };
+        let candidate = format!("untitled-{}", n);
         if !used.contains(&candidate) {
             return candidate;
         }

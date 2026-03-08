@@ -1361,16 +1361,22 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
 use std::cell::RefCell;
 thread_local! {
     static SEARCH_REGEX_CACHE: RefCell<Option<(String, regex::Regex)>> = RefCell::new(None);
+    /// Cache for multiline pattern matches.
+    /// Key: (pattern, scope_repr, total_lines).
+    /// Value: per-line vec of (char_start, char_end) ranges.
+    static MULTILINE_MATCH_CACHE: RefCell<Option<(String, Vec<Vec<(usize, usize)>>)>> = RefCell::new(None);
 }
 
-/// Get character ranges for search matches in a line (with caching)
+/// Get character ranges for search matches in a line (with caching).
+/// For single-line patterns this uses the regex cache; multiline patterns always
+/// return empty — use `get_search_matches_for_line` instead when you have `lines`.
 fn get_search_matches(line: &str, pattern: &str, regex_mode: bool) -> Vec<(usize, usize)> {
     if pattern.is_empty() {
         return vec![];
     }
 
-    // Multi-line patterns (containing \n) cannot match within a single line — skip
-    if pattern.contains("\\n") {
+    // Multi-line patterns (containing \n) need full-document context — skip here
+    if crate::find::pattern_is_multiline(pattern) {
         return vec![];
     }
 
@@ -1419,6 +1425,65 @@ fn get_search_matches(line: &str, pattern: &str, regex_mode: bool) -> Vec<(usize
                 (char_start, char_end)
             })
             .collect()
+    })
+}
+
+/// Get character ranges for search matches for a specific line, handling both
+/// single-line and multiline patterns.  For multiline patterns the full `lines`
+/// slice is needed to compute cross-line matches; results are cached so the
+/// document is only scanned once per pattern per render pass.
+fn get_search_matches_for_line(
+    lines: &[String],
+    line_index: usize,
+    pattern: &str,
+    regex_mode: bool,
+    scope: Option<((usize, usize), (usize, usize))>,
+) -> Vec<(usize, usize)> {
+    if pattern.is_empty() || line_index >= lines.len() {
+        return vec![];
+    }
+
+    if !crate::find::pattern_is_multiline(pattern) {
+        // Fast path: single-line pattern — no need for all-lines context
+        return get_search_matches(&lines[line_index], pattern, regex_mode);
+    }
+
+    // Multiline path: look up (or compute) the per-line result cache.
+    // Cache key encodes the pattern, lines count, and scope so that it is
+    // invalidated whenever any of those change.
+    let cache_key = format!(
+        "ML:{}:{}:{:?}",
+        pattern,
+        lines.len(),
+        scope
+    );
+
+    MULTILINE_MATCH_CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+
+        let per_line: &Vec<Vec<(usize, usize)>> =
+            if let Some((ref cached_key, ref cached_data)) = *cache {
+                if cached_key == &cache_key {
+                    cached_data
+                } else {
+                    *cache = Some((
+                        cache_key,
+                        crate::find::get_multiline_matches_per_line(lines, pattern, scope),
+                    ));
+                    &cache.as_ref().unwrap().1
+                }
+            } else {
+                *cache = Some((
+                    cache_key,
+                    crate::find::get_multiline_matches_per_line(lines, pattern, scope),
+                ));
+                &cache.as_ref().unwrap().1
+            };
+
+        per_line
+            .get(line_index)
+            .cloned()
+            .unwrap_or_default()
     })
 }
 
@@ -1983,7 +2048,13 @@ fn render_line_segment_expanded(
     // Apply search match highlighting - compute once and cache current match range
     let mut current_match_range: Option<(usize, usize)> = None; // Visual column range
     if let Some(ref pattern) = ctx.state.last_search_pattern {
-        let matches = get_search_matches(original_line, pattern, ctx.state.last_search_regex_mode);
+        let matches = get_search_matches_for_line(
+            ctx.lines,
+            segment.line_index,
+            pattern,
+            ctx.state.last_search_regex_mode,
+            ctx.state.find_scope,
+        );
         let cursor_pos = ctx.state.current_position();
         let is_cursor_line = segment.line_index == cursor_pos.0;
         let cursor_col = if is_cursor_line {
@@ -2157,7 +2228,7 @@ fn render_line_segment_with_selection_expanded(
     // Convert byte positions to visual positions for the expanded line
     let mut visual_to_color: Vec<Option<crossterm::style::Color>> =
         vec![None; expanded_chars.len()];
-    let visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
+    let mut visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
 
     // Apply syntax highlighting
     for (byte_start, byte_end, color) in highlights {
@@ -2178,6 +2249,47 @@ fn render_line_segment_with_selection_expanded(
         // Mark visual positions with color
         for i in visual_start..visual_end.min(visual_to_color.len()) {
             visual_to_color[i] = Some(color);
+        }
+    }
+
+    // Populate search-match highlights (same as non-selection path)
+    if let Some(ref pattern) = ctx.state.last_search_pattern {
+        let cursor_pos = ctx.state.current_position();
+        let matches = get_search_matches_for_line(
+            ctx.lines,
+            segment.line_index,
+            pattern,
+            ctx.state.last_search_regex_mode,
+            ctx.state.find_scope,
+        );
+        for (char_start, char_end) in &matches {
+            if !match_overlaps_scope(
+                segment.line_index,
+                *char_start,
+                *char_end,
+                ctx.state.find_scope,
+            ) {
+                continue;
+            }
+            // Skip the current-match highlight (handled separately below)
+            let is_cursor_line = segment.line_index == cursor_pos.0;
+            let cursor_col = cursor_pos.1;
+            if is_cursor_line && cursor_col >= *char_start && cursor_col < *char_end {
+                continue;
+            }
+            let visual_start = crate::coordinates::visual_width_up_to(
+                original_line,
+                *char_start,
+                segment.tab_width,
+            );
+            let visual_end = crate::coordinates::visual_width_up_to(
+                original_line,
+                *char_end,
+                segment.tab_width,
+            );
+            for i in visual_start..visual_end.min(visual_to_search_match.len()) {
+                visual_to_search_match[i] = true;
+            }
         }
     }
 
@@ -2209,7 +2321,13 @@ fn render_line_segment_with_selection_expanded(
         let is_cursor_line = segment.line_index == cursor_pos.0;
 
         if is_cursor_line {
-            let matches = get_search_matches(original_line, pattern, ctx.state.last_search_regex_mode);
+            let matches = get_search_matches_for_line(
+                ctx.lines,
+                segment.line_index,
+                pattern,
+                ctx.state.last_search_regex_mode,
+                ctx.state.find_scope,
+            );
             let cursor_col = cursor_pos.1;
 
             for (char_start, char_end) in matches {

@@ -43,7 +43,7 @@ pub(crate) fn pattern_to_regex(pattern: &str, regex_mode: bool) -> Result<Regex,
 
 /// Returns true if the pattern contains a literal `\n` (i.e. the two-character
 /// sequence backslash-n as typed by the user), meaning it needs multi-line search.
-fn pattern_is_multiline(pattern: &str) -> bool {
+pub(crate) fn pattern_is_multiline(pattern: &str) -> bool {
     pattern.contains("\\n")
 }
 
@@ -59,14 +59,14 @@ fn summarize_regex_error(e: &str) -> String {
 
 /// Expand user-typed `\n` into a real newline character so the regex engine
 /// can match across line boundaries in a joined text.
-fn expand_newline_escapes(pattern: &str) -> String {
+pub(crate) fn expand_newline_escapes(pattern: &str) -> String {
     pattern.replace("\\n", "\n")
 }
 
 /// Build a single string by joining `lines[min_line..=max_line]` with `\n`.
 /// Also returns a `Vec<usize>` where `line_starts[i]` is the byte offset of
 /// `lines[min_line + i]` in the joined string.
-fn build_joined_text(lines: &[String], min_line: usize, max_line: usize) -> (String, Vec<usize>) {
+pub(crate) fn build_joined_text(lines: &[String], min_line: usize, max_line: usize) -> (String, Vec<usize>) {
     let max_line = max_line.min(lines.len().saturating_sub(1));
     let mut joined = String::new();
     let mut line_starts = Vec::new();
@@ -82,7 +82,7 @@ fn build_joined_text(lines: &[String], min_line: usize, max_line: usize) -> (Str
 
 /// Convert a byte offset in the joined string back to `(absolute_line, char_col)`.
 /// `line_starts[i]` is the byte offset of `lines[min_line + i]`.
-fn byte_offset_to_position(
+pub(crate) fn byte_offset_to_position(
     byte_offset: usize,
     line_starts: &[usize],
     lines: &[String],
@@ -977,6 +977,99 @@ fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) 
             state.clamp_cursor_to_line_bounds(lines);
         }
     }
+}
+
+/// For a multiline pattern (one containing `\n`), compute the matched character ranges
+/// on every line of `lines` and return them indexed by line number (0-based).
+///
+/// The returned `Vec` has one entry per line in `lines`.  Each entry is a list of
+/// `(char_start, char_end)` half-open intervals that are highlighted on that line.
+/// Lines that are not part of any match have an empty vec.
+///
+/// For a match that spans multiple lines the first line contributes
+/// `[match_char_start .. line.len()]`, intermediate lines are fully highlighted, and
+/// the last line contributes `[0 .. match_char_end]`.
+pub(crate) fn get_multiline_matches_per_line(
+    lines: &[String],
+    pattern: &str,
+    scope: Option<(Position, Position)>,
+) -> Vec<Vec<(usize, usize)>> {
+    let mut result: Vec<Vec<(usize, usize)>> = vec![Vec::new(); lines.len()];
+
+    if lines.is_empty() || !pattern_is_multiline(pattern) {
+        return result;
+    }
+
+    let (min_line, max_line) = if let Some(((sl, _), (el, _))) = scope {
+        (sl, el.min(lines.len().saturating_sub(1)))
+    } else {
+        (0, lines.len().saturating_sub(1))
+    };
+
+    let expanded = expand_newline_escapes(pattern);
+    let ml_pat = format!("(?i)(?m){}", expanded);
+    let Ok(regex) = Regex::new(&ml_pat) else {
+        return result;
+    };
+
+    let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
+
+    for m in regex.find_iter(&joined) {
+        // Map byte offsets in the joined string back to (line, col)
+        let (start_line, _start_char) =
+            byte_offset_to_position(m.start(), &line_starts, lines, min_line);
+        // For the end we want the position of the last byte *inside* the match, then +1.
+        // Using m.end() directly could land on a '\n' separator which is not part of any real line.
+        let end_byte = m.end();
+
+        // Walk through each line that this match covers and record the highlighted range.
+        let mut cur_byte = m.start();
+        let mut first = true;
+        for line_idx in start_line..=max_line {
+            if cur_byte >= end_byte {
+                break;
+            }
+
+            let line_start_in_joined = if line_idx >= min_line {
+                let rel = line_idx - min_line;
+                if rel < line_starts.len() { line_starts[rel] } else { break }
+            } else {
+                break
+            };
+
+            let line_len_bytes = lines[line_idx].len();
+            let line_end_in_joined = line_start_in_joined + line_len_bytes; // exclusive, excl. '\n'
+
+            // Start of highlighted region on this line (in bytes within the line)
+            let hl_start_byte = if first {
+                cur_byte - line_start_in_joined
+            } else {
+                0
+            };
+            first = false;
+
+            // End of highlighted region on this line (in bytes within the line)
+            let hl_end_byte = if end_byte <= line_end_in_joined {
+                end_byte - line_start_in_joined
+            } else {
+                line_len_bytes
+            };
+
+            if hl_start_byte <= hl_end_byte && hl_start_byte <= line_len_bytes {
+                let line_str = &lines[line_idx];
+                let char_start = line_str[..hl_start_byte.min(line_str.len())].chars().count();
+                let char_end = line_str[..hl_end_byte.min(line_str.len())].chars().count();
+                if char_start < char_end || (char_start == char_end && char_start == 0 && hl_end_byte == 0 && line_len_bytes == 0) {
+                    result[line_idx].push((char_start, char_end));
+                }
+            }
+
+            // Advance past this line + the '\n' separator in the joined string
+            cur_byte = line_end_in_joined + 1; // +1 for the '\n'
+        }
+    }
+
+    result
 }
 
 /// Get all line indices that have search matches
