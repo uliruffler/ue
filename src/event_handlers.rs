@@ -1063,13 +1063,22 @@ fn ensure_cursor_visible_after_edit(
 
     let cursor_visual_line = calculate_cursor_visual_line(lines, state, text_width);
 
+    // If cursor is above the visible viewport top (due to top_line_visual_offset from
+    // Alt+Up/Down scrolling), reset the offset so the cursor becomes visible again.
+    let effective_offset = if state.is_line_wrapping_enabled() { state.top_line_visual_offset } else { 0 };
+    if cursor_visual_line < effective_offset {
+        state.top_line_visual_offset = 0;
+        return; // cursor is now at the top visible row
+    }
+    let cursor_visual_line_eff = cursor_visual_line - effective_offset;
+
     // Scroll if cursor is at or beyond the last visible line
     // This provides proactive scrolling to maintain context
-    if cursor_visual_line >= effective_visible_lines {
+    if cursor_visual_line_eff >= effective_visible_lines {
         // We want the cursor to end up at the last visible line (effective_visible_lines - 1)
         // Calculate how many visual lines we need to scroll
         let target_visual_line = effective_visible_lines - 1;
-        let visual_lines_to_scroll = cursor_visual_line - target_visual_line;
+        let visual_lines_to_scroll = cursor_visual_line_eff - target_visual_line;
 
         // Advance top_line by enough logical lines to free up visual_lines_to_scroll visual lines
         let mut visual_lines_scrolled = 0;
@@ -1090,6 +1099,7 @@ fn ensure_cursor_visible_after_edit(
 
         // Advance top_line
         state.top_line += logical_lines_to_advance;
+        state.top_line_visual_offset = 0; // reset any sub-row offset when scrolling down
 
         // Ensure top_line doesn't exceed document bounds
         if state.top_line >= lines.len() {
@@ -1120,13 +1130,35 @@ fn handle_viewport_scroll(
 
     match code {
         KeyCode::Up => {
-            // Scroll viewport up (show earlier lines)
-            if state.top_line > 0 {
+            // Scroll viewport up by exactly one visual row.
+            // When line wrapping is active and the top logical line has multiple sub-rows,
+            // decrement the sub-row offset instead of jumping a whole logical line.
+            let wrapping_enabled = state.is_line_wrapping_enabled();
+            if wrapping_enabled && state.top_line_visual_offset > 0 {
+                // Move up one sub-row within the same top logical line
+                state.top_line_visual_offset -= 1;
+                return true;
+            } else if state.top_line > 0 {
                 // Save absolute cursor position BEFORE scrolling
                 let absolute_cursor = state.absolute_line();
 
                 // Scroll viewport
                 state.top_line -= 1;
+
+                // When wrapping, reveal the LAST sub-row of the new top logical line so
+                // that each Alt+Up press scrolls by exactly one visual row.
+                if wrapping_enabled {
+                    let tw = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+                    let new_top_height = crate::coordinates::calculate_wrapped_lines_for_line(
+                        lines,
+                        state.top_line,
+                        tw,
+                        state.settings.tab_width,
+                    ) as usize;
+                    state.top_line_visual_offset = new_top_height.saturating_sub(1);
+                } else {
+                    state.top_line_visual_offset = 0;
+                }
 
                 // Update cursor position to maintain absolute position
                 if absolute_cursor < state.top_line {
@@ -1150,7 +1182,27 @@ fn handle_viewport_scroll(
             }
         }
         KeyCode::Down => {
-            // Scroll viewport down (show later lines)
+            // Scroll viewport down by exactly one visual row.
+            // When line wrapping is active and the top logical line still has hidden sub-rows
+            // below, increment the sub-row offset instead of jumping a whole logical line.
+            let wrapping_enabled = state.is_line_wrapping_enabled();
+            if wrapping_enabled {
+                let tw = crate::coordinates::calculate_text_width(state, lines, visible_lines);
+                let top_height = crate::coordinates::calculate_wrapped_lines_for_line(
+                    lines,
+                    state.top_line,
+                    tw,
+                    state.settings.tab_width,
+                ) as usize;
+                if state.top_line_visual_offset + 1 < top_height {
+                    // Still sub-rows left in the current top logical line — expose the next one
+                    state.top_line_visual_offset += 1;
+                    return true;
+                }
+            }
+
+            // Either wrapping is off or all sub-rows of the top logical line are already visible.
+            // Advance to the next logical line and reset the offset.
             let max_scroll = lines.len().saturating_sub(1);
             if state.top_line < max_scroll {
                 // Save absolute cursor position BEFORE scrolling
@@ -1158,6 +1210,7 @@ fn handle_viewport_scroll(
 
                 // Scroll viewport
                 state.top_line += 1;
+                state.top_line_visual_offset = 0;
 
                 // Update cursor position to maintain absolute position
                 if absolute_cursor < state.top_line {

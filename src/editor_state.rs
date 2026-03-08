@@ -7,6 +7,9 @@ pub(crate) type Position = (usize, usize);
 
 pub struct FileViewerState<'a> {
     pub(crate) top_line: usize,
+    /// Visual sub-row offset within `top_line` that is the first visible row.
+    /// Non-zero only during Alt+Down/Up viewport scrolling through wrapped lines.
+    pub(crate) top_line_visual_offset: usize,
     pub(crate) cursor_line: usize,
     pub(crate) cursor_col: usize,
     /// Desired column position for vertical navigation (remembers position through short lines)
@@ -193,6 +196,7 @@ impl<'a> FileViewerState<'a> {
     pub(crate) fn new(term_width: u16, undo_history: UndoHistory, settings: &'a Settings) -> Self {
         Self {
             top_line: 0,
+            top_line_visual_offset: 0,
             cursor_line: 0,
             cursor_col: 0,
             desired_cursor_col: 0,
@@ -403,6 +407,15 @@ impl<'a> FileViewerState<'a> {
             return Some(true); // Above
         }
 
+        // Also above if cursor is on top_line but at a visual sub-row hidden by the offset
+        if absolute == self.top_line && self.top_line_visual_offset > 0 && self.is_line_wrapping_enabled() {
+            use crate::coordinates::calculate_cursor_visual_line;
+            let sub_row = calculate_cursor_visual_line(lines, self, text_width);
+            if sub_row < self.top_line_visual_offset {
+                return Some(true); // Cursor is above the visible viewport top
+            }
+        }
+
         // Otherwise it's below visible area
         Some(false) // Below
     }
@@ -429,11 +442,31 @@ impl<'a> FileViewerState<'a> {
             visible_lines
         };
 
-        // Calculate how many visual lines are consumed from top_line through cursor_line
-        let visual_lines_consumed = calculate_visual_lines_to_cursor(lines, self, text_width);
+        // When wrapping is enabled, check the exact visual sub-row the cursor occupies.
+        // calculate_cursor_visual_line gives the 0-based visual row within the viewport
+        // (counting intra-line wrap segments), not just the logical line count.
+        // This correctly handles both:
+        //  • cursor at sub-row 0 of a N-row line at the bottom (should be visible)
+        //  • cursor at sub-row 0 of top_line when top_line_visual_offset > 0 (above viewport)
+        if self.is_line_wrapping_enabled() {
+            use crate::coordinates::calculate_cursor_visual_line;
+            let cursor_visual_row = calculate_cursor_visual_line(lines, self, text_width);
+            if cursor_visual_row < self.top_line_visual_offset {
+                return false; // cursor is above the visible viewport top
+            }
+            let effective_row = cursor_visual_row - self.top_line_visual_offset;
+            if effective_row >= effective_visible_lines {
+                return false; // cursor is below visible area
+            }
+            // Horizontal visibility is only relevant when wrapping is off — skip that check.
+            return true;
+        }
 
-        // Check vertical visibility
-        if visual_lines_consumed > effective_visible_lines {
+        // Non-wrapping path: use the original visual-lines-consumed check.
+        // In non-wrapping mode every logical line is 1 visual line, so cursor_line is
+        // the visual row index (0-based).  Check that it fits within the effective viewport.
+        let visual_lines_consumed = calculate_visual_lines_to_cursor(lines, self, text_width);
+        if visual_lines_consumed == 0 || visual_lines_consumed > effective_visible_lines {
             return false;
         }
 
@@ -480,6 +513,7 @@ impl<'a> FileViewerState<'a> {
         // Clear saved cursor - we're bringing it back on screen
         self.saved_absolute_cursor = None;
         self.saved_scroll_state = None;
+        self.top_line_visual_offset = 0;
 
         // If cursor is below visible area, move it to last visible line
         if self.cursor_line >= effective_visible_lines {
@@ -818,6 +852,7 @@ impl<'a> FileViewerState<'a> {
         // Clear any off-screen state
         self.saved_absolute_cursor = None;
         self.saved_scroll_state = None;
+        self.top_line_visual_offset = 0;
 
         // Adjust viewport if target is outside visible area
         if target_line < self.top_line {

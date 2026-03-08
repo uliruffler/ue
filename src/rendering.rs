@@ -912,6 +912,7 @@ fn render_visible_lines(
                 cursor_visual_line,
                 visual_lines_rendered,
                 content_lines - visual_lines_rendered,
+                0, // no sub-line offset in filter mode
             )?;
 
             visual_lines_rendered += lines_for_this_logical;
@@ -920,8 +921,16 @@ fn render_visible_lines(
     } else {
         // Normal mode: render all lines
         let mut logical_line_index = state.top_line;
+        let mut is_first_logical_line = true;
         
         while visual_lines_rendered < content_lines && logical_line_index < lines.len() {
+            // The first logical line may start at a visual offset (only when wrapping is enabled)
+            let seg_offset = if is_first_logical_line && state.is_line_wrapping_enabled() {
+                state.top_line_visual_offset
+            } else {
+                0
+            };
+            is_first_logical_line = false;
             let lines_for_this_logical = render_line(
                 stdout,
                 &ctx,
@@ -929,6 +938,7 @@ fn render_visible_lines(
                 cursor_visual_line,
                 visual_lines_rendered,
                 content_lines - visual_lines_rendered,
+                seg_offset,
             )?;
 
             visual_lines_rendered += lines_for_this_logical;
@@ -1146,6 +1156,7 @@ fn render_line(
     _cursor_visual_line: usize,
     _current_visual_line: usize,
     remaining_visible_lines: usize,
+    first_segment: usize,
 ) -> Result<usize, std::io::Error> {
     if logical_line_index >= ctx.lines.len() {
         return Ok(0);
@@ -1174,17 +1185,21 @@ fn render_line(
         1 // No wrapping - each logical line is exactly 1 visual line
     };
 
-    let lines_to_render = (num_wrapped_lines as usize).min(remaining_visible_lines);
+    // When first_segment > 0, skip that many leading visual rows (sub-line viewport offset).
+    let first_segment = first_segment.min((num_wrapped_lines as usize).saturating_sub(1));
+    let available_segments = (num_wrapped_lines as usize).saturating_sub(first_segment);
+    let lines_to_render = available_segments.min(remaining_visible_lines);
 
-    for wrap_index in 0..lines_to_render {
-        if wrap_index > 0 {
+    for wrap_index in first_segment..first_segment + lines_to_render {
+        if wrap_index > first_segment {
             write!(stdout, "\r\n")?;
         }
 
         // Show line number only if line_number_digits > 0
         if ctx.state.settings.appearance.line_number_digits > 0 {
-            // Show line number only on first wrapped line, spaces on continuation lines
-            if wrap_index == 0 {
+            // Show line number on the first segment of the logical line OR on the first
+            // visible continuation segment (when viewport is mid-way through a wrapped line).
+            if wrap_index == 0 || wrap_index == first_segment {
                 // Calculate line number to display (modulo based on digits)
                 let modulus = 10usize.pow(ctx.state.settings.appearance.line_number_digits as u32);
                 let line_num = (logical_line_index + 1) % modulus;
@@ -1619,6 +1634,12 @@ fn calculate_cursor_y_position(
             cursor_y += wrapped_lines;
         }
 
+        // Adjust for the sub-line visual offset: the first top_line_visual_offset rows
+        // of top_line are scrolled above the viewport, shifting all content up.
+        if wrapping_enabled {
+            cursor_y = cursor_y.saturating_sub(state.top_line_visual_offset as u16);
+        }
+
         Some(cursor_y)
     }
 }
@@ -1999,6 +2020,13 @@ fn position_cursor(
     };
 
     cursor_y += cursor_y_offset;
+    // Validate: cursor must be in the content rows [1 .. visible_lines].
+    // cursor_y == 0 means the cursor row was scrolled above the viewport (top_line_visual_offset);
+    // cursor_y > visible_lines means it's below the bottom of the viewport.
+    if cursor_y == 0 || cursor_y > visible_lines as u16 {
+        execute!(stdout, cursor::Hide)?;
+        return Ok(());
+    }
     execute!(stdout, cursor::MoveTo(cursor_x, cursor_y))?;
     apply_cursor_shape(stdout, state.settings)?;
     execute!(stdout, cursor::Show)?;

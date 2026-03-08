@@ -241,9 +241,14 @@ pub(crate) fn calculate_visual_lines_to_cursor(
     let wrapping = state.is_line_wrapping_enabled();
     let tab_w = state.settings.tab_width;
     let end_line = (state.top_line + state.cursor_line + 1).min(lines.len());
-    (state.top_line..end_line)
+    let total: usize = (state.top_line..end_line)
         .map(|i| visual_lines_for(lines, i, text_width, tab_w, wrapping))
-        .sum()
+        .sum();
+    // Subtract the hidden visual rows at the top of the viewport.
+    // When top_line_visual_offset > 0, the first N sub-rows of top_line are scrolled
+    // above the visible area.  A result of 0 means the cursor is above the visible top.
+    let effective_offset = if wrapping { state.top_line_visual_offset } else { 0 };
+    total.saturating_sub(effective_offset)
 }
 
 /// Visual line offset of the cursor within the viewport (0-based).
