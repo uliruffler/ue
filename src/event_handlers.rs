@@ -1339,9 +1339,9 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
 
     let line = &lines[absolute_line];
     let wrap_points = calculate_word_wrap_points(line, text_width, tab_width);
-    // cursor_col == wrap_point means cursor is at the wrap indicator of the current segment
-    // (visually still on that segment), so use strict > to determine segment membership.
-    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col > wp).count();
+    // wrap_points[N] is the *first character* of segment N+1 (exclusive end of segment N).
+    // The renderer places cursor_col == wrap_points[N] on segment N+1, so use >= here to match.
+    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col >= wp).count();
 
     // Compute the visual column offset within the current segment.
     // This is the "screen column" the cursor is at on this visual line.
@@ -1354,14 +1354,14 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
     let cursor_visual = visual_width_up_to(line, state.cursor_col, tab_width);
     let col_within_seg = cursor_visual.saturating_sub(cur_seg_start_visual);
 
-    // The desired visual offset is the max of the current position and any previously stored
-    // desired offset. This preserves the wider column when moving through shorter segments.
-    let desired_visual_offset = state.desired_cursor_col.max(col_within_seg);
-    // Keep desired_cursor_col updated as a visual offset within a segment
-    state.desired_cursor_col = desired_visual_offset;
-
     // If we're not on the first wrapped line of this logical line, move up within the same line
     if current_wrap_line > 0 {
+        // Intra-line segment navigation: always derive the desired offset fresh from the current
+        // cursor position so that a stale absolute char index (e.g. from a mouse click or a
+        // left/right keypress on a non-first segment) does not contaminate the target column.
+        let desired_visual_offset = col_within_seg;
+        state.desired_cursor_col = desired_visual_offset;
+
         // Move to the previous segment, applying the desired visual offset within it
         let prev_seg_start_char = if current_wrap_line >= 2 {
             wrap_points[current_wrap_line - 2]
@@ -1371,13 +1371,17 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         let prev_seg_start_visual = visual_width_up_to(line, prev_seg_start_char, tab_width);
         let target_visual = prev_seg_start_visual + desired_visual_offset;
 
-        // Clamp to end of previous segment
+        // prev_seg_end_char is the exclusive end of the previous segment (= first char of current
+        // segment). Cursor must stay strictly below it so it doesn't land on the next visual line.
         let prev_seg_end_char = wrap_points[current_wrap_line - 1];
-        let prev_seg_end_visual = visual_width_up_to(line, prev_seg_end_char, tab_width);
-        let target_visual_clamped = target_visual.min(prev_seg_end_visual);
-
-        state.cursor_col = visual_col_to_char_index(line, target_visual_clamped, tab_width);
+        let raw_cursor = visual_col_to_char_index(line, target_visual, tab_width);
+        state.cursor_col = raw_cursor.min(prev_seg_end_char.saturating_sub(1));
     } else {
+        // Cross-logical-line from segment 0: use max() to preserve column memory through short
+        // logical lines.  At segment 0, desired_cursor_col set from mouse/horizontal nav equals
+        // cursor_col which equals col_within_seg (both measured from char 0), so max() is safe.
+        let desired_visual_offset = state.desired_cursor_col.max(col_within_seg);
+        state.desired_cursor_col = desired_visual_offset;
         // We're on the first wrapped line, move to previous logical line
         // In filter mode, jump to previous visible line
         if state.filter_active && state.last_search_pattern.is_some() {
@@ -1521,9 +1525,9 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
 
     let line = &lines[absolute_line];
     let wrap_points = calculate_word_wrap_points(line, text_width, tab_width);
-    // cursor_col == wrap_point means cursor is at the wrap indicator of the current segment
-    // (visually still on that segment), so use strict > to determine segment membership.
-    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col > wp).count();
+    // wrap_points[N] is the *first character* of segment N+1 (exclusive end of segment N).
+    // The renderer places cursor_col == wrap_points[N] on segment N+1, so use >= here to match.
+    let current_wrap_line = wrap_points.iter().take_while(|&&wp| state.cursor_col >= wp).count();
     let num_wrapped = wrap_points.len() + 1;
 
     // Compute the visual column offset within the current segment — the "screen column".
@@ -1536,29 +1540,44 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
     let cursor_visual = visual_width_up_to(line, state.cursor_col, tab_width);
     let col_within_seg = cursor_visual.saturating_sub(cur_seg_start_visual);
 
-    // The desired visual offset is the max of current position and previously stored value.
-    // This preserves the wider column when moving through shorter segments.
-    let desired_visual_offset = state.desired_cursor_col.max(col_within_seg);
-    state.desired_cursor_col = desired_visual_offset;
-
     // If we're not on the last wrapped line of this logical line, move down within the same line
     if current_wrap_line + 1 < num_wrapped {
+        // Intra-line segment navigation: always use the fresh intra-segment offset.
+        let desired_visual_offset = col_within_seg;
+        state.desired_cursor_col = desired_visual_offset;
+
         // Move to the next segment, applying the desired visual offset within it
         let next_seg_start_char = wrap_points[current_wrap_line];
         let next_seg_start_visual = visual_width_up_to(line, next_seg_start_char, tab_width);
         let target_visual = next_seg_start_visual + desired_visual_offset;
 
-        // Clamp to end of next segment
-        let next_seg_end_char = if current_wrap_line + 1 < wrap_points.len() {
-            wrap_points[current_wrap_line + 1]
-        } else {
+        // next_seg_end_char is the exclusive end of the next segment (= first char of the
+        // segment after it). For non-last segments, cursor must stay strictly below it.
+        let is_last_inner_seg = current_wrap_line + 1 >= wrap_points.len();
+        let next_seg_end_char = if is_last_inner_seg {
             line.chars().count()
+        } else {
+            wrap_points[current_wrap_line + 1]
         };
-        let next_seg_end_visual = visual_width_up_to(line, next_seg_end_char, tab_width);
-        let target_visual_clamped = target_visual.min(next_seg_end_visual);
-
-        state.cursor_col = visual_col_to_char_index(line, target_visual_clamped, tab_width);
+        let raw_cursor = visual_col_to_char_index(line, target_visual, tab_width);
+        state.cursor_col = if is_last_inner_seg {
+            raw_cursor.min(next_seg_end_char)
+        } else {
+            raw_cursor.min(next_seg_end_char.saturating_sub(1))
+        };
     } else {
+        // Cross-logical-line from the last (or only) segment.
+        // If we arrived here from a non-first segment (current_wrap_line > 0), desired_cursor_col
+        // may hold a stale absolute char index set by mouse/horizontal nav → use col_within_seg.
+        // If we're on the only segment (current_wrap_line == 0), use max() so that the cursor
+        // "remembers" its column when passing through short logical lines.
+        let desired_visual_offset = if current_wrap_line > 0 {
+            col_within_seg
+        } else {
+            state.desired_cursor_col.max(col_within_seg)
+        };
+        state.desired_cursor_col = desired_visual_offset;
+
         // We're on the last wrapped line, move to next logical line
         // In filter mode, jump to next visible line
         if state.filter_active && state.last_search_pattern.is_some() {
@@ -1587,9 +1606,13 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                     let next_line = &lines[next_line_idx];
                     let next_wrap_points = calculate_word_wrap_points(next_line, text_width, tab_width);
                     let first_seg_end_char = next_wrap_points.first().copied().unwrap_or(next_line.chars().count());
-                    let first_seg_end_visual = visual_width_up_to(next_line, first_seg_end_char, tab_width);
-                    let target_visual = desired_visual_offset.min(first_seg_end_visual);
-                    state.cursor_col = visual_col_to_char_index(next_line, target_visual, tab_width);
+                    let raw_cursor = visual_col_to_char_index(next_line, desired_visual_offset, tab_width);
+                    // If next line wraps, keep cursor in the first segment (strictly before first wrap point)
+                    state.cursor_col = if !next_wrap_points.is_empty() {
+                        raw_cursor.min(first_seg_end_char.saturating_sub(1))
+                    } else {
+                        raw_cursor
+                    };
                 }
             }
         } else {
@@ -1625,9 +1648,13 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
 
                     // Apply desired visual offset into the first segment of the next line
                     let first_seg_end_char = next_wrap_points.first().copied().unwrap_or(next_line.chars().count());
-                    let first_seg_end_visual = visual_width_up_to(next_line, first_seg_end_char, tab_width);
-                    let target_visual = desired_visual_offset.min(first_seg_end_visual);
-                    state.cursor_col = visual_col_to_char_index(next_line, target_visual, tab_width);
+                    let raw_cursor = visual_col_to_char_index(next_line, desired_visual_offset, tab_width);
+                    // If next line wraps, keep cursor in the first segment (strictly before first wrap point)
+                    state.cursor_col = if !next_wrap_points.is_empty() {
+                        raw_cursor.min(first_seg_end_char.saturating_sub(1))
+                    } else {
+                        raw_cursor
+                    };
                 }
             }
         }
@@ -3710,7 +3737,122 @@ mod tests {
         assert_eq!(lines[0], "hello world", "should not modify content");
     }
 
+    // -----------------------------------------------------------------------
+    // Regression tests: Up navigation in wrapped lines
+    //
+    // With default settings (line_number_digits=3, +1 scrollbar):
+    //   text_width  = term_width - 4 - 1
+    // term_width=20 → text_width=15, usable_width=14.
+    // "a".repeat(30) → wrap_points=[14,28]:
+    //   segment 0 — chars [0, 14)
+    //   segment 1 — chars [14, 28)
+    //   segment 2 — chars [28, 30]
+    // -----------------------------------------------------------------------
 
+    #[test]
+    fn up_from_wrapped_segment_1_goes_to_segment_0_at_same_offset() {
+        // Primary regression: Up from visual line 2 should move the cursor to
+        // visual line 1 at the same horizontal offset, not leave it on line 2.
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        state.term_width = 20; // text_width=15, wrap_points[0]=14 for 30-char line
+        let mut lines = vec!["a".repeat(30)];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        // Place cursor on segment 1, 3 chars in (char index 17 = 14 + 3)
+        state.cursor_col = 17;
+        state.desired_cursor_col = 0; // fresh — no previous desired column
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // After Up, cursor must land on segment 0 (char index strictly < 14)
+        assert!(
+            state.cursor_col < 14,
+            "cursor_col {} should be in segment 0 (< wrap_points[0]=14) after Up",
+            state.cursor_col
+        );
+        // Horizontal offset within segment must be preserved: 17-14 = 3 → col 3
+        assert_eq!(
+            state.cursor_col, 3,
+            "visual offset within segment must be preserved (expected col 3)"
+        );
+    }
+
+    #[test]
+    fn up_from_wrap_boundary_stays_on_same_logical_line() {
+        // Regression: cursor exactly at wrap_points[0] (first char of segment 1)
+        // was mistakenly treated as being in segment 0 (old strict `>` check) and
+        // jumped to the previous logical line instead of moving within the same line.
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        state.term_width = 20;
+        let mut lines = vec![
+            "prev line".to_string(),
+            "a".repeat(30),
+        ];
+        state.top_line = 0;
+        state.cursor_line = 1; // the long wrapped line
+        state.cursor_col = 14; // exactly wrap_points[0] — start of segment 1
+        state.desired_cursor_col = 0;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Cursor must still be on the same logical line (line index 1), NOT on "prev line"
+        assert_eq!(
+            state.absolute_line(), 1,
+            "Up from wrap_points[0] should stay on same logical line, not jump to prev"
+        );
+        // And it must now be in segment 0
+        assert!(
+            state.cursor_col < 14,
+            "cursor_col {} must be in segment 0 after Up", state.cursor_col
+        );
+        assert_eq!(state.cursor_col, 0, "offset 0 within segment 1 → col 0 in segment 0");
+    }
+
+    #[test]
+    fn up_from_wrapped_line_preserves_column_despite_stale_desired() {
+        // THE USER'S EXACT BUG REPORT:
+        // Document display width 32, line "asdf asdf asdf asdf asdf asdf asdf".
+        // The line wraps before the last "asdf" (wrap_points[0] = 30 with text_width 32).
+        //   segment 0: chars [0, 30) – "asdf asdf asdf asdf asdf asdf "
+        //   segment 1: chars [30, 34] – "asdf"
+        // Cursor placed on visual line 2, col 2 (0-indexed) = 'd' = cursor_col 32.
+        // desired_cursor_col set to 32 by the mouse click handler (absolute char index).
+        //
+        // Pressing Up should move to visual line 1 col 2 = cursor_col 2 (the 'd' of the
+        // first "asdf"), NOT to the end of segment 0 (the space at col 29).
+        let (_tmp, _guard) = set_temp_home();
+        let mut state = create_test_state();
+        // term_width 37 → text_width = 37 - line_num_width(4) - scrollbar(1) = 32
+        state.term_width = 37;
+        let line = "asdf asdf asdf asdf asdf asdf asdf".to_string();
+        let mut lines = vec![line];
+        state.top_line = 0;
+        state.cursor_line = 0;
+        // cursor on 'd' of "asdf" in segment 1 (char 32 = seg_start(30) + 2)
+        state.cursor_col = 32;
+        // Simulate what the mouse click handler sets: desired = absolute char index
+        state.desired_cursor_col = 32;
+        let settings = state.settings;
+
+        let key_event = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        let result = handle_key_event(&mut state, &mut lines, key_event, settings, 20, "test.txt");
+        assert!(result.is_ok());
+
+        // Must land on the 'd' of segment 0 at the SAME SCREEN COLUMN (col 2)
+        assert_eq!(
+            state.cursor_col, 2,
+            "Up from seg1 col 2 (char 32) must land at seg0 col 2 (char 2), \
+             not at the end of seg0 (col 29) which was the old bug"
+        );
+    }
 }
 
 
