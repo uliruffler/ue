@@ -56,6 +56,28 @@ pub fn visual_col_to_char_index(line: &str, visual_col: usize, tab_width: usize)
     line.chars().count()
 }
 
+/// Strip ANSI SGR escape sequences from `s`, returning only the printable characters.
+///
+/// An escape sequence starts with ESC (`\x1b`) and ends at the first ASCII letter
+/// (e.g. `\x1b[31m` → red, `\x1b[0m` → reset).  All characters that form part of
+/// an escape sequence contribute zero terminal columns and are removed here.
+pub(crate) fn strip_ansi_escapes(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut in_escape = false;
+    for ch in s.chars() {
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
 // ---------------------------------------------------------------------------
 // Word-wrap calculation
 // ---------------------------------------------------------------------------
@@ -81,8 +103,10 @@ pub(crate) fn calculate_word_wrap_points(line: &str, text_width: usize, tab_widt
 
     while line_start_idx < chars.len() {
         // How wide is the remaining tail?
+        // Strip ANSI escape sequences before measuring — they contribute zero columns.
         let remaining: String = chars[line_start_idx..].iter().collect();
-        if visual_width(&remaining, tab_width) <= usable_width {
+        let remaining_plain = strip_ansi_escapes(&remaining);
+        if visual_width(&remaining_plain, tab_width) <= usable_width {
             break; // Rest fits on one visual line — done.
         }
 
@@ -93,18 +117,32 @@ pub(crate) fn calculate_word_wrap_points(line: &str, text_width: usize, tab_widt
         let mut word_start_idx = line_start_idx;
         let mut in_word = false;
         let mut best_break: Option<usize> = None;
+        // Track whether we are inside an ANSI escape sequence.
+        let mut in_ansi_escape = false;
 
         for i in line_start_idx..chars.len() {
             let ch = chars[i];
+
+            // ANSI escape sequences take zero terminal columns — skip them entirely.
+            if ch == '\x1b' {
+                in_ansi_escape = true;
+                continue;
+            }
+            if in_ansi_escape {
+                if ch.is_ascii_alphabetic() {
+                    in_ansi_escape = false;
+                }
+                continue;
+            }
+
             let cw = char_visual_width(ch, current_visual, tab_width);
 
             if current_visual + cw > usable_width {
                 // This character would overflow the line.
                 if let Some(space_idx) = last_space_idx {
-                    let word_visual = visual_width(
-                        &chars[word_start_idx..i].iter().collect::<String>(),
-                        tab_width,
-                    );
+                    let word_segment: String = chars[word_start_idx..i].iter().collect();
+                    let word_plain = strip_ansi_escapes(&word_segment);
+                    let word_visual = visual_width(&word_plain, tab_width);
                     if word_visual <= max_word_length && space_idx > line_start_idx {
                         // Break after the space (word-boundary wrap).
                         best_break = Some(space_idx + 1);
@@ -696,6 +734,80 @@ mod tests {
     fn test_word_wrapping_preserves_words() {
         let lines = vec!["short words here".to_string()];
         assert!(calculate_wrapped_lines_for_line(&lines, 0, 20, 4) >= 1);
+    }
+
+    // --- ANSI escape sequence handling in word-wrap ---
+
+    #[test]
+    fn test_strip_ansi_escapes_empty() {
+        assert_eq!(strip_ansi_escapes(""), "");
+    }
+
+    #[test]
+    fn test_strip_ansi_escapes_no_escapes() {
+        assert_eq!(strip_ansi_escapes("hello world"), "hello world");
+    }
+
+    #[test]
+    fn test_strip_ansi_escapes_single_color_code() {
+        // "\x1b[31m" is the SGR code for red foreground; should vanish.
+        assert_eq!(strip_ansi_escapes("\x1b[31mhello\x1b[0m"), "hello");
+    }
+
+    #[test]
+    fn test_strip_ansi_escapes_mixed() {
+        assert_eq!(
+            strip_ansi_escapes("\x1b[1;32mfoo\x1b[0m bar \x1b[34mbaz\x1b[0m"),
+            "foo bar baz"
+        );
+    }
+
+    #[test]
+    fn test_wrap_points_plain_vs_ansi_same_count() {
+        // A colored line must produce the same number of wrap segments as its plain
+        // equivalent, because ANSI escape characters carry no visible width.
+        let plain   = "hello world test";
+        let colored = "\x1b[31mhello\x1b[0m world \x1b[32mtest\x1b[0m"; // same visible text
+        let plain_pts   = calculate_word_wrap_points(plain,   10, 4);
+        let colored_pts = calculate_word_wrap_points(colored, 10, 4);
+        assert_eq!(
+            plain_pts.len(), colored_pts.len(),
+            "colored line should wrap the same number of times as its plain counterpart"
+        );
+    }
+
+    #[test]
+    fn test_wrapped_lines_ansi_same_as_plain() {
+        // Short line — no wrapping expected in either variant.
+        let plain_short   = vec!["hello world".to_string()];
+        let colored_short = vec!["\x1b[31mhello\x1b[0m \x1b[32mworld\x1b[0m".to_string()];
+        assert_eq!(
+            calculate_wrapped_lines_for_line(&plain_short,   0, 80, 4),
+            calculate_wrapped_lines_for_line(&colored_short, 0, 80, 4),
+            "short line: colored variant must not wrap more than plain variant"
+        );
+
+        // Long line (80 visible chars) — should wrap identically whether colored or not.
+        // The colored version embeds 9 chars of ANSI codes that must NOT count as width.
+        let plain_long   = vec!["x".repeat(80)];
+        let colored_long = vec!["x".repeat(40) + "\x1b[31m" + &"x".repeat(40) + "\x1b[0m"];
+        assert_eq!(
+            calculate_wrapped_lines_for_line(&plain_long,   0, 80, 4),
+            calculate_wrapped_lines_for_line(&colored_long, 0, 80, 4),
+            "long line: colored variant must wrap the same number of times as plain variant"
+        );
+    }
+
+    #[test]
+    fn test_ansi_only_line_does_not_wrap() {
+        // A line consisting entirely of ANSI escape codes has zero visible width
+        // and should never trigger wrapping.
+        let ansi_only = vec!["\x1b[1m\x1b[31m\x1b[0m".to_string()];
+        assert_eq!(
+            calculate_wrapped_lines_for_line(&ansi_only, 0, 80, 4),
+            1,
+            "a line with only ANSI escapes should occupy exactly one visual line"
+        );
     }
 
     #[test]
