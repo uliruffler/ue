@@ -1283,6 +1283,68 @@ fn handle_viewport_scroll(
                 }
             }
         }
+        KeyCode::PageDown => {
+            // Scroll viewport down by one full page without moving the cursor.
+            if state.markdown_rendered {
+                // Each rendered line is one visual row; bound by rendered_lines length.
+                let max_scroll = state.rendered_lines.len().saturating_sub(1);
+                if state.top_line < max_scroll {
+                    state.top_line = (state.top_line + visible_lines).min(max_scroll);
+                    state.top_line_visual_offset = 0;
+                    return true;
+                }
+            } else {
+                let max_scroll = lines.len().saturating_sub(1);
+                if state.top_line < max_scroll {
+                    let absolute_cursor = state.absolute_line();
+                    state.top_line = (state.top_line + visible_lines).min(max_scroll);
+                    state.top_line_visual_offset = 0;
+                    // Keep cursor in view if possible; if it scrolled off the top, pin it there.
+                    if absolute_cursor < state.top_line {
+                        state.saved_absolute_cursor = Some(absolute_cursor);
+                        state.cursor_line = 0;
+                    } else {
+                        let new_cursor_line = absolute_cursor - state.top_line;
+                        if new_cursor_line >= visible_lines {
+                            state.saved_absolute_cursor = Some(absolute_cursor);
+                            state.cursor_line = new_cursor_line;
+                        } else {
+                            state.saved_absolute_cursor = None;
+                            state.cursor_line = new_cursor_line;
+                        }
+                    }
+                    return true;
+                }
+            }
+        }
+        KeyCode::PageUp => {
+            // Scroll viewport up by one full page without moving the cursor.
+            if state.markdown_rendered {
+                if state.top_line > 0 {
+                    state.top_line = state.top_line.saturating_sub(visible_lines);
+                    state.top_line_visual_offset = 0;
+                    return true;
+                }
+            } else if state.top_line > 0 {
+                let absolute_cursor = state.absolute_line();
+                state.top_line = state.top_line.saturating_sub(visible_lines);
+                state.top_line_visual_offset = 0;
+                if absolute_cursor < state.top_line {
+                    state.saved_absolute_cursor = Some(absolute_cursor);
+                    state.cursor_line = 0;
+                } else {
+                    let new_cursor_line = absolute_cursor - state.top_line;
+                    if new_cursor_line >= visible_lines {
+                        state.saved_absolute_cursor = Some(absolute_cursor);
+                        state.cursor_line = new_cursor_line;
+                    } else {
+                        state.saved_absolute_cursor = None;
+                        state.cursor_line = new_cursor_line;
+                    }
+                }
+                return true;
+            }
+        }
         _ => {}
     }
     false

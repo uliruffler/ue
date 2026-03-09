@@ -8,6 +8,7 @@ Press **{help}** or **ESC** to close this help.
 |-----|--------|
 | **Arrow Keys** | Move cursor |
 | **Alt+Arrow Keys** | Scroll viewport (vertical & horizontal) without moving cursor |
+| **Alt+PgUp / Alt+PgDown** | Scroll viewport up/down one full page without moving cursor |
 | **Home** / **End** | Jump to start/end of line |
 | **Ctrl+Home** / **Ctrl+End** | Jump to start/end of file |
 | **Page Up** / **Page Down** | Scroll by page |
