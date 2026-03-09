@@ -1130,6 +1130,17 @@ fn handle_viewport_scroll(
 
     match code {
         KeyCode::Up => {
+            // In rendered markdown mode each rendered line is already a single visual row.
+            // Skip the sub-row / source-line wrapping logic entirely and just decrement top_line.
+            if state.markdown_rendered {
+                if state.top_line > 0 {
+                    state.top_line -= 1;
+                    state.top_line_visual_offset = 0;
+                    return true;
+                }
+                return false;
+            }
+
             // Scroll viewport up by exactly one visual row.
             // When line wrapping is active and the top logical line has multiple sub-rows,
             // decrement the sub-row offset instead of jumping a whole logical line.
@@ -1182,6 +1193,18 @@ fn handle_viewport_scroll(
             }
         }
         KeyCode::Down => {
+            // In rendered markdown mode each rendered line is already a single visual row.
+            // Skip the sub-row / source-line wrapping logic and bound by rendered_lines.len().
+            if state.markdown_rendered {
+                let max_scroll = state.rendered_lines.len().saturating_sub(1);
+                if state.top_line < max_scroll {
+                    state.top_line += 1;
+                    state.top_line_visual_offset = 0;
+                    return true;
+                }
+                return false;
+            }
+
             // Scroll viewport down by exactly one visual row.
             // When line wrapping is active and the top logical line still has hidden sub-rows
             // below, increment the sub-row offset instead of jumping a whole logical line.
