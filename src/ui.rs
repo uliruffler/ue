@@ -324,6 +324,7 @@ fn try_reload_undo_from_external_change(
         // Always update the undo history and metadata
         state.undo_history = new_history.clone();
         state.find_history = new_history.find_history.clone(); // Sync find history
+        state.replace_history = new_history.replace_history.clone(); // Sync replace history
         state.modified = state.undo_history.modified;
 
         if content_changed {
@@ -339,6 +340,7 @@ fn try_reload_undo_from_external_change(
 
         state.undo_history = new_history.clone();
         state.find_history = new_history.find_history.clone(); // Sync find history
+        state.replace_history = new_history.replace_history.clone(); // Sync replace history
         state.modified = state.undo_history.modified;
 
         if undo_changed {
@@ -356,6 +358,7 @@ fn persist_editor_state(state: &mut FileViewerState, file: &str) {
         .undo_history
         .update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
     state.undo_history.find_history = state.find_history.clone(); // Save find history
+    state.undo_history.replace_history = state.replace_history.clone(); // Save replace history
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
     }
@@ -704,6 +707,7 @@ fn editing_session(
     state.modified = state.undo_history.modified;
     state.top_line = undo_history.scroll_top.min(lines.len());
     state.find_history = undo_history.find_history.clone(); // Restore find history
+    state.replace_history = undo_history.replace_history.clone(); // Restore replace history
 
     // Check if this is an untitled file (filename starts with "untitled" and doesn't exist on disk)
     let filename_lower = std::path::Path::new(file)
@@ -1053,6 +1057,7 @@ fn editing_session(
                                                 let abs = state.absolute_line();
                                                 state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
                                                 state.undo_history.find_history = state.find_history.clone();
+                                                state.undo_history.replace_history = state.replace_history.clone();
 
                                                 // Save undo history to the NEW file location
                                                 let _ = state.undo_history.save(target_path);
@@ -1196,6 +1201,7 @@ fn editing_session(
                                                 let abs = state.absolute_line();
                                                 state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
                                                 state.undo_history.find_history = state.find_history.clone();
+                                                state.undo_history.replace_history = state.replace_history.clone();
 
                                                 // Save undo history to the NEW file location
                                                 let _ = state.undo_history.save(target_path);
@@ -1223,6 +1229,7 @@ fn editing_session(
                                 let abs = state.absolute_line();
                                 state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
                                 state.undo_history.find_history = state.find_history.clone();
+                                state.undo_history.replace_history = state.replace_history.clone();
                                 let _ = state.undo_history.save(file);
                                 state.last_save_time = Some(Instant::now());
                             }

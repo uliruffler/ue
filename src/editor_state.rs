@@ -68,6 +68,9 @@ pub struct FileViewerState<'a> {
     pub(crate) find_history: Vec<String>,
     /// Current position in find history (when navigating with Up/Down)
     pub(crate) find_history_index: Option<usize>,
+    /// Text in the find input box saved when the user starts navigating history
+    /// (so Down can restore the originally-typed text when back at None)
+    pub(crate) find_input_saved: String,
     /// Last successful search pattern (for F3/Shift+F3)
     pub(crate) last_search_pattern: Option<String>,
     /// Whether the last search pattern used regex mode (true) or wildcard mode (false)
@@ -94,6 +97,12 @@ pub struct FileViewerState<'a> {
     pub(crate) replace_cursor_pos: usize,
     /// Selection in replace pattern: (start_pos, end_pos) in character indices
     pub(crate) replace_selection: Option<(usize, usize)>,
+    /// Replace history (last 100 replacement strings, per-file)
+    pub(crate) replace_history: Vec<String>,
+    /// Current position in replace history (when navigating with Up/Down)
+    pub(crate) replace_history_index: Option<usize>,
+    /// Text in the replace input box saved when the user starts navigating history
+    pub(crate) replace_input_saved: String,
     /// Go to line mode active
     pub(crate) goto_line_active: bool,
     /// Input buffer for go to line
@@ -225,6 +234,7 @@ impl<'a> FileViewerState<'a> {
             find_selection: None,
             find_history: Vec::new(),
             find_history_index: None,
+            find_input_saved: String::new(),
             last_search_pattern: None,
             last_search_regex_mode: true,
             saved_search_pattern: None,
@@ -237,6 +247,9 @@ impl<'a> FileViewerState<'a> {
             replace_pattern: String::new(),
             replace_cursor_pos: 0,
             replace_selection: None,
+            replace_history: Vec::new(),
+            replace_history_index: None,
+            replace_input_saved: String::new(),
             goto_line_active: false,
             goto_line_input: String::new(),
             goto_line_cursor_pos: 0,

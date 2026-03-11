@@ -308,7 +308,8 @@ pub(crate) fn handle_find_input(
                     state.find_cursor_pos = state.find_pattern.chars().count();
                 }
             } else {
-                // First time pressing Up - go to most recent
+                // First time pressing Up - save current input so Down can restore it
+                state.find_input_saved = state.find_pattern.clone();
                 state.find_history_index = Some(0);
                 state.find_pattern = state.find_history[0].clone();
                 state.find_cursor_pos = state.find_pattern.chars().count();
@@ -320,17 +321,17 @@ pub(crate) fn handle_find_input(
             Ok(false)
         }
         KeyCode::Down => {
-            // Navigate to next search in history (or back to empty)
+            // Navigate to next search in history (or back to typed input)
             if let Some(index) = state.find_history_index {
                 if index > 0 {
                     state.find_history_index = Some(index - 1);
                     state.find_pattern = state.find_history[index - 1].clone();
                     state.find_cursor_pos = state.find_pattern.chars().count();
                 } else {
-                    // Back to empty line
+                    // Back to the text the user had typed before navigating history
                     state.find_history_index = None;
-                    state.find_pattern.clear();
-                    state.find_cursor_pos = 0;
+                    state.find_pattern = state.find_input_saved.clone();
+                    state.find_cursor_pos = state.find_pattern.chars().count();
                 }
                 // Update highlights in real-time
                 update_live_highlights(state);
@@ -617,6 +618,20 @@ fn add_to_history(state: &mut FileViewerState, pattern: String) {
     // Keep only last 100
     if state.find_history.len() > MAX_FIND_HISTORY {
         state.find_history.truncate(MAX_FIND_HISTORY);
+    }
+}
+
+/// Add replacement string to replace history, keeping max 100 entries
+fn add_to_replace_history(state: &mut FileViewerState, pattern: String) {
+    // Remove if already exists
+    state.replace_history.retain(|p| p != &pattern);
+
+    // Add to front
+    state.replace_history.insert(0, pattern);
+
+    // Keep only last 100
+    if state.replace_history.len() > MAX_FIND_HISTORY {
+        state.replace_history.truncate(MAX_FIND_HISTORY);
     }
 }
 
@@ -1033,6 +1048,7 @@ pub(crate) fn handle_replace_input(
             state.replace_active = false;
             state.replace_pattern.clear();
             state.replace_cursor_pos = 0;
+            state.replace_history_index = None;
             state.needs_redraw = true;
             true
         }
@@ -1040,8 +1056,48 @@ pub(crate) fn handle_replace_input(
             // Just exit replace mode, don't do anything
             // (user can click buttons or use Ctrl+R / Ctrl+Shift+R)
             state.replace_active = false;
+            state.replace_history_index = None;
             state.needs_redraw = true;
             true
+        }
+        KeyCode::Up => {
+            // Navigate to previous replacement in history
+            if state.replace_history.is_empty() {
+                return false;
+            }
+
+            if let Some(index) = state.replace_history_index {
+                if index + 1 < state.replace_history.len() {
+                    state.replace_history_index = Some(index + 1);
+                    state.replace_pattern = state.replace_history[index + 1].clone();
+                    state.replace_cursor_pos = state.replace_pattern.chars().count();
+                }
+            } else {
+                // First time pressing Up - save current input so Down can restore it
+                state.replace_input_saved = state.replace_pattern.clone();
+                state.replace_history_index = Some(0);
+                state.replace_pattern = state.replace_history[0].clone();
+                state.replace_cursor_pos = state.replace_pattern.chars().count();
+            }
+            state.needs_redraw = true;
+            false
+        }
+        KeyCode::Down => {
+            // Navigate to next replacement in history (or back to typed input)
+            if let Some(index) = state.replace_history_index {
+                if index > 0 {
+                    state.replace_history_index = Some(index - 1);
+                    state.replace_pattern = state.replace_history[index - 1].clone();
+                    state.replace_cursor_pos = state.replace_pattern.chars().count();
+                } else {
+                    // Back to the text the user had typed before navigating history
+                    state.replace_history_index = None;
+                    state.replace_pattern = state.replace_input_saved.clone();
+                    state.replace_cursor_pos = state.replace_pattern.chars().count();
+                }
+                state.needs_redraw = true;
+            }
+            false
         }
         KeyCode::Backspace => {
             if state.replace_cursor_pos > 0 {
@@ -1056,6 +1112,7 @@ pub(crate) fn handle_replace_input(
                 state.replace_pattern = new_pattern;
                 state.replace_cursor_pos -= 1;
                 state.replace_selection = None; // Clear selection
+                state.replace_history_index = None;
                 state.needs_redraw = true;
             }
             false
@@ -1156,6 +1213,7 @@ pub(crate) fn handle_replace_input(
                 state.replace_cursor_pos += 1;
             }
 
+            state.replace_history_index = None;
             state.needs_redraw = true;
             false
         }
@@ -1293,6 +1351,12 @@ pub(crate) fn replace_current_occurrence(
         // Jump to next occurrence
         find_next_occurrence(state, lines, visible_lines);
         update_search_hit_count(state, lines);
+
+        // Record replace pattern in history if it isn't empty
+        if !state.replace_pattern.is_empty() {
+            let p = state.replace_pattern.clone();
+            add_to_replace_history(state, p);
+        }
     }
 }
 
@@ -1418,10 +1482,16 @@ pub(crate) fn replace_all_occurrences(
     }
 
     // Exit replace mode and find mode after replacing all occurrences
+    // Record replace pattern in history before clearing it
+    if !state.replace_pattern.is_empty() {
+        let p = state.replace_pattern.clone();
+        add_to_replace_history(state, p);
+    }
     state.replace_active = false;
     state.find_active = false;
     state.find_pattern.clear();
     state.find_history_index = None;
+    state.replace_history_index = None;
     state.last_search_pattern = None;
     state.search_hit_count = 0;
     state.search_current_hit = 0;

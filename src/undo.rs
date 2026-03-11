@@ -101,6 +101,8 @@ pub struct UndoHistory {
     pub saved_at: usize, // Edit position where the file was last saved
     #[serde(default)]
     pub find_history: Vec<String>, // Persisted search history
+    #[serde(default)]
+    pub replace_history: Vec<String>, // Persisted replace history
 }
 
 impl UndoHistory {
@@ -116,6 +118,7 @@ impl UndoHistory {
             file_timestamp: None,
             saved_at: 0,
             find_history: Vec::new(),
+            replace_history: Vec::new(),
         }
     }
 

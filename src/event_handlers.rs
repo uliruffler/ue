@@ -188,6 +188,7 @@ pub(crate) fn handle_key_event(
                 let abs = state.absolute_line();
                 state.undo_history.update_cursor(state.top_line, abs, state.cursor_col);
                 state.undo_history.find_history = state.find_history.clone();
+                state.undo_history.replace_history = state.replace_history.clone();
                 let _ = state.undo_history.save(filename);
                 state.last_save_time = Some(Instant::now());
                 return Ok((false, false));
@@ -658,6 +659,7 @@ pub(crate) fn handle_key_event(
             let abs = state.absolute_line();
             state.undo_history.update_state(state.top_line, abs, state.cursor_col, lines.clone());
             state.undo_history.find_history = state.find_history.clone();
+            state.undo_history.replace_history = state.replace_history.clone();
             let _ = state.undo_history.save(filename);
             state.last_save_time = Some(Instant::now());
             return Ok((false, false));
@@ -673,6 +675,7 @@ pub(crate) fn handle_key_event(
             let abs = state.absolute_line();
             state.undo_history.update_state(state.top_line, abs, state.cursor_col, lines.clone());
             state.undo_history.find_history = state.find_history.clone();
+            state.undo_history.replace_history = state.replace_history.clone();
             let _ = state.undo_history.save(filename);
             state.last_save_time = Some(Instant::now());
             return Ok((false, false));
@@ -691,6 +694,7 @@ pub(crate) fn handle_key_event(
         }
         // Save undo history to persist find history changes
         state.undo_history.find_history = state.find_history.clone();
+        state.undo_history.replace_history = state.replace_history.clone();
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         return Ok((false, false));
@@ -717,6 +721,7 @@ pub(crate) fn handle_key_event(
             .undo_history
             .update_cursor(state.top_line, abs, state.cursor_col);
         state.undo_history.find_history = state.find_history.clone(); // Save find history
+        state.undo_history.replace_history = state.replace_history.clone();
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         // Save session as editor
@@ -746,6 +751,7 @@ pub(crate) fn handle_key_event(
             .undo_history
             .update_cursor(state.top_line, abs, state.cursor_col);
         state.undo_history.find_history = state.find_history.clone(); // Save find history
+        state.undo_history.replace_history = state.replace_history.clone();
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         // Save session as editor
@@ -776,6 +782,7 @@ pub(crate) fn handle_key_event(
         state.undo_history.clear_unsaved_state();
         // Save undo history when saving the file
         state.undo_history.find_history = state.find_history.clone(); // Save find history
+        state.undo_history.replace_history = state.replace_history.clone();
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         return Ok((false, false));
