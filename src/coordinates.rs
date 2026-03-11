@@ -384,36 +384,6 @@ pub(crate) fn visual_to_logical_position(
     }
     let text_col = (column - line_num_width) as usize;
 
-    // In filter mode only the matching (and context) lines are shown.
-    if state.filter_active && state.last_search_pattern.is_some() {
-        let pattern = state.last_search_pattern.as_ref().unwrap();
-        let filtered = crate::find::get_lines_with_matches_and_context(
-            lines,
-            pattern,
-            state.find_regex_mode,
-            state.find_scope,
-            state.filter_context_before,
-            state.filter_context_after,
-        );
-        // Skip filtered lines that are above the current scroll position.
-        let start = filtered.partition_point(|&l| l < state.top_line);
-        let mut current_vl = 0;
-        for &logical in &filtered[start..] {
-            let vl = visual_lines_for(
-                lines, logical, text_width, tab_width, state.is_line_wrapping_enabled(),
-            );
-            if current_vl + vl > visual_line {
-                let col = resolve_visual_col(
-                    lines, logical, visual_line - current_vl,
-                    text_col, text_width as usize, tab_width, state,
-                );
-                return Some((logical, col));
-            }
-            current_vl += vl;
-        }
-        return None;
-    }
-
     // Normal mode: scan logical lines from top_line.
     let wrapping = state.is_line_wrapping_enabled();
     let mut current_vl = 0;

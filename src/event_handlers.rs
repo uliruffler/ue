@@ -535,21 +535,8 @@ pub(crate) fn handle_key_event(
 
     // Handle find (Ctrl+F)
     if settings.keybindings.find_matches(&code, &modifiers) {
-        // If find mode is already active with a search pattern, toggle filter mode
         if state.find_active && !state.find_pattern.is_empty() {
-            // Don't toggle - let find mode handle it
-            // This will be handled in the find input handler
-        } else if !state.find_active && state.last_search_pattern.is_some() {
-            // If there's an active search but not in find mode, toggle filter
-            state.filter_active = !state.filter_active;
-
-            // When enabling filter mode, ensure cursor is on a visible line
-            if state.filter_active {
-                ensure_cursor_on_visible_line(state, lines);
-            }
-
-            state.needs_redraw = true;
-            return Ok((false, false));
+            // Already in find mode - let find mode handle it
         } else {
             // Normal find mode entry
             // Save current search pattern to restore on Esc
@@ -1350,67 +1337,6 @@ fn handle_viewport_scroll(
     false
 }
 
-/// Ensure cursor is positioned on a visible line when filter mode is active
-fn ensure_cursor_on_visible_line(state: &mut FileViewerState, lines: &[String]) {
-    if !state.filter_active || state.last_search_pattern.is_none() {
-        return;
-    }
-
-    let pattern = state.last_search_pattern.as_ref().unwrap();
-    let filtered_lines = crate::find::get_lines_with_matches_and_context(
-        lines,
-        pattern,
-        state.find_regex_mode,
-        state.find_scope,
-        state.filter_context_before,
-        state.filter_context_after,
-    );
-
-    if filtered_lines.is_empty() {
-        return;
-    }
-
-    let absolute_line = state.absolute_line();
-
-    // Check if current cursor position is on a visible line
-    if !filtered_lines.contains(&absolute_line) {
-        // Cursor is on a filtered-out line, move to nearest visible line
-        // Try to find the next visible line first, then previous if not found
-        if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
-            // Move to next visible line
-            if next_line_idx >= state.top_line {
-                state.cursor_line = next_line_idx - state.top_line;
-            } else {
-                state.top_line = next_line_idx;
-                state.cursor_line = 0;
-            }
-            // Adjust cursor column to be within the line
-            if let Some(line) = lines.get(next_line_idx) {
-                state.cursor_col = state.cursor_col.min(line.len());
-            }
-        } else if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
-            // Move to previous visible line
-            if prev_line_idx >= state.top_line {
-                state.cursor_line = prev_line_idx - state.top_line;
-            } else {
-                state.top_line = prev_line_idx;
-                state.cursor_line = 0;
-            }
-            // Adjust cursor column to be within the line
-            if let Some(line) = lines.get(prev_line_idx) {
-                state.cursor_col = state.cursor_col.min(line.len());
-            }
-        } else if let Some(&first_line_idx) = filtered_lines.first() {
-            // No visible lines around cursor, jump to first visible line
-            state.top_line = first_line_idx;
-            state.cursor_line = 0;
-            if let Some(line) = lines.get(first_line_idx) {
-                state.cursor_col = state.cursor_col.min(line.len());
-            }
-        }
-    }
-}
-
 /// Handle moving up through wrapped lines
 fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_lines: usize) {
     use crate::coordinates::{calculate_word_wrap_points, visual_width_up_to, visual_col_to_char_index};
@@ -1434,34 +1360,7 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         if state.desired_cursor_col == 0 && state.cursor_col > 0 {
             state.desired_cursor_col = state.cursor_col;
         }
-        // In filter mode, jump to previous visible line
-        if state.filter_active && state.last_search_pattern.is_some() {
-            let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches_and_context(
-                lines,
-                pattern,
-                state.find_regex_mode,
-                state.find_scope,
-                state.filter_context_before,
-                state.filter_context_after,
-            );
-
-            if !filtered_lines.is_empty() {
-                // Find the previous visible line before the current cursor position
-                if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
-                    // Calculate new cursor_line and top_line to position cursor on prev_line_idx
-                    if prev_line_idx >= state.top_line {
-                        state.cursor_line = prev_line_idx - state.top_line;
-                    } else {
-                        state.top_line = prev_line_idx;
-                        state.cursor_line = 0;
-                    }
-                    let prev_line = &lines[prev_line_idx];
-                    state.cursor_col = state.desired_cursor_col.min(prev_line.chars().count());
-                }
-            }
-        } else {
-            // Normal mode - standard cursor movement
+        // Normal mode - standard cursor movement
             if state.cursor_line > 0 {
                 state.cursor_line -= 1;
                 let prev_line = &lines[state.absolute_line()];
@@ -1471,7 +1370,6 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
                 let prev_line = &lines[state.absolute_line()];
                 state.cursor_col = state.desired_cursor_col.min(prev_line.chars().count());
             }
-        }
         return;
     }
 
@@ -1520,72 +1418,37 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
         // cursor_col which equals col_within_seg (both measured from char 0), so max() is safe.
         let desired_visual_offset = state.desired_cursor_col.max(col_within_seg);
         state.desired_cursor_col = desired_visual_offset;
-        // We're on the first wrapped line, move to previous logical line
-        // In filter mode, jump to previous visible line
-        if state.filter_active && state.last_search_pattern.is_some() {
-            let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches_and_context(
-                lines,
-                pattern,
-                state.find_regex_mode,
-                state.find_scope,
-                state.filter_context_before,
-                state.filter_context_after,
-            );
+        // Normal mode - standard wrapped line navigation
+        if state.cursor_line > 0 {
+            state.cursor_line -= 1;
 
-            if !filtered_lines.is_empty() {
-                // Find the previous visible line before the current cursor position
-                if let Some(&prev_line_idx) = filtered_lines.iter().rev().find(|&&idx| idx < absolute_line) {
-                    if prev_line_idx >= state.top_line {
-                        state.cursor_line = prev_line_idx - state.top_line;
-                    } else {
-                        state.top_line = prev_line_idx;
-                        state.cursor_line = 0;
-                    }
+            let prev_absolute = state.absolute_line();
+            if prev_absolute < lines.len() {
+                let prev_line = &lines[prev_absolute];
 
-                    // Position cursor on the LAST wrapped segment of the previous line
-                    let prev_line = &lines[prev_line_idx];
-                    let prev_wrap_points = calculate_word_wrap_points(prev_line, text_width, tab_width);
-                    let last_seg_start_char = prev_wrap_points.last().copied().unwrap_or(0);
-                    let last_seg_start_visual = visual_width_up_to(prev_line, last_seg_start_char, tab_width);
-                    let target_visual = last_seg_start_visual + desired_visual_offset;
-                    let max_col = prev_line.chars().count();
-                    state.cursor_col = visual_col_to_char_index(prev_line, target_visual, tab_width).min(max_col);
-                }
+                // Position cursor on the LAST wrapped segment of the previous logical line
+                let prev_wrap_points = calculate_word_wrap_points(prev_line, text_width, tab_width);
+                let last_seg_start_char = prev_wrap_points.last().copied().unwrap_or(0);
+                let last_seg_start_visual = visual_width_up_to(prev_line, last_seg_start_char, tab_width);
+                let target_visual = last_seg_start_visual + desired_visual_offset;
+                let max_col = prev_line.chars().count();
+                state.cursor_col = visual_col_to_char_index(prev_line, target_visual, tab_width).min(max_col);
             }
-        } else {
-            // Normal mode - standard wrapped line navigation
-            if state.cursor_line > 0 {
-                state.cursor_line -= 1;
+        } else if state.top_line > 0 {
+            // Scroll up
+            state.top_line -= 1;
 
-                let prev_absolute = state.absolute_line();
-                if prev_absolute < lines.len() {
-                    let prev_line = &lines[prev_absolute];
+            let new_top_absolute = state.top_line;
+            if new_top_absolute < lines.len() {
+                let new_top_line = &lines[new_top_absolute];
 
-                    // Position cursor on the LAST wrapped segment of the previous logical line
-                    let prev_wrap_points = calculate_word_wrap_points(prev_line, text_width, tab_width);
-                    let last_seg_start_char = prev_wrap_points.last().copied().unwrap_or(0);
-                    let last_seg_start_visual = visual_width_up_to(prev_line, last_seg_start_char, tab_width);
-                    let target_visual = last_seg_start_visual + desired_visual_offset;
-                    let max_col = prev_line.chars().count();
-                    state.cursor_col = visual_col_to_char_index(prev_line, target_visual, tab_width).min(max_col);
-                }
-            } else if state.top_line > 0 {
-                // Scroll up
-                state.top_line -= 1;
-
-                let new_top_absolute = state.top_line;
-                if new_top_absolute < lines.len() {
-                    let new_top_line = &lines[new_top_absolute];
-
-                    // Position cursor on the LAST wrapped segment of the top line
-                    let prev_wrap_points = calculate_word_wrap_points(new_top_line, text_width, tab_width);
-                    let last_seg_start_char = prev_wrap_points.last().copied().unwrap_or(0);
-                    let last_seg_start_visual = visual_width_up_to(new_top_line, last_seg_start_char, tab_width);
-                    let target_visual = last_seg_start_visual + desired_visual_offset;
-                    let max_col = new_top_line.chars().count();
-                    state.cursor_col = visual_col_to_char_index(new_top_line, target_visual, tab_width).min(max_col);
-                }
+                // Position cursor on the LAST wrapped segment of the top line
+                let prev_wrap_points = calculate_word_wrap_points(new_top_line, text_width, tab_width);
+                let last_seg_start_char = prev_wrap_points.last().copied().unwrap_or(0);
+                let last_seg_start_visual = visual_width_up_to(new_top_line, last_seg_start_char, tab_width);
+                let target_visual = last_seg_start_visual + desired_visual_offset;
+                let max_col = new_top_line.chars().count();
+                state.cursor_col = visual_col_to_char_index(new_top_line, target_visual, tab_width).min(max_col);
             }
         }
     }
@@ -1618,35 +1481,6 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         if state.desired_cursor_col == 0 && state.cursor_col > 0 {
             state.desired_cursor_col = state.cursor_col;
         }
-        // In filter mode, jump to next visible line
-        if state.filter_active && state.last_search_pattern.is_some() {
-            let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches_and_context(
-                lines,
-                pattern,
-                state.find_regex_mode,
-                state.find_scope,
-                state.filter_context_before,
-                state.filter_context_after,
-            );
-
-            if !filtered_lines.is_empty() {
-                // Find the next visible line after the current cursor position
-                if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
-                    let new_cursor_line = next_line_idx.saturating_sub(state.top_line);
-
-                    if new_cursor_line >= effective_visible_lines {
-                        state.top_line = next_line_idx.saturating_sub(effective_visible_lines - 1);
-                        state.cursor_line = effective_visible_lines - 1;
-                    } else {
-                        state.cursor_line = new_cursor_line;
-                    }
-
-                    let next_line = &lines[next_line_idx];
-                    state.cursor_col = state.desired_cursor_col.min(next_line.len());
-                }
-            }
-        } else {
             // Normal mode - standard cursor movement
             if absolute_line + 1 < lines.len() {
                 state.cursor_line += 1;
@@ -1657,7 +1491,6 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
                 let next_line = &lines[state.absolute_line()];
                 state.cursor_col = state.desired_cursor_col.min(next_line.len());
             }
-        }
         return;
     }
 
@@ -1716,84 +1549,45 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         };
         state.desired_cursor_col = desired_visual_offset;
 
-        // We're on the last wrapped line, move to next logical line
-        // In filter mode, jump to next visible line
-        if state.filter_active && state.last_search_pattern.is_some() {
-            let pattern = state.last_search_pattern.as_ref().unwrap();
-            let filtered_lines = crate::find::get_lines_with_matches_and_context(
-                lines,
-                pattern,
-                state.find_regex_mode,
-                state.find_scope,
-                state.filter_context_before,
-                state.filter_context_after,
-            );
-
-            if !filtered_lines.is_empty() {
-                if let Some(&next_line_idx) = filtered_lines.iter().find(|&&idx| idx > absolute_line) {
-                    let new_cursor_line = next_line_idx.saturating_sub(state.top_line);
-
-                    if new_cursor_line >= effective_visible_lines {
-                        state.top_line = next_line_idx.saturating_sub(effective_visible_lines - 1);
-                        state.cursor_line = effective_visible_lines - 1;
-                    } else {
-                        state.cursor_line = new_cursor_line;
-                    }
-
-                    // Position cursor on the FIRST segment of the next line at the desired visual offset
-                    let next_line = &lines[next_line_idx];
-                    let next_wrap_points = calculate_word_wrap_points(next_line, text_width, tab_width);
-                    let first_seg_end_char = next_wrap_points.first().copied().unwrap_or(next_line.chars().count());
-                    let raw_cursor = visual_col_to_char_index(next_line, desired_visual_offset, tab_width);
-                    // If next line wraps, keep cursor in the first segment (strictly before first wrap point)
-                    state.cursor_col = if !next_wrap_points.is_empty() {
-                        raw_cursor.min(first_seg_end_char.saturating_sub(1))
-                    } else {
-                        raw_cursor
-                    };
-                }
+        // Normal mode - standard wrapped line navigation
+        if absolute_line + 1 < lines.len() {
+            // Check if we would go off-screen by moving cursor_line down
+            let mut visual_lines_consumed = 0;
+            for i in state.top_line..=absolute_line {
+                visual_lines_consumed += calculate_wrapped_lines_for_line(
+                    lines,
+                    i,
+                    text_width as u16,
+                    tab_width
+                ) as usize;
             }
-        } else {
-            // Normal mode - standard wrapped line navigation
-            if absolute_line + 1 < lines.len() {
-                // Check if we would go off-screen by moving cursor_line down
-                let mut visual_lines_consumed = 0;
-                for i in state.top_line..=absolute_line {
-                    visual_lines_consumed += calculate_wrapped_lines_for_line(
-                        lines,
-                        i,
-                        text_width as u16,
-                        tab_width
-                    ) as usize;
-                }
 
-                // Add 1 for the first wrap of the next line
-                visual_lines_consumed += 1;
+            // Add 1 for the first wrap of the next line
+            visual_lines_consumed += 1;
 
-                let would_be_offscreen = visual_lines_consumed > effective_visible_lines;
+            let would_be_offscreen = visual_lines_consumed > effective_visible_lines;
 
-                if would_be_offscreen {
-                    state.top_line += 1;
+            if would_be_offscreen {
+                state.top_line += 1;
+            } else {
+                state.cursor_line += 1;
+            }
+
+            // Move to the next logical line, positioning on the FIRST segment
+            let next_absolute = state.absolute_line();
+            if next_absolute < lines.len() {
+                let next_line = &lines[next_absolute];
+                let next_wrap_points = calculate_word_wrap_points(next_line, text_width, tab_width);
+
+                // Apply desired visual offset into the first segment of the next line
+                let first_seg_end_char = next_wrap_points.first().copied().unwrap_or(next_line.chars().count());
+                let raw_cursor = visual_col_to_char_index(next_line, desired_visual_offset, tab_width);
+                // If next line wraps, keep cursor in the first segment (strictly before first wrap point)
+                state.cursor_col = if !next_wrap_points.is_empty() {
+                    raw_cursor.min(first_seg_end_char.saturating_sub(1))
                 } else {
-                    state.cursor_line += 1;
-                }
-
-                // Move to the next logical line, positioning on the FIRST segment
-                let next_absolute = state.absolute_line();
-                if next_absolute < lines.len() {
-                    let next_line = &lines[next_absolute];
-                    let next_wrap_points = calculate_word_wrap_points(next_line, text_width, tab_width);
-
-                    // Apply desired visual offset into the first segment of the next line
-                    let first_seg_end_char = next_wrap_points.first().copied().unwrap_or(next_line.chars().count());
-                    let raw_cursor = visual_col_to_char_index(next_line, desired_visual_offset, tab_width);
-                    // If next line wraps, keep cursor in the first segment (strictly before first wrap point)
-                    state.cursor_col = if !next_wrap_points.is_empty() {
-                        raw_cursor.min(first_seg_end_char.saturating_sub(1))
-                    } else {
-                        raw_cursor
-                    };
-                }
+                    raw_cursor
+                };
             }
         }
     }

@@ -450,11 +450,8 @@ pub(crate) fn render_footer(
         }
 
         // Show mode label with clickable toggle buttons
-        let find_or_filter = if state.filter_active { "Filter " } else { "Find " };
-        left_side.push_str(find_or_filter);
-
-        // Add the toggle button format with ⇄: [⇄R]: or [⇄W]:
-        // Format is: "[" + "⇄" (1 char, 2 visual cols) + "R/W" (1 char) + "]" + ":" + " "
+        left_side.push_str("Find ");
+        // Format: "[⇄R]:" or "[⇄W]:"
         left_side.push('[');
         left_side.push('\u{21C4}'); // ⇄ character
         let mode_char = if state.find_regex_mode { 'R' } else { 'W' };
@@ -498,9 +495,8 @@ pub(crate) fn render_footer(
 
         // Write left side (prompt + mode toggle buttons)
         // Render the left side up to the mode buttons
-        let find_or_filter = if state.filter_active { "Filter " } else { "Find " };
         write!(stdout, "{}", if digits > 0 { format!("{:width$} ", "", width = digits) } else { String::new() })?;
-        write!(stdout, "{}", find_or_filter)?;
+        write!(stdout, "Find ")?;
 
         // Render mode toggle with U+21C4 (⇄) character
         // Format: "Find [⇄R]:" or "Find [⇄W]:"
@@ -762,23 +758,7 @@ pub(crate) fn render_footer(
     // Write space separator
     write!(stdout, " ")?;
 
-    let mut left_len = bottom_number_str.len() + 1; // +1 for the space separator
-
-    // If filter mode is active, show "Filter: " label followed by context spinners
-    if state.filter_active && state.last_search_pattern.is_some() {
-        write!(stdout, "Filter: ")?;
-        left_len += 8; // "Filter: " is 8 characters
-
-        // Pad context numbers to 2 digits (max value is 99) so the spinner has constant
-        // character width and the position display never shifts.
-        let spinner_text = format!(
-            "Before:{:2}▲▼ After:{:2}▲▼  ",
-            state.filter_context_before,
-            state.filter_context_after
-        );
-        write!(stdout, "{}", spinner_text)?;
-        left_len += spinner_text.chars().count(); // use chars() so ▲▼ (multi-byte) count as 1 column each
-    }
+    let left_len = bottom_number_str.len() + 1; // +1 for the space separator
 
     let remaining_width = total_width.saturating_sub(left_len);
 
@@ -865,62 +845,14 @@ fn render_visible_lines(
         visible_lines,
     };
 
-    // Get filtered lines if filter mode is active
-    let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
-        let pattern = state.last_search_pattern.as_ref().unwrap();
-        crate::find::get_lines_with_matches_and_context(
-            lines,
-            pattern,
-            state.find_regex_mode,
-            state.find_scope,
-            state.filter_context_before,
-            state.filter_context_after,
-        )
-    } else {
-        Vec::new()
-    };
-
     // Reset syntax stack and rebuild context from document start to top_line
     crate::syntax::clear_syntax_stack();
-    let start_line = if state.filter_active && !filtered_lines.is_empty() {
-        // In filter mode, scan from start to first visible filtered line
-        filtered_lines.iter().find(|&&line| line >= state.top_line).copied().unwrap_or(0)
-    } else {
-        state.top_line
-    };
-    rebuild_syntax_context(lines, start_line);
+    rebuild_syntax_context(lines, state.top_line);
 
     let mut visual_lines_rendered = 0;
-    
 
-    if state.filter_active && !filtered_lines.is_empty() {
-        // Filter mode: render only lines with matches
-        let mut filtered_index = 0;
-        
-        // Find starting position in filtered lines based on top_line
-        while filtered_index < filtered_lines.len() && filtered_lines[filtered_index] < state.top_line {
-            filtered_index += 1;
-        }
-        
-        // Render filtered lines starting from the first visible one
-        while visual_lines_rendered < content_lines && filtered_index < filtered_lines.len() {
-            let logical_line_index = filtered_lines[filtered_index];
-            let lines_for_this_logical = render_line(
-                stdout,
-                &ctx,
-                logical_line_index,
-                cursor_visual_line,
-                visual_lines_rendered,
-                content_lines - visual_lines_rendered,
-                0, // no sub-line offset in filter mode
-            )?;
-
-            visual_lines_rendered += lines_for_this_logical;
-            filtered_index += 1;
-        }
-    } else {
-        // Normal mode: render all lines
-        let mut logical_line_index = state.top_line;
+    // Normal mode: render all lines
+    let mut logical_line_index = state.top_line;
         let mut is_first_logical_line = true;
         
         while visual_lines_rendered < content_lines && logical_line_index < lines.len() {
@@ -944,7 +876,6 @@ fn render_visible_lines(
             visual_lines_rendered += lines_for_this_logical;
             logical_line_index += 1;
         }
-    }
 
     // Fill remaining content lines with empty lines
     while visual_lines_rendered < content_lines {
@@ -1561,91 +1492,31 @@ fn calculate_cursor_y_position(
     tab_width: usize,
     visible_lines: usize,
 ) -> Option<u16> {
-    // Get filtered lines if filter mode is active (includes context lines)
-    let filtered_lines = if state.filter_active && state.last_search_pattern.is_some() {
-        let pattern = state.last_search_pattern.as_ref().unwrap();
-        crate::find::get_lines_with_matches_and_context(
-            lines,
-            pattern,
-            state.find_regex_mode,
-            state.find_scope,
-            state.filter_context_before,
-            state.filter_context_after,
-        )
-    } else {
-        Vec::new()
-    };
-
     let wrapping_enabled = state.is_line_wrapping_enabled();
     let mut cursor_y = 1u16; // Start at row 1 (after header)
 
-    if state.filter_active && !filtered_lines.is_empty() {
-        // Filter mode: check if cursor line is in filtered results (including context)
-        if !filtered_lines.contains(&cursor_line_abs) {
-            return None; // Cursor is on a line that's filtered out
-        }
-
-        // Calculate Y position by iterating through visible filtered lines
-        let mut filtered_index = 0;
-
-        // Find starting position in filtered lines based on top_line
-        while filtered_index < filtered_lines.len() && filtered_lines[filtered_index] < state.top_line {
-            filtered_index += 1;
-        }
-
-        // Iterate through visible filtered lines until we reach the cursor line
-        while filtered_index < filtered_lines.len() {
-            let logical_line = filtered_lines[filtered_index];
-
-            if logical_line == cursor_line_abs {
-                return Some(cursor_y); // Found the cursor line
-            }
-
-            if logical_line > cursor_line_abs {
-                return None; // Cursor line is above visible area
-            }
-
-            let wrapped_lines = if wrapping_enabled {
-                calculate_wrapped_lines_for_line(lines, logical_line, text_width, tab_width)
-            } else {
-                1
-            };
-
-            cursor_y += wrapped_lines;
-
-            // Check if we've gone past the visible area
-            if cursor_y > visible_lines as u16 {
-                return None; // Cursor is below visible area
-            }
-
-            filtered_index += 1;
-        }
-
-        None // Cursor line not found in visible filtered lines
-    } else {
-        // Normal mode: check if cursor is in visible range
-        if cursor_line_abs < state.top_line || cursor_line_abs >= state.top_line + visible_lines {
-            return None; // Not visible
-        }
-
-        // Calculate Y position by iterating from top_line to cursor line
-        for i in state.top_line..cursor_line_abs {
-            let wrapped_lines = if wrapping_enabled {
-                calculate_wrapped_lines_for_line(lines, i, text_width, tab_width)
-            } else {
-                1
-            };
-            cursor_y += wrapped_lines;
-        }
-
-        // Adjust for the sub-line visual offset: the first top_line_visual_offset rows
-        // of top_line are scrolled above the viewport, shifting all content up.
-        if wrapping_enabled {
-            cursor_y = cursor_y.saturating_sub(state.top_line_visual_offset as u16);
-        }
-
-        Some(cursor_y)
+    // Check if cursor is in visible range
+    if cursor_line_abs < state.top_line || cursor_line_abs >= state.top_line + visible_lines {
+        return None; // Not visible
     }
+
+    // Calculate Y position by iterating from top_line to cursor line
+    for i in state.top_line..cursor_line_abs {
+        let wrapped_lines = if wrapping_enabled {
+            calculate_wrapped_lines_for_line(lines, i, text_width, tab_width)
+        } else {
+            1
+        };
+        cursor_y += wrapped_lines;
+    }
+
+    // Adjust for the sub-line visual offset: the first top_line_visual_offset rows
+    // of top_line are scrolled above the viewport, shifting all content up.
+    if wrapping_enabled {
+        cursor_y = cursor_y.saturating_sub(state.top_line_visual_offset as u16);
+    }
+
+    Some(cursor_y)
 }
 
 fn position_cursor(
