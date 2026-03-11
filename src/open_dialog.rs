@@ -1,7 +1,7 @@
 use crossterm::{
-    cursor::MoveTo,
+    cursor::{Hide, MoveTo, SetCursorStyle, Show},
     event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
+    queue,
     style::{Color, Print, ResetColor, SetBackgroundColor, SetForegroundColor},
     terminal::{Clear, ClearType},
 };
@@ -775,7 +775,10 @@ pub(crate) fn run_open_dialog(
 fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result<()> {
     let mut stdout = io::stdout();
 
-    execute!(stdout, Clear(ClearType::All))?;
+    // Hide cursor while we redraw to prevent flickering
+    queue!(stdout, Hide)?;
+
+    queue!(stdout, Clear(ClearType::All))?;
 
     // Calculate areas - header (1) + tree + input at bottom (1)
     let tree_height = height.saturating_sub(2) as usize;
@@ -786,32 +789,33 @@ fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result
         DialogMode::SaveAs => "Save As",
     };
 
-    execute!(
+    queue!(
         stdout,
         MoveTo(0, 0),
         SetBackgroundColor(Color::Rgb { r: 0, g: 24, b: 72 }),
         SetForegroundColor(Color::White),
     )?;
     let header = format!("{:width$}", title, width = width as usize);
-    execute!(stdout, Print(header), ResetColor)?;
+    queue!(stdout, Print(header), ResetColor)?;
 
     // Render tree
-    render_tree(state, 1, tree_height, width)?;
+    render_tree(&mut stdout, state, 1, tree_height, width)?;
 
     // Render input field at bottom
     let input_y = (height - 1) as u16;
-    render_input_field(state, input_y, width)?;
+    render_input_field(&mut stdout, state, input_y, width)?;
 
+    // Show cursor and position it when input is focused
+    if state.focus == FocusMode::Input {
+        queue!(stdout, Show, SetCursorStyle::BlinkingBar)?;
+    }
 
     stdout.flush()?;
     Ok(())
 }
 
 /// Render the tree view
-fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, width: u16) -> io::Result<()> {
-    let mut stdout = io::stdout();
-
-
+fn render_tree(stdout: &mut impl Write, state: &OpenDialogState, start_y: u16, visible_lines: usize, width: u16) -> io::Result<()> {
     for (i, node) in state.nodes.iter()
         .skip(state.scroll_offset)
         .take(visible_lines)
@@ -821,11 +825,11 @@ fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, widt
         let abs_index = state.scroll_offset + i;
         let is_selected = abs_index == state.selected_index;
 
-        execute!(stdout, MoveTo(0, y))?;
+        queue!(stdout, MoveTo(0, y))?;
 
         if is_selected && state.focus == FocusMode::Tree {
             // Use same color as editor scrollbar
-            execute!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }), SetForegroundColor(Color::White))?;
+            queue!(stdout, SetBackgroundColor(Color::Rgb { r: 100, g: 149, b: 237 }), SetForegroundColor(Color::White))?;
         }
 
         // Build tree prefix with proper lines
@@ -889,10 +893,10 @@ fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, widt
             &line
         };
 
-        execute!(stdout, Print(format!("{:width$}", line, width = width as usize)))?;
+        queue!(stdout, Print(format!("{:width$}", line, width = width as usize)))?;
 
         if is_selected {
-            execute!(stdout, ResetColor)?;
+            queue!(stdout, ResetColor)?;
         }
     }
 
@@ -900,10 +904,8 @@ fn render_tree(state: &OpenDialogState, start_y: u16, visible_lines: usize, widt
 }
 
 /// Render the input field
-fn render_input_field(state: &OpenDialogState, y: u16, width: u16) -> io::Result<()> {
-    let mut stdout = io::stdout();
-
-    execute!(
+fn render_input_field(stdout: &mut impl Write, state: &OpenDialogState, y: u16, width: u16) -> io::Result<()> {
+    queue!(
         stdout,
         MoveTo(0, y),
         SetBackgroundColor(Color::Rgb { r: 0, g: 24, b: 72 }),
@@ -915,7 +917,7 @@ fn render_input_field(state: &OpenDialogState, y: u16, width: u16) -> io::Result
             // Show help text when tree is focused
             let help_text = "↑↓:Navigate  ←:Parent  →:Child  Enter:Toggle  Tab:Input  .:Hidden  Esc:Cancel";
             let line = format!("{:width$}", help_text, width = width as usize);
-            execute!(stdout, Print(line))?;
+            queue!(stdout, Print(line))?;
         }
         FocusMode::Input => {
             // Show input field when input is focused
@@ -945,7 +947,7 @@ fn render_input_field(state: &OpenDialogState, y: u16, width: u16) -> io::Result
                 format!("Path: {}", prefix)
             };
             
-            execute!(stdout, Print(&label))?;
+            queue!(stdout, Print(&label))?;
 
             let available_width = (width as usize).saturating_sub(label.len());
             let display_text = if state.input_buffer.len() > available_width {
@@ -954,19 +956,19 @@ fn render_input_field(state: &OpenDialogState, y: u16, width: u16) -> io::Result
                 &state.input_buffer
             };
 
-            execute!(stdout, Print(display_text))?;
+            queue!(stdout, Print(display_text))?;
 
             // Pad the rest of the line
             let remaining = available_width.saturating_sub(display_text.len());
-            execute!(stdout, Print(" ".repeat(remaining)))?;
+            queue!(stdout, Print(" ".repeat(remaining)))?;
 
-            // Position cursor in input field
+            // Position cursor in input field (will be shown after render_dialog queues Show)
             let cursor_x = label.len() + state.input_cursor.min(available_width);
-            execute!(stdout, MoveTo(cursor_x as u16, y))?;
+            queue!(stdout, MoveTo(cursor_x as u16, y))?;
         }
     }
 
-    execute!(stdout, ResetColor)?;
+    queue!(stdout, ResetColor)?;
 
     Ok(())
 }
