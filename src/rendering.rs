@@ -1320,9 +1320,13 @@ fn render_line(
             }
 
             // Calculate actual visual width of rendered content (emoji = 2 cols, normal = 1 col)
-            // This is the NUMBER OF TERMINAL COLUMNS occupied, not character count
+            // This is the NUMBER OF TERMINAL COLUMNS occupied, not character count.
+            // Strip ANSI escape sequences first: they are zero-width on the terminal but
+            // their raw bytes would inflate the count if left in, causing clear_to_scrollbar
+            // to output too few padding spaces and leave stale characters on screen.
             let rendered_text: String = chars[start_visual..actual_end].iter().collect();
-            crate::coordinates::visual_width(&rendered_text, tab_width) as u16
+            let stripped_text = crate::coordinates::strip_ansi_escapes(&rendered_text);
+            crate::coordinates::visual_width(&stripped_text, tab_width) as u16
         } else {
             // Line is shorter than horizontal scroll offset - render as empty
             // (but still takes up a visual row)
