@@ -651,9 +651,9 @@ pub(crate) fn handle_key_event(
     }
 
     // Handle replace current occurrence - works even if not in replace mode
-    // Requires both a search pattern and a replacement pattern
+    // Requires a search pattern; empty replacement is valid (deletes matches)
     if settings.keybindings.replace_current_matches(&code, &modifiers) {
-        if !state.is_read_only && state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
+        if !state.is_read_only && state.last_search_pattern.is_some() && (state.replace_active || !state.replace_pattern.is_empty()) {
             crate::find::replace_current_occurrence(state, lines, visible_lines);
             // Save changes - update file content in undo history before saving
             let abs = state.absolute_line();
@@ -667,9 +667,9 @@ pub(crate) fn handle_key_event(
     }
 
     // Handle replace all occurrences (Ctrl+Alt+R) - works even if not in replace mode
-    // Requires both a search pattern and a replacement pattern
+    // Requires a search pattern; empty replacement is valid (deletes matches)
     if settings.keybindings.replace_all_matches(&code, &modifiers) {
-        if !state.is_read_only && state.last_search_pattern.is_some() && !state.replace_pattern.is_empty() {
+        if !state.is_read_only && state.last_search_pattern.is_some() && (state.replace_active || !state.replace_pattern.is_empty()) {
             crate::find::replace_all_occurrences(state, lines);
             // Save changes - update file content in undo history before saving
             let abs = state.absolute_line();
