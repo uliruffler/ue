@@ -108,7 +108,7 @@ fn handle_triple_click(state: &mut FileViewerState, lines: &[String], logical_li
 
 /// Check if a position is within the click timeout and location threshold
 fn is_same_click_location(last_pos: Option<(usize, usize)>, current_pos: (usize, usize)) -> bool {
-    last_pos.map_or(false, |pos| {
+    last_pos.is_some_and(|pos| {
         // Same position or adjacent columns (within 1 character)
         pos.0 == current_pos.0 && (pos.1 as isize - current_pos.1 as isize).abs() <= 1
     })
@@ -652,14 +652,13 @@ pub(crate) fn handle_continuous_auto_scroll(
         }
     }
     // Check if mouse is at the left edge (on line numbers)
-    else if column <= line_num_width {
-        if state.horizontal_scroll_offset > 0 {
+    else if column <= line_num_width
+        && state.horizontal_scroll_offset > 0 {
             let scroll_speed = state.settings.horizontal_auto_scroll_speed;
             state.horizontal_scroll_offset = state.horizontal_scroll_offset.saturating_sub(scroll_speed);
             state.needs_redraw = true;
             scrolled = true;
         }
-    }
 
 
     scrolled
@@ -946,8 +945,8 @@ pub(crate) fn handle_mouse_event(
     let h_scrollbar_row = visible_lines as u16;
     let footer_row = (visible_lines + 1) as u16;
 
-    if row == h_scrollbar_row {
-        if kind == MouseEventKind::Down(MouseButton::Left) {
+    if row == h_scrollbar_row
+        && kind == MouseEventKind::Down(MouseButton::Left) {
             // Check if it's on horizontal scrollbar
             if is_horizontal_scrollbar_click(state, lines, column, visible_lines) {
                 handle_horizontal_scrollbar_click(state, lines, column, visible_lines);
@@ -955,7 +954,6 @@ pub(crate) fn handle_mouse_event(
             }
         }
         // If not on h-scrollbar, treat as regular content click (fall through)
-    }
 
     // Check if click is on footer row
     if row == footer_row {
@@ -1239,11 +1237,7 @@ fn handle_mouse_click(
                 };
 
                 // If we clicked past the content width, we're in the empty space/wrap indicator area
-                if text_col >= content_width_in_segment {
-                    state.cursor_at_wrap_end = true;
-                } else {
-                    state.cursor_at_wrap_end = false;
-                }
+                state.cursor_at_wrap_end = text_col >= content_width_in_segment;
             } else {
                 state.cursor_at_wrap_end = false;
             }
@@ -1367,11 +1361,7 @@ fn handle_mouse_drag(
                 };
                 let usable_width = (text_width as usize).saturating_sub(1);
 
-                if text_col >= usable_width {
-                    state.cursor_at_wrap_end = true;
-                } else {
-                    state.cursor_at_wrap_end = false;
-                }
+                state.cursor_at_wrap_end = text_col >= usable_width;
             } else {
                 state.cursor_at_wrap_end = false;
             }
@@ -3162,7 +3152,7 @@ fn handle_horizontal_scrollbar_drag(
     }
 
     // Calculate target offset
-    let scroll_progress = (target_bar_left as f64 / available_scroll_space as f64).min(1.0).max(0.0);
+    let scroll_progress = (target_bar_left as f64 / available_scroll_space as f64).clamp(0.0, 1.0);
     let target_offset = (max_scroll as f64 * scroll_progress) as usize;
 
     state.horizontal_scroll_offset = target_offset.min(max_scroll);

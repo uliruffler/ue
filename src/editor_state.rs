@@ -800,8 +800,8 @@ impl<'a> FileViewerState<'a> {
         let absolute_line = self.absolute_line();
 
         // Check if we're AT a wrap point (start of segment) and should move to wrap indicator
-        if self.is_line_wrapping_enabled() && !self.cursor_at_wrap_end && self.cursor_col > 0 {
-            if let Some(line) = lines.get(absolute_line) {
+        if self.is_line_wrapping_enabled() && !self.cursor_at_wrap_end && self.cursor_col > 0
+            && let Some(line) = lines.get(absolute_line) {
                 let visible_lines = 10; // Default value
                 let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
                 let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
@@ -813,7 +813,6 @@ impl<'a> FileViewerState<'a> {
                     return true;
                 }
             }
-        }
 
         if self.cursor_col > 0 {
             // Normal left movement (also handles moving left from wrap_end position)

@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf, time::SystemTime};
 
+/// Cursor snapshot for undo restoration: `(line, col, multi_cursors)`.
+pub(crate) type CursorState = Option<(usize, usize, Vec<(usize, usize)>)>;
+
 // Helper module for serializing Option<u64> timestamps
 mod optional_systemtime {
     use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -80,7 +83,7 @@ pub enum Edit {
     CompositeEdit {
         edits: Vec<Edit>,
         #[serde(default)]
-        undo_cursor: Option<(usize, usize, Vec<(usize, usize)>)>, // (line, col, multi_cursors)
+        undo_cursor: CursorState, // (line, col, multi_cursors)
     },
 }
 
@@ -105,6 +108,12 @@ pub struct UndoHistory {
     pub replace_history: Vec<String>, // Persisted replace history
     #[serde(default)]
     pub rendered_scroll_top: usize, // last scroll position used in rendered markdown mode
+}
+
+impl Default for UndoHistory {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl UndoHistory {
@@ -135,7 +144,7 @@ impl UndoHistory {
     pub fn push_composite(
         &mut self,
         edits: Vec<Edit>,
-        undo_cursor: Option<(usize, usize, Vec<(usize, usize)>)>,
+        undo_cursor: CursorState,
     ) {
         if edits.is_empty() {
             return;

@@ -393,14 +393,12 @@ fn parse_keybinding(binding: &str, code: &KeyCode, modifiers: &KeyModifiers) -> 
     // Special case: For Ctrl+Shift+letter combinations, terminals often send the uppercase letter
     // without the SHIFT modifier (e.g., Ctrl+Shift+h sends Char('H') with only CONTROL modifier).
     // If the binding needs Shift and we have an uppercase letter, treat the uppercase as implicit shift.
-    if needs_shift && !has_shift {
-        if let KeyCode::Char(c) = code {
-            if c.is_ascii_alphabetic() && c.is_uppercase() && key == c.to_lowercase().to_string() {
+    if needs_shift && !has_shift
+        && let KeyCode::Char(c) = code
+            && c.is_ascii_alphabetic() && c.is_uppercase() && key == c.to_lowercase().to_string() {
                 // The uppercase character implies shift was pressed
                 has_shift = true;
             }
-        }
-    }
 
     has_ctrl == needs_ctrl && has_alt == needs_alt && has_shift == needs_shift
 }

@@ -157,10 +157,10 @@ pub(crate) fn truncate_rendered_line(text: &str, max_width: usize) -> String {
 fn truncate_to_width(text: &str, max_width: usize) -> String {
     let mut visual_width = 0;
     let mut result = String::new();
-    let mut chars = text.chars().peekable();
+    let chars = text.chars();
     let mut in_escape = false;
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         // Handle ANSI escape sequences (they don't contribute to visual width)
         if ch == '\x1b' {
             in_escape = true;
@@ -196,10 +196,7 @@ fn truncate_to_width(text: &str, max_width: usize) -> String {
 pub(crate) fn handle_help_input(key_event: KeyEvent) -> bool {
     let KeyEvent { code, .. } = key_event;
 
-    match code {
-        KeyCode::Esc | KeyCode::F(1) => true,
-        _ => false,
-    }
+    matches!(code, KeyCode::Esc | KeyCode::F(1))
 }
 
 /// Render help screen

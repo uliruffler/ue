@@ -24,8 +24,8 @@ pub(crate) fn resolve_home() -> Result<String, std::env::VarError> {
 
     // When invoked via `sudo`, SUDO_USER holds the name of the original user.
     // We want to store/read editor state from *that* user's home, not root's.
-    if let Ok(sudo_user) = std::env::var("SUDO_USER") {
-        if !sudo_user.is_empty() && sudo_user != "root" {
+    if let Ok(sudo_user) = std::env::var("SUDO_USER")
+        && !sudo_user.is_empty() && sudo_user != "root" {
             // Try to read the home directory from /etc/passwd first.
             if let Some(home) = home_from_passwd(&sudo_user) {
                 return Ok(home);
@@ -33,7 +33,6 @@ pub(crate) fn resolve_home() -> Result<String, std::env::VarError> {
             // Fallback: assume conventional /home/$SUDO_USER layout.
             return Ok(format!("/home/{}", sudo_user));
         }
-    }
 
     // Regular (non-sudo) execution.
     std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))

@@ -314,7 +314,7 @@ fn try_reload_undo_from_external_change(
             }
 
             // Ensure cursor is visible after reload (similar to undo/redo)
-            state.ensure_cursor_visible(visible_lines, &lines);
+            state.ensure_cursor_visible(visible_lines, lines);
         } else if undo_changed {
             // Only undo history changed, not content - update history but keep cursor position
             // This handles the case where another instance did undo/redo
@@ -1231,7 +1231,7 @@ fn editing_session(
                                 }
                             } else {
                                 // Normal file - just save
-                                save_file(file, &mut lines)?;
+                                save_file(file, &lines)?;
                                 state.modified = false;
                                 state.undo_history.clear_unsaved_state();
                                 let abs = state.absolute_line();

@@ -57,11 +57,10 @@ pub(crate) fn handle_copy(state: &FileViewerState, lines: &[String]) -> Result<(
             }
             if !text.is_empty() {
                 let mut clipboard_guard = get_clipboard().lock().unwrap();
-                if let Some(ref mut cb) = *clipboard_guard {
-                    if let Err(e) = cb.set_text(text) {
+                if let Some(ref mut cb) = *clipboard_guard
+                    && let Err(e) = cb.set_text(text) {
                         eprintln!("Failed to copy to clipboard: {}", e);
                     }
-                }
             }
         }
         return Ok(());
@@ -1351,8 +1350,8 @@ pub(crate) fn handle_editing_keys(
 
 
     // If a zero-width block selection is active, convert it to multi-cursors for editing keys
-    if state.block_selection {
-        if let Some((start, end)) = state.selection_range() {
+    if state.block_selection
+        && let Some((start, end)) = state.selection_range() {
             let is_zero_width_block = start.1 == end.1 && start.0 != end.0;
             if is_zero_width_block
                 && matches!(code, KeyCode::Char(_) | KeyCode::Backspace | KeyCode::Delete)
@@ -1360,7 +1359,6 @@ pub(crate) fn handle_editing_keys(
                 activate_multi_cursor_from_block(state, start, end);
             }
         }
-    }
 
     // Handle multi-cursor typing
     if state.has_multi_cursors() {
@@ -1405,8 +1403,8 @@ pub(crate) fn handle_editing_keys(
                 && !modifiers.contains(KeyModifiers::ALT) =>
         {
             if state.has_selection() && state.block_selection {
-                if let Some((start, end)) = state.selection_range() {
-                    if start.1 != end.1 {
+                if let Some((start, end)) = state.selection_range()
+                    && start.1 != end.1 {
                         let start_col = start.1;
                         let start_line = start.0;
                         let end_line = end.0;
@@ -1418,7 +1416,6 @@ pub(crate) fn handle_editing_keys(
                         );
                         return insert_char_multi_cursor(state, lines, *c, filename);
                     }
-                }
             } else if state.has_selection() {
                 remove_selection(state, lines, filename);
             }
@@ -1482,7 +1479,7 @@ fn insert_char_multi_cursor(
 /// Delete backward at all cursor positions for multi-cursor mode
 fn delete_backward_multi_cursor(
     state: &mut FileViewerState,
-    lines: &mut Vec<String>,
+    lines: &mut [String],
     filename: &str,
 ) -> bool {
     let mut positions = state.all_cursor_positions();
@@ -1516,7 +1513,7 @@ fn delete_backward_multi_cursor(
         if state.cursor_col > 0 { state.cursor_col -= 1; }
         for cursor in &mut state.multi_cursors { if cursor.1 > 0 { cursor.1 -= 1; } }
         let absolute_line = state.absolute_line();
-        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
+        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.to_owned());
         save_undo_with_timestamp(state, filename);
         true
     } else {
@@ -1527,7 +1524,7 @@ fn delete_backward_multi_cursor(
 /// Delete forward at all cursor positions for multi-cursor mode
 fn delete_forward_multi_cursor(
     state: &mut FileViewerState,
-    lines: &mut Vec<String>,
+    lines: &mut [String],
     filename: &str,
 ) -> bool {
     let mut positions = state.all_cursor_positions();
@@ -1554,7 +1551,7 @@ fn delete_forward_multi_cursor(
     if deleted {
         state.undo_history.push_composite(edits, undo_cursor);
         let absolute_line = state.absolute_line();
-        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.clone());
+        state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.to_owned());
         save_undo_with_timestamp(state, filename);
         true
     } else { false }

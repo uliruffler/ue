@@ -168,8 +168,8 @@ impl OpenDialogState {
         self.refresh_tree_recursive(&PathBuf::from("/"), 0, &expanded_paths)?;
 
         // Restore selection to same path (or closest match)
-        if let Some(target_path) = selected_path {
-            if let Some(idx) = self.nodes.iter().position(|n| n.path == target_path) {
+        if let Some(target_path) = selected_path
+            && let Some(idx) = self.nodes.iter().position(|n| n.path == target_path) {
                 self.selected_index = idx;
                 // Adjust scroll to keep selection visible
                 if self.selected_index < self.scroll_offset {
@@ -178,7 +178,6 @@ impl OpenDialogState {
                     self.scroll_offset = self.selected_index.saturating_sub(10);
                 }
             }
-        }
 
         Ok(())
     }
@@ -314,11 +313,10 @@ impl OpenDialogState {
             let node_index = self.nodes.len();
 
             // Check if this is the target to select
-            if let Some(target) = select_target {
-                if path == target {
+            if let Some(target) = select_target
+                && path == target {
                     *current_selected = Some(node_index);
                 }
-            }
 
             self.nodes.push(TreeNode {
                 path: path.clone(),
@@ -546,12 +544,11 @@ impl OpenDialogState {
         match key.code {
             KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'v' => {
                 // Paste from clipboard
-                if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                    if let Ok(text) = clipboard.get_text() {
+                if let Ok(mut clipboard) = arboard::Clipboard::new()
+                    && let Ok(text) = clipboard.get_text() {
                         self.input_buffer.insert_str(self.input_cursor, &text);
                         self.input_cursor += text.len();
                     }
-                }
             }
             KeyCode::Char(c) => {
                 self.input_buffer.insert(self.input_cursor, c);
@@ -748,11 +745,10 @@ pub(crate) fn run_open_dialog(
                         }
                         KeyCode::Char(c) if key.modifiers.contains(KeyModifiers::CONTROL) && c == 'v' => {
                             // Switch to input on paste
-                            if let Ok(mut clipboard) = arboard::Clipboard::new() {
-                                if let Ok(text) = clipboard.get_text() {
+                            if let Ok(mut clipboard) = arboard::Clipboard::new()
+                                && let Ok(text) = clipboard.get_text() {
                                     state.focus_input(Some(text));
                                 }
-                            }
                         }
                         KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) && !key.modifiers.contains(KeyModifiers::ALT) => {
                             // Switch to input on typing
@@ -802,7 +798,7 @@ fn render_dialog(state: &OpenDialogState, width: u16, height: u16) -> io::Result
     render_tree(&mut stdout, state, 1, tree_height, width)?;
 
     // Render input field at bottom
-    let input_y = (height - 1) as u16;
+    let input_y = height - 1;
     render_input_field(&mut stdout, state, input_y, width)?;
 
     // Show cursor and position it when input is focused

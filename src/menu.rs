@@ -342,11 +342,10 @@ impl MenuBar {
     pub(crate) fn update_checkable(&mut self, target: MenuAction, checked: bool) {
         for menu in &mut self.menus {
             for item in &mut menu.items {
-                if let MenuItem::Checkable { action, checked: item_checked, .. } = item {
-                    if *action == target {
+                if let MenuItem::Checkable { action, checked: item_checked, .. } = item
+                    && *action == target {
                         *item_checked = checked;
                     }
-                }
             }
         }
     }
@@ -355,11 +354,10 @@ impl MenuBar {
     pub(crate) fn set_item_enabled(&mut self, target: MenuAction, enabled: bool) {
         for menu in &mut self.menus {
             for item in &mut menu.items {
-                if let MenuItem::Checkable { action, enabled: item_enabled, .. } = item {
-                    if *action == target {
+                if let MenuItem::Checkable { action, enabled: item_enabled, .. } = item
+                    && *action == target {
                         *item_enabled = enabled;
                     }
-                }
             }
         }
     }
@@ -629,8 +627,7 @@ fn render_file_menu_dropdown(
         let visible_end = (visible_start + actual_visible).min(total_files);
         let show_scrollbar = total_files > max_visible_files;
 
-        for file_idx in visible_start..visible_end {
-            let (idx, item) = &files[file_idx];
+        for (i, (idx, item)) in files[visible_start..visible_end].iter().enumerate() {
             render_menu_item_at_row(
                 stdout, item, *idx == menu_bar.selected_item_index,
                 menu_x, display_row, max_width, bg_color, selection_color,
@@ -638,7 +635,7 @@ fn render_file_menu_dropdown(
 
             if show_scrollbar {
                 render_file_scrollbar_row(
-                    stdout, file_idx - visible_start, scroll_offset, total_files,
+                    stdout, i, scroll_offset, total_files,
                     max_visible_files, menu_x + max_width - 1, display_row,
                 )?;
             }
@@ -757,14 +754,12 @@ pub(crate) fn handle_menu_key(
     let modifiers = key_event.modifiers;
 
     // Alt+letter opens a specific menu.
-    if modifiers.contains(KeyModifiers::ALT) {
-        if let KeyCode::Char(c) = code {
-            if menu_bar.try_activate_by_hotkey(c) {
+    if modifiers.contains(KeyModifiers::ALT)
+        && let KeyCode::Char(c) = code
+            && menu_bar.try_activate_by_hotkey(c) {
                 return (None, true);
             }
-        }
         // Other Alt+ combinations (e.g. Alt+Arrow for block selection) fall through.
-    }
 
     // Esc toggles the menu open/closed.
     if code == KeyCode::Esc
@@ -798,17 +793,14 @@ pub(crate) fn handle_menu_key(
     }
 
     // Ctrl+W removes the highlighted file from the recent list.
-    if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('w') {
-        if menu_bar.dropdown_open && menu_bar.selected_menu_index == FILE_MENU_INDEX
+    if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('w')
+        && menu_bar.dropdown_open && menu_bar.selected_menu_index == FILE_MENU_INDEX
             && menu_bar.selected_item_index >= FILE_SECTION_START_IDX
-        {
-            if let Some(MenuItem::Action { action: MenuAction::FileOpenRecent(idx), .. }) =
+            && let Some(MenuItem::Action { action: MenuAction::FileOpenRecent(idx), .. }) =
                 menu_bar.menus[FILE_MENU_INDEX].items.get(menu_bar.selected_item_index)
             {
                 return (Some(MenuAction::FileRemove(*idx)), false);
             }
-        }
-    }
 
     match code {
         KeyCode::Left => {

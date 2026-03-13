@@ -585,8 +585,8 @@ pub(crate) fn handle_key_event(
     }
 
     // Handle toggle find mode (regex vs wildcard) - Ctrl+Alt+X
-    if settings.keybindings.toggle_find_mode_matches(&code, &modifiers) {
-        if state.find_active {
+    if settings.keybindings.toggle_find_mode_matches(&code, &modifiers)
+        && state.find_active {
             // Toggle between regex and wildcard mode while in find mode
             state.find_regex_mode = !state.find_regex_mode;
             // Update highlights with the new mode - CRITICAL!
@@ -595,7 +595,6 @@ pub(crate) fn handle_key_event(
             state.needs_redraw = true;
             return Ok((false, false));
         }
-    }
 
     // Handle open dialog (configurable keybinding, default Ctrl+O)
     if settings.keybindings.open_dialog_matches(&code, &modifiers) {
@@ -671,8 +670,8 @@ pub(crate) fn handle_key_event(
 
     // Handle replace current occurrence - works even if not in replace mode
     // Requires a search pattern; empty replacement is valid (deletes matches)
-    if settings.keybindings.replace_current_matches(&code, &modifiers) {
-        if !state.is_read_only && state.last_search_pattern.is_some() && (state.replace_active || !state.replace_pattern.is_empty()) {
+    if settings.keybindings.replace_current_matches(&code, &modifiers)
+        && !state.is_read_only && state.last_search_pattern.is_some() && (state.replace_active || !state.replace_pattern.is_empty()) {
             crate::find::replace_current_occurrence(state, lines, visible_lines);
             // Save changes - update file content in undo history before saving
             let abs = state.absolute_line();
@@ -683,12 +682,11 @@ pub(crate) fn handle_key_event(
             state.last_save_time = Some(Instant::now());
             return Ok((false, false));
         }
-    }
 
     // Handle replace all occurrences (Ctrl+Alt+R) - works even if not in replace mode
     // Requires a search pattern; empty replacement is valid (deletes matches)
-    if settings.keybindings.replace_all_matches(&code, &modifiers) {
-        if !state.is_read_only && state.last_search_pattern.is_some() && (state.replace_active || !state.replace_pattern.is_empty()) {
+    if settings.keybindings.replace_all_matches(&code, &modifiers)
+        && !state.is_read_only && state.last_search_pattern.is_some() && (state.replace_active || !state.replace_pattern.is_empty()) {
             crate::find::replace_all_occurrences(state, lines);
             // Save changes - update file content in undo history before saving
             let abs = state.absolute_line();
@@ -699,7 +697,6 @@ pub(crate) fn handle_key_event(
             state.last_save_time = Some(Instant::now());
             return Ok((false, false));
         }
-    }
 
     // If in find mode, handle find input
     if state.find_active {
@@ -819,21 +816,19 @@ pub(crate) fn handle_key_event(
 
     // Handle undo
     if settings.keybindings.undo_matches(&code, &modifiers) {
-        if !state.is_editing_blocked() {
-            if apply_undo(state, lines, filename, visible_lines) {
+        if !state.is_editing_blocked()
+            && apply_undo(state, lines, filename, visible_lines) {
                 state.needs_redraw = true;
             }
-        }
         return Ok((false, false));
     }
 
     // Handle redo
     if settings.keybindings.redo_matches(&code, &modifiers) {
-        if !state.is_editing_blocked() {
-            if apply_redo(state, lines, filename, visible_lines) {
+        if !state.is_editing_blocked()
+            && apply_redo(state, lines, filename, visible_lines) {
                 state.needs_redraw = true;
             }
-        }
         return Ok((false, false));
     }
 
@@ -845,19 +840,17 @@ pub(crate) fn handle_key_event(
 
     // Handle paste
     if settings.keybindings.paste_matches(&code, &modifiers) {
-        if !state.is_editing_blocked() {
-            if handle_paste(state, lines, filename) {
+        if !state.is_editing_blocked()
+            && handle_paste(state, lines, filename) {
                 state.needs_redraw = true;
             }
-        }
         return Ok((false, false));
     }
 
     // Handle cut
     if settings.keybindings.cut_matches(&code, &modifiers) {
-        if !state.is_editing_blocked() {
-            if handle_cut(state, lines, filename) { /* already set redraw */ }
-        }
+        if !state.is_editing_blocked()
+            && handle_cut(state, lines, filename) { /* already set redraw */ }
         return Ok((false, false));
     }
 
@@ -2129,7 +2122,7 @@ fn paragraph_up(state: &mut FileViewerState, lines: &[String]) -> bool {
     while current_line > 0
         && !lines
             .get(current_line - 1)
-            .map_or(true, |l| l.trim().is_empty())
+            .is_none_or(|l| l.trim().is_empty())
     {
         current_line -= 1;
     }
@@ -2138,7 +2131,7 @@ fn paragraph_up(state: &mut FileViewerState, lines: &[String]) -> bool {
     while current_line > 0
         && lines
             .get(current_line - 1)
-            .map_or(false, |l| l.trim().is_empty())
+            .is_some_and(|l| l.trim().is_empty())
     {
         current_line -= 1;
     }
@@ -2166,7 +2159,7 @@ fn paragraph_down(state: &mut FileViewerState, lines: &[String], visible_lines: 
     while current_line < lines.len()
         && !lines
             .get(current_line)
-            .map_or(true, |l| l.trim().is_empty())
+            .is_none_or(|l| l.trim().is_empty())
     {
         current_line += 1;
     }
@@ -2175,7 +2168,7 @@ fn paragraph_down(state: &mut FileViewerState, lines: &[String], visible_lines: 
     while current_line < lines.len()
         && lines
             .get(current_line)
-            .map_or(false, |l| l.trim().is_empty())
+            .is_some_and(|l| l.trim().is_empty())
     {
         current_line += 1;
     }
@@ -2380,7 +2373,7 @@ fn handle_goto_line_input(
             state.goto_line_cursor_pos = 0;
             state.goto_line_typing_started = false;
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::Char(c) if modifiers.is_empty() => {
             // Only allow digits
@@ -2402,7 +2395,7 @@ fn handle_goto_line_input(
                 state.goto_line_cursor_pos += 1;
                 state.needs_redraw = true;
             }
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::Backspace if modifiers.is_empty() => {
             if !state.goto_line_typing_started {
@@ -2421,7 +2414,7 @@ fn handle_goto_line_input(
                 state.goto_line_cursor_pos -= 1;
             }
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::Delete if modifiers.is_empty() => {
             if !state.goto_line_typing_started {
@@ -2441,7 +2434,7 @@ fn handle_goto_line_input(
                 }
             }
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::Left => {
             // Moving cursor unselects the line number and allows editing
@@ -2454,7 +2447,7 @@ fn handle_goto_line_input(
                 state.goto_line_cursor_pos -= 1;
             }
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::Right => {
             // Moving cursor unselects the line number and allows editing
@@ -2468,7 +2461,7 @@ fn handle_goto_line_input(
                 state.goto_line_cursor_pos += 1;
             }
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::Home => {
             if !state.goto_line_typing_started {
@@ -2476,7 +2469,7 @@ fn handle_goto_line_input(
             }
             state.goto_line_cursor_pos = 0;
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         KeyCode::End => {
             if !state.goto_line_typing_started {
@@ -2484,11 +2477,11 @@ fn handle_goto_line_input(
             }
             state.goto_line_cursor_pos = state.goto_line_input.chars().count();
             state.needs_redraw = true;
-            return Ok((false, false));
+            Ok((false, false))
         }
         _ => {
             // Ignore other keys
-            return Ok((false, false));
+            Ok((false, false))
         }
     }
 }

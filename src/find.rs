@@ -22,9 +22,9 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
 /// This escapes regex special characters and replaces wildcards with their regex equivalents
 pub(crate) fn wildcard_to_regex(pattern: &str) -> Result<String, Box<dyn std::error::Error>> {
     let mut regex = String::new();
-    let mut chars = pattern.chars().peekable();
+    let chars = pattern.chars();
 
-    while let Some(ch) = chars.next() {
+    for ch in chars {
         match ch {
             '*' => regex.push_str(".*"),
             '?' => regex.push('.'),
@@ -83,10 +83,11 @@ pub(crate) fn build_joined_text(lines: &[String], min_line: usize, max_line: usi
     let max_line = max_line.min(lines.len().saturating_sub(1));
     let mut joined = String::new();
     let mut line_starts = Vec::new();
-    for idx in min_line..=max_line {
+    let slice = &lines[min_line..=max_line];
+    for (i, line) in slice.iter().enumerate() {
         line_starts.push(joined.len());
-        joined.push_str(&lines[idx]);
-        if idx < max_line {
+        joined.push_str(line);
+        if i + 1 < slice.len() {
             joined.push('\n');
         }
     }
@@ -423,19 +424,13 @@ pub(crate) fn handle_find_input(
                 let mut new_pattern = String::new();
 
                 // Add everything before selection
-                for i in 0..start {
-                    if i < chars.len() {
-                        new_pattern.push(chars[i]);
-                    }
-                }
+                new_pattern.extend(chars[..start.min(chars.len())].iter().copied());
 
                 // Insert new character
                 new_pattern.push(c);
 
                 // Add everything after selection
-                for i in end..chars.len() {
-                    new_pattern.push(chars[i]);
-                }
+                new_pattern.extend(chars[end..].iter().copied());
 
                 state.find_pattern = new_pattern;
                 state.find_cursor_pos = start + 1;
@@ -683,8 +678,7 @@ fn find_next(
 
         // Search subsequent lines
         let end_line = max_line.min(lines.len().saturating_sub(1));
-        for line_idx in (start_line + 1)..=end_line {
-            let line = &lines[line_idx];
+        for (line_idx, line) in lines.iter().enumerate().take(end_line + 1).skip(start_line + 1) {
             let (col_from, col_to) = scope_col_range(line_idx, line, scope);
             if let Some(col) = regex
                 .find_iter(line)
@@ -876,8 +870,7 @@ pub(crate) fn calculate_search_hits(
     let mut current_hit = 0;
     let mut found_cursor_hit = false;
 
-    for line_idx in min_line..=max_line.min(lines.len().saturating_sub(1)) {
-        let line = &lines[line_idx];
+    for (line_idx, line) in lines.iter().enumerate().take(max_line.min(lines.len().saturating_sub(1)) + 1).skip(min_line) {
 
         // Determine search boundaries for this line based on scope
         // Compute byte-offset bounds for this line (consistent with m.start() which is a byte offset)
@@ -1179,19 +1172,13 @@ pub(crate) fn handle_replace_input(
                 let mut new_pattern = String::new();
 
                 // Add everything before selection
-                for i in 0..start {
-                    if i < chars.len() {
-                        new_pattern.push(chars[i]);
-                    }
-                }
+                new_pattern.extend(chars[..start.min(chars.len())].iter().copied());
 
                 // Insert new character
                 new_pattern.push(c);
 
                 // Add everything after selection
-                for i in end..chars.len() {
-                    new_pattern.push(chars[i]);
-                }
+                new_pattern.extend(chars[end..].iter().copied());
 
                 state.replace_pattern = new_pattern;
                 state.replace_cursor_pos = start + 1;

@@ -35,7 +35,7 @@ pub fn syntax_set_current_file(filepath: &str) {
     syntax::set_current_file(filepath);
 }
 
-pub fn syntax_highlight_line(line: &str) -> (Vec<(usize, usize, crossterm::style::Color)>, Option<(bool, String)>) {
+pub fn syntax_highlight_line(line: &str) -> syntax::HighlightOutput {
     syntax::highlight_line(line)
 }
 

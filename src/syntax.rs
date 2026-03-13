@@ -3,6 +3,14 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Byte ranges with colors for one highlighted line, plus an optional syntax switch action.
+type HighlightResult = (Vec<(usize, usize, Color)>, Option<(SwitchAction, String)>);
+
+/// Public output of `highlight_line`.
+/// Each segment is `(start_byte, end_byte, Color)`.  The boolean in the switch
+/// tuple is `true` when switching *back*, `false` when switching *to* an extension.
+pub(crate) type HighlightOutput = (Vec<(usize, usize, Color)>, Option<(bool, String)>);
+
 #[derive(Debug, Clone)]
 enum SwitchAction {
     /// Switch to a specific syntax extension
@@ -51,7 +59,7 @@ impl SyntaxDefinition {
 
     /// Apply syntax highlighting to a line, returning styled segments and optional switch action
     /// Returns (Vec of (start_byte, end_byte, color), Option<(SwitchAction, captured_extension)>)
-    fn highlight_line(&self, line: &str) -> (Vec<(usize, usize, Color)>, Option<(SwitchAction, String)>) {
+    fn highlight_line(&self, line: &str) -> HighlightResult {
         let mut segments = Vec::new();
         let mut switch_result: Option<(SwitchAction, String)> = None;
 
@@ -61,8 +69,8 @@ impl SyntaxDefinition {
                 segments.push((mat.start(), mat.end(), pattern.color, pattern.priority));
 
                 // Check for switch action - use highest priority switch action found
-                if let Some(ref action) = pattern.switch_action {
-                    if switch_result.is_none() || switch_result.as_ref().map_or(false, |(_, _)| true) {
+                if let Some(ref action) = pattern.switch_action
+                    && (switch_result.is_none() || switch_result.as_ref().is_some_and(|(_, _)| true)) {
                         // Extract captured group if present (for switch_to=$1 style)
                         let extension = if let SwitchAction::SwitchTo(template) = action {
                             // Check if template contains $1 capture group reference
@@ -85,7 +93,6 @@ impl SyntaxDefinition {
                         };
                         switch_result = Some((action.clone(), extension));
                     }
-                }
             }
         }
 
@@ -190,11 +197,7 @@ impl SyntaxCache {
                 let directive = parts[3].trim();
                 if directive == "switch_back" {
                     Some(SwitchAction::SwitchBack)
-                } else if let Some(ext) = directive.strip_prefix("switch_to=") {
-                    Some(SwitchAction::SwitchTo(ext.to_string()))
-                } else {
-                    None
-                }
+                } else { directive.strip_prefix("switch_to=").map(|ext| SwitchAction::SwitchTo(ext.to_string())) }
             } else {
                 None
             };
@@ -283,7 +286,7 @@ impl SyntaxHighlighter {
         self.syntax_stack.clear();
     }
 
-    fn highlight_line(&mut self, line: &str) -> (Vec<(usize, usize, Color)>, Option<(SwitchAction, String)>) {
+    fn highlight_line(&mut self, line: &str) -> HighlightResult {
         let ext = self.current_extension().map(|s| s.to_string());
         let base_ext = self.base_extension.clone();
         let is_embedded = !self.syntax_stack.is_empty();
@@ -295,19 +298,16 @@ impl SyntaxHighlighter {
 
             // If we're in an embedded language and didn't find a switch action,
             // also check the base syntax for switch_back patterns
-            if is_embedded && switch.is_none() {
-                if let Some(ref base) = base_ext {
-                    if let Some(base_def) = self.cache.get_or_load(base) {
+            if is_embedded && switch.is_none()
+                && let Some(ref base) = base_ext
+                    && let Some(base_def) = self.cache.get_or_load(base) {
                         let (_base_highlights, base_switch) = base_def.highlight_line(line);
                         // Only use base_switch if it's a switch_back action
-                        if let Some((ref action, ref ext)) = base_switch {
-                            if matches!(action, SwitchAction::SwitchBack) {
+                        if let Some((ref action, ref ext)) = base_switch
+                            && matches!(action, SwitchAction::SwitchBack) {
                                 return (highlights, Some((action.clone(), ext.clone())));
                             }
-                        }
                     }
-                }
-            }
 
             return (highlights, switch);
         }
@@ -344,7 +344,7 @@ pub(crate) fn clear_syntax_stack() {
 /// Get syntax highlighting for a line, with optional switch action
 /// Returns (Vec of (start_byte, end_byte, color), Option<(is_switch_back, extension)>)
 /// where is_switch_back is true for switch_back, false for switch_to with the extension name
-pub(crate) fn highlight_line(line: &str) -> (Vec<(usize, usize, Color)>, Option<(bool, String)>) {
+pub(crate) fn highlight_line(line: &str) -> HighlightOutput {
     let (highlights, switch) = HIGHLIGHTER.with(|h| h.borrow_mut().highlight_line(line));
 
     // Convert SwitchAction to simpler bool + string tuple

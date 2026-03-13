@@ -58,7 +58,7 @@ fn shorten_path_for_display(parent_path: &str, max_width: usize) -> String {
     let home_shortened = if let Some(ref home_path) = home {
         if parent_path.starts_with(home_path) {
             let rest = &parent_path[home_path.len()..];
-            let rest = if rest.starts_with('/') { &rest[1..] } else { rest };
+            let rest = rest.strip_prefix('/').unwrap_or(rest);
             format!("~/{}", rest)
         } else {
             parent_path.to_string()
@@ -1309,12 +1309,16 @@ fn normalize_selection(sel_start: Position, sel_end: Position) -> (Position, Pos
 
 /// Cached regex for search performance
 use std::cell::RefCell;
+
+/// Per-line match ranges: each inner Vec holds (char_start, char_end) pairs for one line
+type MultilineMatchCache = RefCell<Option<(String, Vec<Vec<(usize, usize)>>)>>;
+
 thread_local! {
-    static SEARCH_REGEX_CACHE: RefCell<Option<(String, regex::Regex)>> = RefCell::new(None);
+    static SEARCH_REGEX_CACHE: RefCell<Option<(String, regex::Regex)>> = const { RefCell::new(None) };
     /// Cache for multiline pattern matches.
     /// Key: (pattern, scope_repr, total_lines).
     /// Value: per-line vec of (char_start, char_end) ranges.
-    static MULTILINE_MATCH_CACHE: RefCell<Option<(String, Vec<Vec<(usize, usize)>>)>> = RefCell::new(None);
+    static MULTILINE_MATCH_CACHE: MultilineMatchCache = const { RefCell::new(None) };
 }
 
 /// Get character ranges for search matches in a line (with caching).
