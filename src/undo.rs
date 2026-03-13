@@ -103,6 +103,8 @@ pub struct UndoHistory {
     pub find_history: Vec<String>, // Persisted search history
     #[serde(default)]
     pub replace_history: Vec<String>, // Persisted replace history
+    #[serde(default)]
+    pub rendered_scroll_top: usize, // last scroll position used in rendered markdown mode
 }
 
 impl UndoHistory {
@@ -119,6 +121,7 @@ impl UndoHistory {
             saved_at: 0,
             find_history: Vec::new(),
             replace_history: Vec::new(),
+            rendered_scroll_top: 0,
         }
     }
 

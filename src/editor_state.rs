@@ -183,6 +183,12 @@ pub struct FileViewerState<'a> {
     pub(crate) rendered_selection_end: Option<(usize, usize)>,
     /// Whether a mouse drag selection is active in rendered mode.
     pub(crate) rendered_mouse_dragging: bool,
+    /// Saved source-view position (top_line, cursor_line, cursor_col) captured when entering
+    /// rendered mode so it can be restored on exit.
+    pub(crate) saved_source_position: Option<(usize, usize, usize)>,
+    /// Last scroll position (top_line) used in rendered mode so it can be restored on
+    /// re-entry instead of always jumping back to the top.
+    pub(crate) rendered_top_line: usize,
     /// When cursor is at a wrap point, this tracks whether it's visually at the end of the
     /// previous segment (true) or at the start of the next segment (false)
     /// Only meaningful when cursor_col is exactly at a wrap point
@@ -284,6 +290,8 @@ impl<'a> FileViewerState<'a> {
             rendered_selection_start: None,
             rendered_selection_end: None,
             rendered_mouse_dragging: false,
+            saved_source_position: None,
+            rendered_top_line: 0,
             cursor_at_wrap_end: false,
             status_message: None,
             line_number_drag_active: false,

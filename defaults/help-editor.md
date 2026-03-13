@@ -69,6 +69,19 @@ Press **{help}** or **ESC** to close this help.
   - Shows the document rendered as formatted markdown (bold, italic, tables, etc.)
   - Rendered view is read-only — switch back to plain to edit
   - Search (`{find}`) and scrolling still work in rendered view
+  - Scroll and cursor position are preserved when toggling in/out of rendered view and across restarts
+
+## Navigation in Rendered Mode
+
+In rendered mode the document is read-only, so all navigation keys control **scrolling** instead of moving a cursor:
+
+| Key | Action |
+|-----|--------|
+| **Arrow Keys** | Scroll one line / one column |
+| **Page Up / Page Down** | Scroll one full page |
+| **Home** / **Ctrl+Home** | Scroll to the very top |
+| **End** / **Ctrl+End** | Scroll so the last line is at the bottom |
+| **Alt+Arrow** | Same as plain Arrow (viewport scroll) |
 
 ## Other
 

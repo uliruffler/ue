@@ -305,18 +305,29 @@ pub(crate) fn handle_key_event(
                 if crate::menu::is_markdown_file(filename) {
                     state.markdown_rendered = !state.markdown_rendered;
                     if state.markdown_rendered {
+                        // Save source position so we can restore it on exit
+                        state.saved_source_position = Some((state.top_line, state.cursor_line, state.cursor_col));
                         // Populate rendered lines
                         let render_width = crate::help::markdown_render_width(state.term_width as usize, state, lines.len());
                         state.rendered_lines =
                             crate::help::render_markdown_to_lines(lines, render_width);
-                        // Reset scroll/cursor to top so user starts at beginning of rendered view
-                        state.top_line = 0;
+                        // Restore last rendered scroll position (or start at top on first entry)
+                        let max_scroll = state.rendered_lines.len().saturating_sub(1);
+                        state.top_line = state.rendered_top_line.min(max_scroll);
                         state.cursor_line = 0;
                         state.cursor_col = 0;
                     } else {
-                        // Clear rendered lines to free memory
+                        // Save rendered scroll position for re-entry
+                        state.rendered_top_line = state.top_line;
+                        // Clear rendered lines to free memory (but keep selection for re-entry)
                         state.rendered_lines.clear();
-                        state.clear_rendered_selection();
+                        state.rendered_mouse_dragging = false;
+                        // Restore source position
+                        if let Some((tl, cl, cc)) = state.saved_source_position.take() {
+                            state.top_line = tl;
+                            state.cursor_line = cl;
+                            state.cursor_col = cc;
+                        }
                     }
                     // Clear the whole screen to remove ANSI artifacts from the previous mode
                     let _ = crossterm::execute!(
@@ -411,18 +422,26 @@ pub(crate) fn handle_key_event(
                 if extend {
                     state.start_selection();
                 }
-                if !lines.is_empty() {
-                    let last_line = lines.len() - 1;
-                    // Position cursor at end of last line
+                // In rendered mode, the scrollable content is rendered_lines, not source lines.
+                let total = if state.markdown_rendered && !state.rendered_lines.is_empty() {
+                    state.rendered_lines.len()
+                } else {
+                    lines.len()
+                };
+                if total > 0 {
+                    let last_line = total - 1;
+                    // Position cursor/scroll at end of document
                     if last_line < visible_lines {
                         state.top_line = 0;
-                        state.cursor_line = last_line;
+                        state.cursor_line = if state.markdown_rendered { 0 } else { last_line };
                     } else {
                         state.top_line = last_line.saturating_sub(visible_lines - 1);
-                        state.cursor_line = last_line - state.top_line;
+                        state.cursor_line = if state.markdown_rendered { 0 } else { last_line - state.top_line };
                     }
-                    state.cursor_col = lines[last_line].len();
-                    state.desired_cursor_col = state.cursor_col;
+                    if !state.markdown_rendered {
+                        state.cursor_col = lines[last_line].len();
+                        state.desired_cursor_col = state.cursor_col;
+                    }
                 }
                 moved = true;
             }
@@ -715,13 +734,18 @@ pub(crate) fn handle_key_event(
 
     // Check for exit commands
     if is_exit_command(&code, &modifiers, settings) {
-        // Before exiting, persist final scroll and cursor position
-        let abs = state.absolute_line();
-        state
-            .undo_history
-            .update_cursor(state.top_line, abs, state.cursor_col);
+        // Before exiting, persist final scroll and cursor position.
+        // In rendered mode state.top_line is the rendered scroll; source position is in saved_source_position.
+        let (save_top, save_abs, save_col, rendered_scroll) = if state.markdown_rendered {
+            let (rtl, rcl, rcc) = state.saved_source_position.unwrap_or((0, 0, 0));
+            (rtl, rtl + rcl, rcc, state.top_line)
+        } else {
+            (state.top_line, state.absolute_line(), state.cursor_col, state.rendered_top_line)
+        };
+        state.undo_history.update_cursor(save_top, save_abs, save_col);
         state.undo_history.find_history = state.find_history.clone(); // Save find history
         state.undo_history.replace_history = state.replace_history.clone();
+        state.undo_history.rendered_scroll_top = rendered_scroll;
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         // Save session as editor
@@ -745,13 +769,18 @@ pub(crate) fn handle_key_event(
             // Clear the unsaved file content since we just saved
             state.undo_history.clear_unsaved_state();
         }
-        // Before exiting, persist final scroll and cursor position
-        let abs = state.absolute_line();
-        state
-            .undo_history
-            .update_cursor(state.top_line, abs, state.cursor_col);
+        // Before exiting, persist final scroll and cursor position.
+        // In rendered mode state.top_line is the rendered scroll; source position is in saved_source_position.
+        let (save_top, save_abs, save_col, rendered_scroll) = if state.markdown_rendered {
+            let (rtl, rcl, rcc) = state.saved_source_position.unwrap_or((0, 0, 0));
+            (rtl, rtl + rcl, rcc, state.top_line)
+        } else {
+            (state.top_line, state.absolute_line(), state.cursor_col, state.rendered_top_line)
+        };
+        state.undo_history.update_cursor(save_top, save_abs, save_col);
         state.undo_history.find_history = state.find_history.clone(); // Save find history
         state.undo_history.replace_history = state.replace_history.clone();
+        state.undo_history.rendered_scroll_top = rendered_scroll;
         let _ = state.undo_history.save(filename);
         state.last_save_time = Some(Instant::now());
         // Save session as editor
@@ -875,18 +904,31 @@ pub(crate) fn handle_key_event(
         if crate::menu::is_markdown_file(filename) {
             state.markdown_rendered = !state.markdown_rendered;
             if state.markdown_rendered {
+                // Save source position so we can restore it on exit
+                state.saved_source_position = Some((state.top_line, state.cursor_line, state.cursor_col));
                 let render_width = crate::help::markdown_render_width(
                     state.term_width as usize,
                     state,
                     lines.len(),
                 );
                 state.rendered_lines = crate::help::render_markdown_to_lines(lines, render_width);
-                state.top_line = 0;
+                // Restore last rendered scroll position (or start at top on first entry)
+                let max_scroll = state.rendered_lines.len().saturating_sub(1);
+                state.top_line = state.rendered_top_line.min(max_scroll);
                 state.cursor_line = 0;
                 state.cursor_col = 0;
             } else {
+                // Save rendered scroll position for re-entry
+                state.rendered_top_line = state.top_line;
+                // Clear rendered lines to free memory (but keep selection for re-entry)
                 state.rendered_lines.clear();
-                state.clear_rendered_selection();
+                state.rendered_mouse_dragging = false;
+                // Restore source position
+                if let Some((tl, cl, cc)) = state.saved_source_position.take() {
+                    state.top_line = tl;
+                    state.cursor_line = cl;
+                    state.cursor_col = cc;
+                }
             }
             let _ = crossterm::execute!(
                 std::io::stdout(),
@@ -938,6 +980,17 @@ pub(crate) fn handle_key_event(
 
     // Handle Alt+Arrow (without Shift) for viewport scrolling without moving cursor
     if is_navigation && is_alt && !is_shift {
+        let scrolled = handle_viewport_scroll(state, lines, code, visible_lines);
+        if scrolled {
+            state.needs_redraw = true;
+        }
+        return Ok((false, false));
+    }
+
+    // In rendered markdown mode, plain arrow keys (no modifiers) scroll the viewport
+    // instead of moving a cursor — the rendered view is read-only, so cursor movement
+    // is meaningless; scrolling is the only useful navigation action.
+    if state.markdown_rendered && is_navigation && !is_alt && !is_shift && !modifiers.contains(KeyModifiers::CONTROL) {
         let scrolled = handle_viewport_scroll(state, lines, code, visible_lines);
         if scrolled {
             state.needs_redraw = true;
@@ -1337,6 +1390,26 @@ fn handle_viewport_scroll(
                     }
                 }
                 return true;
+            }
+        }
+        KeyCode::Home => {
+            // In rendered mode: scroll to the very top.
+            if state.markdown_rendered && state.top_line > 0 {
+                state.top_line = 0;
+                state.top_line_visual_offset = 0;
+                return true;
+            }
+        }
+        KeyCode::End => {
+            // In rendered mode: scroll so the last rendered line appears at the BOTTOM
+            // of the viewport (same behaviour as Ctrl+End).
+            if state.markdown_rendered {
+                let target = state.rendered_lines.len().saturating_sub(visible_lines);
+                if state.top_line != target {
+                    state.top_line = target;
+                    state.top_line_visual_offset = 0;
+                    return true;
+                }
             }
         }
         _ => {}
@@ -3790,6 +3863,217 @@ mod tests {
             state.cursor_col, 2,
             "Up from seg1 col 2 (char 32) must land at seg0 col 2 (char 2), \
              not at the end of seg0 (col 29) which was the old bug"
+        );
+    }
+
+    // ── Rendered-mode navigation tests ─────────────────────────────────────────
+
+    /// Return a state already in rendered mode with `n` rendered lines.
+    fn create_rendered_state(n: usize) -> (FileViewerState<'static>, Vec<String>) {
+        let mut state = create_test_state();
+        state.markdown_rendered = true;
+        state.rendered_lines = (0..n).map(|i| format!("rendered line {}", i)).collect();
+        let source_lines = create_test_lines(10);
+        (state, source_lines)
+    }
+
+    #[test]
+    fn rendered_down_scrolls_one_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let (mut state, mut lines) = create_rendered_state(50);
+        state.top_line = 10;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, 20, "test.md").unwrap();
+        assert_eq!(state.top_line, 11, "Down should scroll rendered view one line");
+    }
+
+    #[test]
+    fn rendered_up_scrolls_one_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let (mut state, mut lines) = create_rendered_state(50);
+        state.top_line = 10;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, 20, "test.md").unwrap();
+        assert_eq!(state.top_line, 9, "Up should scroll rendered view one line");
+    }
+
+    #[test]
+    fn rendered_up_at_top_does_nothing() {
+        let (_tmp, _guard) = set_temp_home();
+        let (mut state, mut lines) = create_rendered_state(50);
+        state.top_line = 0;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::Up, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, 20, "test.md").unwrap();
+        assert_eq!(state.top_line, 0, "Up at top should not scroll");
+    }
+
+    #[test]
+    fn rendered_down_at_bottom_does_nothing() {
+        let (_tmp, _guard) = set_temp_home();
+        let (mut state, mut lines) = create_rendered_state(50);
+        state.top_line = 49; // last rendered line index
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::Down, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, 20, "test.md").unwrap();
+        assert_eq!(state.top_line, 49, "Down at bottom should not scroll");
+    }
+
+    #[test]
+    fn rendered_page_down_scrolls_full_page() {
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let (mut state, mut lines) = create_rendered_state(100);
+        state.top_line = 0;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::PageDown, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+        assert_eq!(state.top_line, visible, "PageDown in rendered mode scrolls a full page");
+    }
+
+    #[test]
+    fn rendered_page_up_scrolls_full_page() {
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let (mut state, mut lines) = create_rendered_state(100);
+        state.top_line = 40;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::PageUp, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+        assert_eq!(state.top_line, 20, "PageUp in rendered mode scrolls a full page");
+    }
+
+    #[test]
+    fn rendered_home_scrolls_to_top() {
+        let (_tmp, _guard) = set_temp_home();
+        let (mut state, mut lines) = create_rendered_state(50);
+        state.top_line = 30;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::Home, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, 20, "test.md").unwrap();
+        assert_eq!(state.top_line, 0, "Home in rendered mode should scroll to top");
+    }
+
+    #[test]
+    fn rendered_end_puts_last_line_at_bottom() {
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let total = 50usize;
+        let (mut state, mut lines) = create_rendered_state(total);
+        state.top_line = 0;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::End, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+        // last line (49) should appear at the last visible row → top_line = 50 - 20 = 30
+        assert_eq!(
+            state.top_line,
+            total - visible,
+            "End in rendered mode should put last line at bottom of viewport, not at top"
+        );
+    }
+
+    #[test]
+    fn rendered_end_when_content_fits_in_viewport() {
+        // When all rendered lines fit on screen, End should scroll to top (top_line = 0).
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let total = 10usize; // fewer lines than viewport
+        let (mut state, mut lines) = create_rendered_state(total);
+        state.top_line = 0;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::End, KeyModifiers::empty());
+        handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+        assert_eq!(state.top_line, 0, "End when all lines fit should leave top_line at 0");
+    }
+
+    #[test]
+    fn rendered_ctrl_home_scrolls_to_top() {
+        let (_tmp, _guard) = set_temp_home();
+        let (mut state, mut lines) = create_rendered_state(50);
+        state.top_line = 30;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+        handle_key_event(&mut state, &mut lines, key, settings, 20, "test.md").unwrap();
+        assert_eq!(state.top_line, 0, "Ctrl+Home in rendered mode should scroll to top");
+    }
+
+    #[test]
+    fn rendered_ctrl_end_puts_last_line_at_bottom() {
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let total = 50usize;
+        let (mut state, mut lines) = create_rendered_state(total);
+        state.top_line = 0;
+        let settings = state.settings;
+        let key = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL);
+        handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+        assert_eq!(
+            state.top_line,
+            total - visible,
+            "Ctrl+End in rendered mode should put last line at bottom of viewport"
+        );
+    }
+
+    #[test]
+    fn rendered_end_and_ctrl_end_produce_same_top_line() {
+        // Both End and Ctrl+End must scroll to exactly the same position.
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let total = 50usize;
+        let settings;
+
+        let top_from_end = {
+            let (mut state, mut lines) = create_rendered_state(total);
+            state.top_line = 0;
+            settings = state.settings;
+            let key = KeyEvent::new(KeyCode::End, KeyModifiers::empty());
+            handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+            state.top_line
+        };
+
+        let top_from_ctrl_end = {
+            let (mut state, mut lines) = create_rendered_state(total);
+            state.top_line = 0;
+            let key = KeyEvent::new(KeyCode::End, KeyModifiers::CONTROL);
+            handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+            state.top_line
+        };
+
+        assert_eq!(
+            top_from_end, top_from_ctrl_end,
+            "End and Ctrl+End in rendered mode must produce the same top_line"
+        );
+    }
+
+    #[test]
+    fn rendered_home_and_ctrl_home_produce_same_top_line() {
+        let (_tmp, _guard) = set_temp_home();
+        let visible = 20usize;
+        let total = 50usize;
+        let settings;
+
+        let top_from_home = {
+            let (mut state, mut lines) = create_rendered_state(total);
+            state.top_line = 30;
+            settings = state.settings;
+            let key = KeyEvent::new(KeyCode::Home, KeyModifiers::empty());
+            handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+            state.top_line
+        };
+
+        let top_from_ctrl_home = {
+            let (mut state, mut lines) = create_rendered_state(total);
+            state.top_line = 30;
+            let key = KeyEvent::new(KeyCode::Home, KeyModifiers::CONTROL);
+            handle_key_event(&mut state, &mut lines, key, settings, visible, "test.md").unwrap();
+            state.top_line
+        };
+
+        assert_eq!(
+            top_from_home, top_from_ctrl_home,
+            "Home and Ctrl+Home in rendered mode must produce the same top_line"
         );
     }
 }

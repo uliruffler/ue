@@ -16,7 +16,6 @@ One of the main reasons for creating this editor was to explore how to work with
 - Persistent undo mechanism
 - Persist scroll and cursor position
 - Multi-instance usage
-- File selector page (replacement for tabs)
 - Find with highlighting while typing
 - Cursor position and “go to” functionality
 - Help pages
@@ -34,6 +33,19 @@ One of the main reasons for creating this editor was to explore how to work with
 - `Pos1` moves to the first non-blank character or the beginning of the line
 - `End` moves to the end of the line
 - `Ctrl+f` enters find mode (regex search)
+
+### Rendered Markdown View
+
+For `.md` files, the **View → Rendered** menu entry (default `Alt+r`) toggles a read-only formatted view of the document:
+
+- Markdown is rendered with bold, italic, tables, code blocks, etc.
+- All navigation keys scroll the viewport instead of moving a cursor:
+  - Arrow keys scroll one line/column
+  - `Page Up` / `Page Down` scroll a full page
+  - `Pos1` / `Ctrl+Pos1` jump to the top; `End` / `Ctrl+End` jump to the bottom (last line visible at bottom)
+- Find (`Ctrl+f`) still works
+- Scroll position and selections are preserved when toggling back and forth and across editor restarts
+- Switch back to plain view to edit the file
 - `Ctrl+g` enters go-to mode
 - Double-tap `Esc` to immediately exit ue (this doesn't save the file, but you won't lose changes — just come back)
 - `Ctrl+q` exits the editor

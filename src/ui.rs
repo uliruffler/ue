@@ -354,11 +354,18 @@ fn try_reload_undo_from_external_change(
 /// Persist editor state (undo history and session) to disk
 /// This consolidates the common pattern of saving both undo history and editor session
 fn persist_editor_state(state: &mut FileViewerState, file: &str) {
-    state
-        .undo_history
-        .update_cursor(state.top_line, state.absolute_line(), state.cursor_col);
+    // When in rendered mode state.top_line holds the rendered scroll position, not the source
+    // position. Retrieve the appropriate values for each dimension.
+    let (save_top, save_abs, save_col, rendered_scroll) = if state.markdown_rendered {
+        let (rtl, rcl, rcc) = state.saved_source_position.unwrap_or((0, 0, 0));
+        (rtl, rtl + rcl, rcc, state.top_line)
+    } else {
+        (state.top_line, state.absolute_line(), state.cursor_col, state.rendered_top_line)
+    };
+    state.undo_history.update_cursor(save_top, save_abs, save_col);
     state.undo_history.find_history = state.find_history.clone(); // Save find history
     state.undo_history.replace_history = state.replace_history.clone(); // Save replace history
+    state.undo_history.rendered_scroll_top = rendered_scroll; // Save rendered scroll position
     if let Err(e) = state.undo_history.save(file) {
         eprintln!("Warning: failed to save undo history: {}", e);
     }
@@ -708,6 +715,7 @@ fn editing_session(
     state.top_line = undo_history.scroll_top.min(lines.len());
     state.find_history = undo_history.find_history.clone(); // Restore find history
     state.replace_history = undo_history.replace_history.clone(); // Restore replace history
+    state.rendered_top_line = undo_history.rendered_scroll_top; // Restore rendered scroll position
 
     // Check if this is an untitled file (filename starts with "untitled" and doesn't exist on disk)
     let filename_lower = std::path::Path::new(file)
