@@ -1,309 +1,338 @@
-# UE Editor - Instructions for Copilot
+# UE Editor — Copilot Instructions
 
-## Project Overview
-**ue** (Uli's Editor) is a terminal-based text editor written in Rust that aims to provide modern text editing features similar to GUI editors like Notepad++, but runs entirely in the terminal. The project is AI-assisted and heavily generated using GitHub Copilot.
+## What This Is
 
-**Key Philosophy**: Internal tool with no public APIs. Use `pub(crate)` only when needed for cross-module access.
+**ue** is a terminal text editor in Rust (edition 2024). Single binary, no public library API.
+All cross-module visibility uses `pub(crate)`. `lib.rs` exists **only** for integration tests.
 
-**Recent Improvements** (December 2023):
-- Full UTF-8/Unicode support (German umlauts, emoji, multi-byte characters)
-- **New file feature (Ctrl+N)**: Creates untitled documents immediately
-  - Pressing `Ctrl+N` or File menu → New creates an untitled file (untitled, untitled-2, etc.)
-  - User can start typing immediately without choosing filename
-  - When saving (Ctrl+S), dialog prompts for filename and location
-  - Untitled undo files automatically cleaned up after save and moved to new location
-  - Multiple untitled files supported with unique naming (untitled, untitled-2, untitled-3...)
-  - Untitled files stored in `~/.ue/files/` root (not in subdirectories)
-- Non-existent file opening: Can open with non-existent filename (e.g., `ue newfile.txt`)
-  - File tracked immediately with full undo support
-  - Actual file created on disk only when saved (`Ctrl+s`)
-- File closing from file selector: `Ctrl+w` to close/untrack files
-- Session restoration: Remembers last mode (editor/selector) and file when reopening
-- Recent files ordering: Most recently opened file appears at top of file selector
-- Bug fixes: File removal path construction, test infrastructure improvements
+---
 
-## Core Features
+## Crate Layout
 
-### Text Editing
-- **UTF-8 support**: Full Unicode support including multi-byte characters (e.g., German umlauts "ü", emoji)
-  - Cursor position tracked in character indices, not byte offsets
-  - Proper handling of character boundaries for all editing operations
-- **Line numbering** with configurable gutter width
-- **Line wrapping** for long lines
-- **Persistent undo/redo** mechanism with file-based history
-- **Clipboard operations** (copy, cut, paste) via `arboard` crate
-- **Multi-file support** via file selector (no tabs, single file view at a time)
-- **Session persistence**: Restores last file, cursor position, and scroll state
-- **Auto-save** of editor state (cursor, scroll, undo history)
-
-### Navigation & Selection
-- **Cursor navigation**: Arrow keys, `Home`, `End`, `Ctrl+Arrow` (word/paragraph jumps)
-- **Text selection**:
-  - Line-wise: `Shift+Arrow`
-  - Block selection: `Alt+Shift+Arrow` or `Alt+Click-Drag`
-  - Word selection: Double-click
-  - Triple-click: Select entire line
-- **Multi-cursor mode**: `Alt+Up/Down` to add cursors, type on multiple lines simultaneously
-- **Mouse support**: Click positioning, drag selection, scrolling (3 lines per wheel event)
-- **Go-to line**: `Ctrl+g` enters go-to mode for quick line navigation
-
-### Search
-- **Find mode**: `Ctrl+f` enters regex-based search with live highlighting
-- **Case-insensitive** by default (pattern wrapped in `(?i)`)
-- **Scoped search**: If text is selected when entering find mode, search is limited to selection
-- **Find next/previous**: `Ctrl+n` / `Ctrl+p`
-- **Search history**: Up to 100 recent searches persisted
-
-### Visual Features
-- **Syntax highlighting**: Extensible via `.ue-syntax` files (regex-based patterns)
-- **Scrollbar** showing current viewport position
-- **Header**: Displays filename, modification status, line/column indicators
-- **Footer**: Shows cursor position, selection info, and mode (find, go-to, etc.)
-- **Configurable colors**: Header, footer, line numbers via `settings.toml`
-- **Cursor shapes**: bar (default), block, or underline
-
-### File Management
-- **New file (Ctrl+N)**: Creates untitled documents for quick note-taking
-  - Press `Ctrl+N` or select File → New from menu
-  - Immediately opens an empty "untitled" buffer (no filename dialog)
-  - User can start typing right away
-  - Multiple untitled files get unique names: `untitled`, `untitled-2`, `untitled-3`, etc.
-  - Untitled files are tracked with full undo/redo support
-  - **Saving untitled files**:
-    - Press `Ctrl+S` to save
-    - Save-as dialog appears asking for filename and location
-    - Can navigate directory tree or type path (relative or absolute)
-    - After save, untitled undo file (`~/.ue/files/untitled.ue`) is automatically deleted
-    - Undo history moved to new file location
-    - File removed from recent files list under untitled name
-  - **Untitled file storage**:
-    - Undo files stored in `~/.ue/files/` root (not in subdirectories)
-    - Naming pattern: `untitled.ue`, `untitled-2.ue`, etc.
-    - Case-insensitive detection (UNTITLED also treated as untitled)
-- **File selector**: Press `Esc` to toggle between editor and file selector
-  - Shows all tracked files from `~/.ue/files/**`
-  - Sorted by recent usage (via `~/.ue/files.ue`) - most recently opened file at top
-  - Shows unsaved changes indicator
-  - `Enter` opens file, `Esc` returns to editor
-  - `Ctrl+w` closes selected file (removes from tracking)
-- **Opening non-existent files**: Can open with filename that doesn't exist (e.g., `ue newfile.txt`)
-  - File tracked immediately with full undo support
-  - Actual file created on disk only when saved (`Ctrl+s`)
-  - Undo history persisted even for unsaved new files
-- **Session restoration**: Opening `ue` without arguments restores previous state
-  - If quit from editor mode on file A, reopens in editor mode on file A
-  - If quit from file selector, reopens in file selector
-  - Preserves cursor position, scroll state, and mode
-- **Quick exit**: Double-tap `Esc` (within 300ms default) to exit without saving
-  - Changes are not lost; state is persisted to `~/.ue/files/`
-
-### Help System
-- **Built-in help**: Press `F1` to view context-sensitive help
-- **Markdown rendering** via `termimad` crate
-- Help files stored in `defaults/` directory
-
-## Architecture
-
-### Module Structure
 ```
-main.rs          Entry point, CLI argument parsing
-lib.rs           Test-only module exports (NOT a public API - for integration tests only)
-ui.rs            Orchestration layer, main event loop, terminal setup/teardown
-editor_state.rs  FileViewerState struct (cursor, selection, scroll, flags)
-coordinates.rs   Position calculations, line wrapping, visual ↔ logical mapping
-rendering.rs     Screen rendering (header, footer, content, scrollbar)
-editing.rs       Text modification, clipboard, save/load, undo application
-event_handlers.rs Keyboard/mouse event processing, navigation logic
-mouse_handlers.rs Mouse-specific logic (selection, double-click, block mode)
-undo.rs          Undo/redo history management, persistence
-settings.rs      Configuration loading, keybinding parsing
-syntax.rs        Syntax highlighting engine
-file_selector.rs File selector UI and logic (includes remove_tracked_file)
-find.rs          Find mode logic, search history
-help.rs          Help system rendering
-session.rs       Session state persistence (last file, mode)
-recent.rs        Recent files tracking (most recently used ordering)
-double_esc.rs    Double-tap Esc detection
-env.rs           Test environment utilities (temp home directory with locking)
+src/
+  main.rs            CLI entry (clap), path resolution, calls ui::show()
+  lib.rs             Re-exports every module as pub — integration tests ONLY
+  ui.rs              Event loop, terminal setup/teardown, orchestration hub
+  editor_state.rs    FileViewerState<'a> — the single source of truth for all state
+  coordinates.rs     Logical ↔ visual position math; word-wrap geometry; Unicode widths
+  rendering.rs       Writes to stdout via crossterm queue!/execute!
+  editing.rs         Mutates lines[], clipboard, calls undo push, save to disk
+  event_handlers.rs  Translates crossterm KeyEvent → state mutations / editing calls
+  mouse_handlers.rs  Mouse-specific events (click, drag, double-click, wheel)
+  find.rs            Find/replace logic, pattern→regex, history, scoped search
+  undo.rs            Edit enum, UndoHistory serialisation (serde_json to ~/.ue/)
+  settings.rs        Settings + KeyBindings structs, TOML load, key-match helpers
+  syntax.rs          Regex-based highlighting engine; stack for embedded languages
+  menu.rs            MenuBar / MenuAction enum; drop-down menu rendering + input
+  open_dialog.rs     Full-screen directory-tree dialog (Open / Save As)
+  markdown_renderer.rs  MarkdownRenderer trait + PulldownRenderer (default)
+  session.rs         last_session file (editor vs selector mode, last open file)
+  recent.rs          files.ue MRU list (most recently opened first)
+  double_esc.rs      Double-tap Esc within N ms → quit
+  default_syntax.rs  Embeds defaults/syntax/* and deploys to ~/.ue/syntax/ on first run
+  env.rs             UE_TEST_HOME isolation + mutex for serial tests
+  help.rs            Help file deployment with keybinding substitution
 ```
 
-### Key Design Principles
+---
 
-1. **Single Responsibility**: Each module has one clear purpose
-2. **No Public APIs**: Internal tool, not a library
-   - All modules use `pub(crate)` for cross-module access
-   - `lib.rs` exists solely for integration test infrastructure (re-exports with `pub`)
-   - Not intended for external consumption or as a library dependency
-3. **Orchestration via ui.rs**: Main event loop coordinates modules; modules don't call each other directly
-4. **State-Driven Rendering**: `FileViewerState.needs_redraw` flag controls when screen updates
-5. **Testable**: Logic isolated in pure functions where possible; comprehensive test coverage
-6. **Persistent State**: Editor state (cursor, scroll, undo) saved to `~/.ue/files/` directory structure
+## Central Data Flow
 
-### Data Flow Example
 ```
-User input → ui.rs event loop
-           ↓
-event_handlers::handle_key_event() / handle_mouse_event()
-           ↓
-Modify FileViewerState (cursor, selection, etc.)
-Set state.needs_redraw = true
-           ↓
-ui.rs checks needs_redraw
-           ↓
-rendering::render_screen()
-  → Uses coordinates.rs for position calculations
-  → Uses syntax.rs for highlighting
-           ↓
-Screen updated
+crossterm event
+      │
+      ▼
+ui.rs  editing_session()
+      │  owns: lines: Vec<String>   ← the document
+      │  owns: state: FileViewerState<'a>
+      │
+      ├─► event_handlers::handle_key_event(state, lines, …)
+      │         └─► editing::handle_editing_keys / save_file / etc.
+      │         └─► find::handle_find_key / …
+      │         └─► sets state.needs_redraw = true
+      │
+      └─► if state.needs_redraw → rendering::render_screen(state, lines, stdout)
+                └─► coordinates.rs  (wrap geometry, visual positions)
+                └─► syntax::highlight_line()
 ```
 
-## Important Data Structures
+**Rule**: modules do not call each other directly. All coordination flows through `ui.rs`.
+`event_handlers` may call `editing`, `find`, `undo` — but never `rendering` or `ui`.
 
-### FileViewerState (editor_state.rs)
-Central state container:
-- **Position**: `top_line`, `cursor_line`, `cursor_col`
-- **Selection**: `selection_start`, `selection_end`, `selection_mode` (Line/Block)
-- **Multi-cursor**: `multi_cursors` (Vec of positions)
-- **Find**: `find_active`, `find_pattern`, `find_scope`, `last_search_pattern`
-- **Flags**: `needs_redraw`, `modified`, `mouse_dragging`
-- **Undo**: Reference to `UndoHistory`
+---
 
-### UndoHistory (undo.rs)
-Edit tracking:
-- **Edit enum**: InsertChar, DeleteChar, SplitLine, JoinLine, etc.
-- Persisted to `~/.ue/files/{hash}/undo.json`
-- Applied via `apply_undo()` / `apply_redo()` in editing.rs
+## Core Structs
 
-### Settings (settings.rs)
-Loaded from `~/.ue/settings.toml`:
-- **Keybindings**: Customizable key mappings (e.g., `quit = "Esc Esc"`)
-- **Appearance**: Colors, line number width, cursor shape
-- **Behavior**: Tab width, scroll lines, double-tap speed
+### `FileViewerState<'a>` (editor_state.rs)
 
-## Syntax Highlighting
+This is the god-object. Every piece of mutable editor state lives here.
+Lifetime `'a` is bound to `&'a Settings` (settings outlive the state).
 
-Syntax definitions stored in `~/.ue/syntax/*.ue-syntax`:
-- Format: `pattern = "regex" color = "Blue" priority = 10`
-- Deployed from `defaults/syntax/` on first run
-- Priority determines which color wins for overlapping matches
-- Patterns are regex-based (via `regex` crate)
+Key field groups:
 
-## File Persistence
+```rust
+// Viewport & cursor (0-based character indices, not bytes)
+top_line: usize                    // first visible logical line
+top_line_visual_offset: usize      // sub-row offset for wrapped-line scrolling
+cursor_line: usize                 // absolute logical line
+cursor_col: usize                  // character index within the line
+desired_cursor_col: usize          // "sticky" column for ↑/↓ through short lines
 
-All editor state stored in `~/.ue/`:
+// Selection
+selection_start: Option<Position>  // Position = (usize, usize) = (line, col)
+selection_end:   Option<Position>
+selection_anchor: Option<Position> // fixed point when Shift+arrow extends
+block_selection: bool              // true = rectangular / column selection
+
+// Multi-cursor (Alt+↑/↓)
+multi_cursors: Vec<Position>
+cursor_blink_state: bool           // toggled every 500 ms
+
+// Redraw control
+needs_redraw: bool                 // full screen redraw
+needs_footer_redraw: bool          // cheaper: only footer bar
+
+// Find / replace
+find_active: bool
+find_regex_mode: bool              // true=regex, false=wildcard (* ?)
+find_pattern: String
+find_cursor_pos: usize             // char index inside the find input
+find_scope: Option<((usize,usize),(usize,usize))>  // restrict search to selection
+replace_active: bool
+replace_pattern: String
+
+// Pending deferred action from menu → handled by ui.rs on next loop iteration
+pending_menu_action: Option<MenuAction>
+
+// Multi-instance sync
+last_save_time: Option<Instant>    // prevents reload loop after our own save
+
+// Markdown preview
+markdown_rendered: bool
+rendered_lines: Vec<String>        // ANSI-decorated display lines
+```
+
+### `UndoHistory` (undo.rs)
+
+Event-sourced undo. Serialised as JSON to `~/.ue/files/<mirrored-path>.ue`.
+
+```rust
+pub struct UndoHistory {
+    pub edits: Vec<Edit>,   // the log
+    pub current: usize,     // pointer; edits[current..] are "future" (redoable)
+    pub saved_at: usize,    // current value when file was last saved → drives `modified`
+    pub file_content: Option<Vec<String>>,  // snapshot at history-load time
+    pub cursor_line / cursor_col / scroll_top  // restored on open
+    pub find_history: Vec<String>   // persisted per-file search history
+    pub replace_history: Vec<String>
+}
+
+pub enum Edit {
+    InsertChar { line, col, ch },
+    DeleteChar { line, col, ch },
+    SplitLine  { line, col, before, after },   // Enter key
+    MergeLine  { line, first, second },         // Backspace at line start
+    InsertLine { line, content },
+    DeleteLine { line, content },
+    ReplaceLine { line, old_content, new_content },
+    DeleteWord { line, col, text, forward },
+    DragBlock  { before, after, source_start, source_end, dest, copy },
+    CompositeEdit { edits: Vec<Edit>, undo_cursor: CursorState },
+}
+```
+
+**Undo invariant**: `edits[0..current]` are applied; undo decrements `current`; redo increments it.
+`apply_undo()` / `apply_redo()` in `editing.rs` replay edits in reverse/forward order against `lines`.
+
+### `Settings` / `KeyBindings` (settings.rs)
+
+Loaded once from `~/.ue/settings.toml`; all keybinding fields accept human-readable strings
+like `"Ctrl+s"`, `"Alt+Shift+Down"`. Each action exposes a `_matches(code, modifiers)` method:
+
+```rust
+settings.keybindings.save_matches(&code, &modifiers)   // → bool
+```
+
+When adding a new binding: add a field + `fn default_*() -> String` + `#[serde(default="...")]`.
+
+---
+
+## Coordinate System
+
+**Logical** position: `(line: usize, col: usize)` where `col` is a **character index** (not bytes, not visual columns).
+
+**Visual** position: terminal row/column after word-wrap expansion. A single logical line can span multiple visual rows.
+
+Key functions in `coordinates.rs`:
+
+| Function | Purpose |
+|---|---|
+| `visual_width(s, tab_width)` | Terminal columns a string occupies |
+| `visual_width_up_to(s, char_idx, tab_width)` | Columns up to char N |
+| `visual_col_to_char_index(line, vcol, tab_width)` | Visual col → char index |
+| `calculate_word_wrap_points(line, width, tab_width)` | Break-point char indices |
+| `calculate_wrapped_lines_for_line(line, width, tab_width)` | Count of visual rows |
+| `calculate_cursor_visual_line(state, lines)` | Cursor's visual row in viewport |
+
+Unicode rule: **always use `s.chars().count()` for length; byte indexing requires `char_index_to_byte_index()`** (defined in `editing.rs`).
+
+---
+
+## Rendering Pipeline
+
+`rendering::render_screen(state, lines, stdout)` is the only place that writes to the terminal.
+It uses `crossterm::queue!` to batch output, then flushes once.
+
+Rendering layers (top to bottom):
+1. **Menu bar** (if `state.menu_bar.is_any_open()`)
+2. **Header bar** — filename (shortened via `shorten_path_for_display`), modified `*`, line/col
+3. **Line content** — visible lines only (`top_line` … viewport height)
+   - Line numbers drawn from gutter
+   - Each character coloured by `syntax::highlight_line()` (byte-range → `Color`)
+   - Word-wrap produces multiple visual rows per logical line
+   - Selection and find-match highlights applied on top
+4. **Vertical scrollbar** (right edge)
+5. **Horizontal scrollbar** (if line wider than viewport)
+6. **Footer** — cursor pos, selection info, mode prompt (find, goto, replace)
+
+`needs_footer_redraw` skips steps 1–5; useful for cursor-only movement.
+
+---
+
+## Syntax Highlighting Engine (syntax.rs)
+
+Global (thread-local) **syntax stack**: allows embedded languages (e.g., code fences in Markdown push a Rust highlighter, then pop back).
+
+```
+syntax::set_current_file(path)  // selects top-level syntax from file extension
+syntax::push_syntax(ext)        // push embedded language
+syntax::pop_syntax()            // restore previous
+syntax::highlight_line(line)    // → Vec<(start_byte, end_byte, Color)>
+```
+
+`.ue-syntax` file format (in `~/.ue/syntax/`):
+```
+pattern = "\\bfn\\b"   color = "Yellow"   priority = 10
+```
+
+Priority resolves overlapping matches (higher wins). `switch_to`/`switch_back` fields enable the embedding stack.
+
+---
+
+## Find / Replace (find.rs)
+
+- Pattern is either **regex** (`find_regex_mode = true`) or **wildcard** (`* = .*`, `? = .`).
+- Always wrapped in `(?i)` for case-insensitive matching.
+- `find_scope`: if set, only `lines[scope.start..=scope.end]` are searched.
+- Multi-line search: user types `\n` literal → expanded to real `\n`, lines joined.
+- `pattern_to_regex(pattern, regex_mode) → Result<Regex>` is the single entry-point.
+- Wrap-warning: first time the search wraps around, a "wrapped" message is shown; the second press executes.
+
+---
+
+## File Persistence Layout
+
 ```
 ~/.ue/
-  settings.toml       User configuration
-  files.ue            Recent files list (most recent first, one per line)
-  last_session        Last active file/mode
-  syntax/             Syntax definitions
-  files/              Per-file state (mirrors absolute path structure)
-    path/to/          Directory structure matching file location
-      file.txt.ue     Combined state file (undo history, position, content)
+  settings.toml                   user config (created from defaults on first run)
+  files.ue                        MRU list — one absolute path per line, most recent first
+  last_session                    JSON: {mode: "editor"|"selector", file: "/path"}
+  syntax/                         deployed .ue-syntax definitions
+  files/                          undo / state files — mirrors absolute paths
+    home/user/project/main.rs.ue  JSON UndoHistory for /home/user/project/main.rs
+    untitled.ue                   untitled buffer (no subdirectory)
+    untitled-2.ue                 second untitled buffer
 ```
 
-Note: The `.ue` files in `files/` directory mirror the absolute path of the original file. For example:
-- `/home/user/doc.txt` → `~/.ue/files/home/user/doc.txt.ue`
-- Hidden files like `.bashrc` → `~/.ue/files/home/user/.bashrc.ue`
+`UndoHistory::history_path_for(filename) → PathBuf` performs the mapping.
 
-## Testing
+---
 
-- Run tests with `cargo test`
-- **Unit tests**: 324 tests per binary (lib + main), use `#[cfg(test)]` modules within each file
-- **Integration tests**: 7 tests in `tests/integration_tests.rs`, test full workflows
-  - Use `#[serial]` attribute from `serial_test` crate to prevent race conditions
-  - Tests run sequentially to avoid environment variable conflicts
-- Use `UE_TEST_HOME` environment variable to isolate test state
-- Tests should not produce warnings (zero warnings policy)
-- Add tests for new features
-- Modules with significant test coverage: undo.rs, coordinates.rs, settings.rs, file_selector.rs
+## Multi-Instance Synchronisation (ui.rs)
+
+Two constants drive the undo-file change detection:
+
+```rust
+const UNDO_FILE_CHECK_INTERVAL_MS: u64 = 150;  // poll interval
+const SAVE_GRACE_PERIOD_MS:        u64 = 200;  // ignore changes right after our own save
+```
+
+If another `ue` instance modifies the undo file, the current instance detects the mtime change and prompts the user to reload or keep their version (`show_undo_conflict_confirmation`).
+
+---
+
+## Markdown Preview (markdown_renderer.rs)
+
+Trait-based, swappable at runtime:
+
+```rust
+pub(crate) trait MarkdownRenderer: Send + Sync {
+    fn render(&self, markdown: &str, term_width: usize) -> Vec<String>;
+}
+```
+
+Default: `PulldownRenderer` (pulldown-cmark). Legacy: `TermimadRenderer`.
+When `state.markdown_rendered = true`, `rendering.rs` displays `state.rendered_lines` instead of `lines`.
+Editing is always against the raw `lines`; the rendered view is read-only.
+
+---
+
+## Menu System (menu.rs)
+
+`MenuBar` holds `Vec<Menu>`. Each `Menu` has `Vec<MenuItem>`.
+
+```rust
+enum MenuItem {
+    Action    { label, action: MenuAction },
+    Checkable { label, action, checked, enabled },
+    Separator,
+}
+```
+
+`handle_menu_key(state.menu_bar, key_event) → (Option<MenuAction>, needs_redraw)`.
+
+Actions that require `ui.rs` context (e.g., open new file) are not executed inline; instead they
+set `state.pending_menu_action = Some(action)` and `ui.rs` handles them on the next loop pass.
+
+---
+
+## Open / Save-As Dialog (open_dialog.rs)
+
+Full-screen overlay. Two focus modes: `Tree` (directory navigation) and `Input` (manual path entry).
+Returns `OpenDialogResult::Selected(PathBuf)` or `Cancelled`.
+
+Used for: **Ctrl+O** (open), **Ctrl+S on untitled file** (save-as).
+
+---
+
+## Programming Conventions
+
+| Convention | Rule |
+|---|---|
+| Visibility | `pub(crate)` for everything. `pub` only in `lib.rs` for test re-exports. |
+| Unicode | All `col` fields are **char indices**. Use `.chars().count()`, never `.len()`. |
+| Warnings | `#![deny(warnings)]` in `main.rs`. Zero warnings required. |
+| Error handling | `Result<T, E>` + `?`. No `unwrap()` in production paths. |
+| Redraw | Always set `state.needs_redraw = true` or `state.needs_footer_redraw = true` after state changes. |
+| New edit type | Add `Edit` variant → implement in `apply_undo`/`apply_redo` → push `CompositeEdit` if grouping needed. |
+| New keybinding | field in `KeyBindings` + `default_*()` fn + `#[serde(default)]` + `_matches()` method + update `defaults/settings.toml`. |
+| Tests | Unit tests in `#[cfg(test)]` blocks inside each file. Integration tests in `tests/` use `#[serial]` and `env::set_temp_home()`. |
+
+---
 
 ## Dependencies
 
-- **crossterm**: Terminal manipulation, events, raw mode
-- **clap**: CLI argument parsing
-- **serde/toml**: Configuration serialization
-- **arboard**: Cross-platform clipboard
-- **regex**: Pattern matching for search & syntax highlighting
-- **termimad**: Markdown rendering for help
-- **serde_json**: Undo history persistence
-- **tempfile**: Test utilities (dev-dependency)
-- **serial_test**: Sequential test execution for integration tests (dev-dependency)
-
-## Common Workflows
-
-### Adding a New Keybinding
-1. Add field to `KeyBindings` struct in `settings.rs`
-2. Add default function (e.g., `fn default_my_action() -> String`)
-3. Add `#[serde(default = "default_my_action")]` attribute
-4. Parse binding in `event_handlers.rs` using `settings.keybindings.my_action_matches()`
-5. Update `defaults/settings.toml`
-6. Update help files if user-facing
-
-### Adding a New Syntax Definition
-1. Create `.ue-syntax` file in `defaults/syntax/`
-2. Define patterns with regex, color, priority
-3. Add to `default_syntax.rs` deployment list
-4. File automatically deployed on first run
-
-### Adding a New Edit Type
-1. Add variant to `Edit` enum in `undo.rs`
-2. Implement undo logic in `apply_undo()` / `apply_redo()` (editing.rs)
-3. Create edit record when performing action
-4. Call `state.undo_history.push()` to add to history
-
-## Visual Modes
-
-### Block Selection Mode
-- Rectangular text selection across multiple lines
-- Activated via `Alt+Shift+Arrow` or `Alt+Click-Drag`
-- Zero-width block: Acts as multi-line cursor (insert on all lines)
-- Copy/paste/delete operations work on rectangular region
-- Lines shorter than selection are partially selected
-
-### Multi-Cursor Mode
-- Create multiple independent cursors with `Alt+Up/Down`
-- Visual feedback: Blinking block cursor at each position (500ms interval)
-- Typing inserts at all cursor positions simultaneously
-- Exit with `Esc` or any navigation key
-
-### Find Mode
-- Entered with `Ctrl+f`
-- Live highlighting as you type
-- If text selected: Search limited to selection (scoped search)
-- `Enter`: Jump to next match and exit find mode
-- `Esc`: Cancel and restore previous search highlights
-
-## Error Handling
-
-- Prefer `Result` and `?` operator
-- Avoid `unwrap()` in production code (tests OK)
-- Graceful degradation: Missing config files use defaults
-- File I/O errors logged but don't crash editor
-
-## Code Style
-
-- Rust 2024 edition
-- Run `cargo fmt` before committing
-- Build with zero warnings: `#![deny(warnings)]` in main.rs
-- Use descriptive variable names
-- Keep functions focused and testable
-- Comments explain "why", not "what"
-
-## Performance Considerations
-
-- Line wrapping calculated on-demand, not pre-computed for entire file
-- Only visible lines rendered (viewport-based)
-- Syntax highlighting applied per visible line
-- Undo history capped at reasonable size (no explicit limit currently)
-- Release build uses LTO and single codegen unit for optimization
-
-## Future Enhancement Areas
-
-- LSP integration for code intelligence
-- Multiple viewport splits
-- Macros/recording
-- Plugin system
-- Remote file editing
-- Git integration
-- More syntax definitions
+| Crate | Used for |
+|---|---|
+| `crossterm` | Raw mode, alternate screen, mouse capture, ANSI colour output |
+| `clap` (derive) | CLI argument parsing |
+| `serde` / `toml` | Settings de/serialisation |
+| `serde_json` | UndoHistory persistence |
+| `arboard` | Cross-platform clipboard (lazy-initialised via `OnceLock<Mutex<…>>`) |
+| `regex` | Find patterns and syntax highlighting |
+| `unicode-width` | Terminal column width of Unicode chars (`UnicodeWidthChar`) |
+| `pulldown-cmark` | Markdown → ANSI rendering |
+| `termimad` | Legacy Markdown renderer (still available, not default) |
+| `tempfile` | Test temp directories (dev) |
+| `serial_test` | Sequential integration tests (dev) |
