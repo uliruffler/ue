@@ -609,7 +609,8 @@ pub(crate) fn handle_key_event(
     }
 
     // Handle go to line (configurable keybinding, default Ctrl+G)
-    if settings.keybindings.goto_line_matches(&code, &modifiers) {
+    // Disabled in rendered (preview) mode — there are no meaningful source line numbers.
+    if !state.markdown_rendered && settings.keybindings.goto_line_matches(&code, &modifiers) {
         state.goto_line_active = true;
         // Pre-fill with current line number (1-indexed)
         state.goto_line_input = (state.absolute_line() + 1).to_string();

@@ -644,9 +644,14 @@ pub(crate) fn render_footer(
     let line_num = state.absolute_line() + 1;
     let col_num = state.cursor_col + 1;
 
+    // In rendered (preview) mode the cursor position belongs to the rendered buffer
+    // and is not meaningful to the user as a source line/col — omit it.
     // When a search is active, pad line/col numbers to their maximum possible widths so
     // that the hit display never shifts position as the cursor moves through the document.
-    let position_info = if state.last_search_pattern.is_some() {
+    let position_info = if state.markdown_rendered {
+        // No position indicator in preview mode
+        " ".to_string()
+    } else if state.last_search_pattern.is_some() {
         // Max line-number width: digits needed for the last line
         let total_lines = lines.len().max(1);
         let max_line_w = ((total_lines as f64).log10().floor() as usize) + 1;
@@ -683,6 +688,7 @@ pub(crate) fn render_footer(
             format!("{:>width_l$}:{:<width_c$}", line_num, col_num, width_l = max_line_w, width_c = max_col_w)
         };
         format!("{} ", pos_str)
+    // close the outer if/else for markdown_rendered
     };
 
     let total_width = state.term_width as usize;

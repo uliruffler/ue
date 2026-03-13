@@ -81,6 +81,81 @@ const RULE_FG: &str = "\x1b[2;37m"; // dim white
 const BULLET_FG: &str = "\x1b[1;36m"; // bold cyan
 const NUM_FG: &str = "\x1b[1;33m"; // bold yellow
 
+// ─── Syntax-highlighting helpers for code blocks ────────────────────────────
+
+/// Convert a `crossterm::style::Color` to an ANSI foreground escape sequence.
+fn color_to_ansi_fg(color: crossterm::style::Color) -> &'static str {
+    use crossterm::style::Color;
+    match color {
+        Color::Black       => "\x1b[30m",
+        Color::DarkGrey    => "\x1b[90m",
+        Color::Red         => "\x1b[91m",
+        Color::DarkRed     => "\x1b[31m",
+        Color::Green       => "\x1b[92m",
+        Color::DarkGreen   => "\x1b[32m",
+        Color::Yellow      => "\x1b[93m",
+        Color::DarkYellow  => "\x1b[33m",
+        Color::Blue        => "\x1b[94m",
+        Color::DarkBlue    => "\x1b[34m",
+        Color::Magenta     => "\x1b[95m",
+        Color::DarkMagenta => "\x1b[35m",
+        Color::Cyan        => "\x1b[96m",
+        Color::DarkCyan    => "\x1b[36m",
+        Color::White       => "\x1b[97m",
+        Color::Grey        => "\x1b[37m",
+        // For Rgb/AnsiValue we cannot return &'static str, so fall back to default
+        // code foreground.  Dynamic colours are handled via owned strings in
+        // `highlight_code_line` which calls this and then falls back.
+        _ => CODE_FG,
+    }
+}
+
+/// Convert a `crossterm::style::Color` to an owned ANSI foreground escape string.
+/// Handles all variants including `Rgb` and `AnsiValue`.
+fn color_to_ansi_fg_owned(color: crossterm::style::Color) -> String {
+    use crossterm::style::Color;
+    match color {
+        Color::Rgb { r, g, b } => format!("\x1b[38;2;{};{};{}m", r, g, b),
+        Color::AnsiValue(n)    => format!("\x1b[38;5;{}m", n),
+        other => color_to_ansi_fg(other).to_string(),
+    }
+}
+
+/// Apply syntax highlighting to a single code line.
+///
+/// `crate::syntax::highlight_line` must have the correct language on its stack
+/// already (callers are responsible for push/pop around the whole code block).
+/// Returns the line with ANSI colour escape sequences inserted around each
+/// highlighted segment, using `CODE_FG` as the default (unhighlighted) colour.
+fn highlight_code_line(code_line: &str) -> String {
+    // Unhighlighted spans use plain white — the same as normal text in edit mode.
+    const DEFAULT_FG: &str = "\x1b[97m"; // bright white
+
+    let (segments, _switch) = crate::syntax::highlight_line(code_line);
+    if segments.is_empty() {
+        return format!("{}{}", DEFAULT_FG, code_line);
+    }
+    let mut result = String::new();
+    let mut pos = 0usize;
+    for (start, end, color) in &segments {
+        let start = *start;
+        let end = (*end).min(code_line.len());
+        if start > pos {
+            // Unhighlighted gap — plain white
+            result.push_str(DEFAULT_FG);
+            result.push_str(&code_line[pos..start]);
+        }
+        result.push_str(&color_to_ansi_fg_owned(*color));
+        result.push_str(&code_line[start..end]);
+        pos = end;
+    }
+    if pos < code_line.len() {
+        result.push_str(DEFAULT_FG);
+        result.push_str(&code_line[pos..]);
+    }
+    result
+}
+
 /// Core pulldown-cmark rendering logic.
 fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
     use pulldown_cmark::{Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -98,6 +173,8 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
     let mut in_code_block = false;
     #[allow(unused_assignments)]
     let mut code_block_lang = String::new();
+    // Whether we pushed a syntax onto crate::syntax's stack for this code block
+    let mut code_block_has_syntax = false;
     let mut in_blockquote = false;
     let mut list_stack: Vec<Option<u64>> = Vec::new();
     let mut ordered_counters: Vec<u64> = Vec::new();
@@ -234,6 +311,12 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
                     CodeBlockKind::Fenced(lang) => lang.to_string(),
                     CodeBlockKind::Indented => String::new(),
                 };
+                // Push the language onto the syntax highlighter stack so that
+                // highlight_code_line() uses the correct rules inside this block.
+                if !code_block_lang.is_empty() {
+                    crate::syntax::push_syntax(&code_block_lang);
+                    code_block_has_syntax = true;
+                }
                 if !current_line.is_empty() {
                     push_line!();
                 }
@@ -253,6 +336,11 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
             }
             Event::End(TagEnd::CodeBlock) => {
                 in_code_block = false;
+                // Restore the syntax stack if we pushed a language.
+                if code_block_has_syntax {
+                    crate::syntax::pop_syntax();
+                    code_block_has_syntax = false;
+                }
                 if !current_line.is_empty() {
                     push_line!();
                 }
@@ -414,8 +502,14 @@ fn render_pulldown(markdown: &str, term_width: usize) -> Vec<String> {
                         if !current_line.is_empty() {
                             push_line!();
                         }
+                        // Apply per-language syntax highlighting when a language was given.
+                        let highlighted_line = if code_block_has_syntax {
+                            highlight_code_line(code_line)
+                        } else {
+                            code_line.to_string()
+                        };
                         // Hard-wrap long lines at inner_w
-                        let mut remaining = code_line.to_string();
+                        let mut remaining = highlighted_line;
                         loop {
                             let (chunk, rest) = split_at_visual_width(&remaining, inner_w);
                             let chunk_vis = visual_len(&chunk);

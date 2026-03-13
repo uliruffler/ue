@@ -301,11 +301,14 @@ impl SyntaxHighlighter {
             if is_embedded && switch.is_none()
                 && let Some(ref base) = base_ext
                     && let Some(base_def) = self.cache.get_or_load(base) {
-                        let (_base_highlights, base_switch) = base_def.highlight_line(line);
-                        // Only use base_switch if it's a switch_back action
+                        let (base_highlights, base_switch) = base_def.highlight_line(line);
+                        // Only use base_switch if it's a switch_back action.
+                        // Use the base syntax's highlights so the closing fence
+                        // (e.g. ```) is coloured by the markdown rules, not the
+                        // embedded language (which wouldn't match it at all).
                         if let Some((ref action, ref ext)) = base_switch
                             && matches!(action, SwitchAction::SwitchBack) {
-                                return (highlights, Some((action.clone(), ext.clone())));
+                                return (base_highlights, Some((action.clone(), ext.clone())));
                             }
                     }
 
