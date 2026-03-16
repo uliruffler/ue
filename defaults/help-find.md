@@ -176,5 +176,5 @@ To perform case-sensitive search, use regex flag:
 
 ---
 
-**Note:** Keybindings can be customized in `~/.ue/settings.toml`
+**Note:** Keybindings can be customized in `~/.config/ue/settings.toml`
 

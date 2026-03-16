@@ -1,5 +1,4 @@
 use std::fs;
-use std::path::PathBuf;
 
 /// Embedded default syntax files
 const SYNTAX_RS: &str = include_str!("../defaults/syntax/rs.ue-syntax");
@@ -50,12 +49,11 @@ fn get_default_syntax(extension: &str) -> Option<&'static str> {
     }
 }
 
-/// Deploy all default syntax files to ~/.ue/syntax/, skipping existing files.
+/// Deploy all default syntax files to ~/.config/ue/syntax/, skipping existing files.
 /// Called once at startup; existing user-customised files are left untouched.
 #[allow(dead_code)]
 pub fn deploy_default_syntax_files() -> Result<(), Box<dyn std::error::Error>> {
-    let home = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))?;
-    let syntax_dir = PathBuf::from(home).join(".ue").join("syntax");
+    let syntax_dir = crate::env::resolve_config_dir()?.join("syntax");
 
     // Create directory if it doesn't exist
     fs::create_dir_all(&syntax_dir)?;
@@ -141,12 +139,11 @@ fn create_symlink_if_missing(
 }
 
 /// Get syntax file content for a given extension.
-/// First checks ~/.ue/syntax/, then falls back to embedded defaults.
+/// First checks `~/.config/ue/syntax/`, then falls back to embedded defaults.
 pub(crate) fn get_syntax_content(extension: &str) -> Option<String> {
     // Try user file first
-    if let Ok(home) = std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-        let user_path = PathBuf::from(home)
-            .join(".ue")
+    if let Ok(config_dir) = crate::env::resolve_config_dir() {
+        let user_path = config_dir
             .join("syntax")
             .join(format!("{}.ue-syntax", extension));
 

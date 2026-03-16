@@ -87,7 +87,7 @@ ue --print-keys
 ```
 
 This displays all keyboard inputs with their modifiers in real-time. Press `Esc` twice quickly to exit. This is especially useful when:
-- Configuring custom keybindings in `~/.ue/settings.toml`
+- Configuring custom keybindings in `~/.config/ue/settings.toml`
 - Testing how your terminal handles special key combinations
 - Debugging why a keybinding isn't working as expected
 

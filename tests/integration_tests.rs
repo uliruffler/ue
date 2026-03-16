@@ -7,12 +7,13 @@ use serial_test::serial;
 /// Note: Integration tests run sequentially by default, so no lock needed
 fn setup_test_env() -> (TempDir, PathBuf) {
     let tmp = TempDir::new().unwrap();
-    let ue_dir = tmp.path().join(".ue");
-    fs::create_dir_all(&ue_dir).unwrap();
+    let data_dir = tmp.path().join("data");
+    fs::create_dir_all(&data_dir).unwrap();
+    fs::create_dir_all(tmp.path().join("config")).unwrap();
     unsafe {
         std::env::set_var("UE_TEST_HOME", tmp.path());
     }
-    (tmp, ue_dir)
+    (tmp, data_dir)
 }
 /// Test: Editor should handle German umlauts (UTF-8 multi-byte characters) without crashing
 /// Issue: Typing "Für" should work - the cursor position must be tracked in character indices,
@@ -158,11 +159,11 @@ fn test_delete_file_history_cleans_empty_dirs() {
     fs::create_dir_all(file.parent().unwrap()).unwrap();
     fs::write(&file, "hello").unwrap();
 
-    // Save undo history - this creates the directory tree under ~/.ue/files/
+    // Save undo history - this creates the directory tree under ~/.local/share/ue/files/
     let history = ue::undo::UndoHistory::new();
     history.save(&file.to_string_lossy()).unwrap();
 
-    // Build the expected directory: ~/.ue/files/<tmp>/subdir/nested/
+    // Build the expected directory: ~/.local/share/ue/files/<tmp>/subdir/nested/
     let files_dir = ue_dir.join("files");
     let mut ue_leaf_dir = files_dir.clone();
     if let Some(parent) = file.parent() {
@@ -181,11 +182,11 @@ fn test_delete_file_history_cleans_empty_dirs() {
     let ue_file = ue_leaf_dir.join("doc.txt.ue");
     assert!(!ue_file.exists(), ".ue history file should be removed");
 
-    // All empty ancestor directories up to ~/.ue/files/ should be gone
+    // All empty ancestor directories up to ~/.local/share/ue/files/ should be gone
     assert!(!ue_leaf_dir.exists(), "empty leaf directory should be removed");
 
     // The files root itself must still exist
-    assert!(files_dir.exists(), "~/.ue/files root must not be removed");
+    assert!(files_dir.exists(), "data/files root must not be removed");
 }
 
 /// Test: Closing a file from file selector using Ctrl+W
@@ -316,10 +317,10 @@ fn test_short_line_scroll_reset() {
 #[test]
 #[serial]
 fn test_horizontal_auto_scroll_speed_setting() {
-    let (_tmp, ue_dir) = setup_test_env();
+    let (_tmp, _ue_dir) = setup_test_env();
     
     // Create custom settings with different scroll speed
-    let settings_path = ue_dir.join("settings.toml");
+    let settings_path = _tmp.path().join("config").join("settings.toml");
     // Use simple concatenation to avoid raw string issues
     let mut settings_content = String::new();
     settings_content.push_str("tab_width = 4\n");

@@ -295,12 +295,10 @@ impl UndoHistory {
     }
 
     fn history_path(file_path: &str) -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let home = crate::env::resolve_home()?;
+        let data_dir = crate::env::resolve_data_dir()?;
 
-        let home_path = PathBuf::from(&home);
-
-        // Check if this is an untitled file
-        // Untitled files are stored directly in ~/.ue/files/ without subdirectories
+        // Check if this is an untitled file.
+        // Untitled files are stored directly in the data files root without subdirectories.
         // They are identified by:
         // 1. Filename starts with "untitled" (case-insensitive)
         // 2. It's not an absolute path (no '/' on Unix or drive letter on Windows)
@@ -314,9 +312,9 @@ impl UndoHistory {
         let is_untitled = filename.to_lowercase().starts_with("untitled") && is_simple_filename;
 
         if is_untitled {
-            // Store untitled files directly in ~/.ue/files/ (no subdirectories)
+            // Store untitled files in the data files root (no subdirectories)
             let ue_filename = format!("{}.ue", filename);
-            return Ok(home_path.join(".ue").join("files").join(ue_filename));
+            return Ok(data_dir.join("files").join(ue_filename));
         }
 
         // Convert to absolute path if relative
@@ -345,13 +343,12 @@ impl UndoHistory {
             .ok_or("Invalid filename")?;
 
         // Get directory path
-        let dir_path = home_path
-            .join(".ue")
+        let dir_path = data_dir
             .join("files")
             .join(normalized_path)
             .parent()
             .map(|p| p.to_path_buf())
-            .unwrap_or_else(|| PathBuf::from(&home).join(".ue").join("files"));
+            .unwrap_or_else(|| data_dir.join("files"));
 
         // Create the FILENAME.ue format (removed leading dot)
         let ue_filename = format!("{}.ue", filename);
@@ -585,10 +582,10 @@ mod tests {
         let result = UndoHistory::history_path("/home/user/test.txt");
         assert!(result.is_ok());
         let path = result.unwrap();
-        // Should be .ue/files/home/user/test.txt.ue (no leading dot before filename)
+        // Should be data/files/home/user/test.txt.ue (no leading dot before filename)
         assert!(
             path.to_string_lossy()
-                .contains(".ue/files/home/user/test.txt.ue")
+                .contains("data/files/home/user/test.txt.ue")
         );
     }
 
@@ -599,7 +596,7 @@ mod tests {
         assert!(result.is_ok());
         let path = result.unwrap();
         let path_str = path.to_string_lossy();
-        assert!(path_str.contains(".ue/files"));
+        assert!(path_str.contains("data/files"));
         assert!(path_str.ends_with("documents/test.txt.ue"));
     }
 
@@ -673,7 +670,7 @@ mod tests {
         let rel = "./docs/readme.md";
         let path = UndoHistory::history_path(rel).unwrap();
         let s = path.to_string_lossy();
-        assert!(s.contains(".ue/files"));
+        assert!(s.contains("data/files"));
         assert!(s.ends_with("docs/readme.md.ue"));
     }
 

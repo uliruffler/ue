@@ -23,7 +23,7 @@ fn test_untitled_file_is_created_on_disk() {
     undo_history.save("untitled").unwrap();
     
     // Verify the undo file was created in the correct location
-    let expected_path = home_dir.join(".ue/files/untitled.ue");
+    let expected_path = home_dir.join("data/files/untitled.ue");
     assert!(expected_path.exists(), "Untitled undo file should be created at {}", expected_path.display());
 }
 
@@ -38,7 +38,7 @@ fn test_untitled_cleanup_after_save() {
     undo_history.push(ue::undo::Edit::InsertChar { line: 0, col: 0, ch: 'a' });
     undo_history.save("untitled").unwrap();
     
-    let untitled_path = home_dir.join(".ue/files/untitled.ue");
+    let untitled_path = home_dir.join("data/files/untitled.ue");
     assert!(untitled_path.exists(), "Untitled undo file should exist before save");
     
     // Simulate saving untitled to a real filename
@@ -55,7 +55,7 @@ fn test_untitled_cleanup_after_save() {
     undo_history.save(real_file.to_str().unwrap()).unwrap();
     
     // Verify the real file's undo history exists
-    let real_undo_path = home_dir.join(format!(".ue/files/{}/myfile.txt.ue", home_dir.to_str().unwrap().trim_start_matches('/')));
+    let real_undo_path = home_dir.join(format!("data/files/{}/myfile.txt.ue", home_dir.to_str().unwrap().trim_start_matches('/')));
     assert!(real_undo_path.exists(), "Real file undo history should exist at {}", real_undo_path.display());
 }
 
@@ -76,17 +76,17 @@ fn test_multiple_untitled_files() {
     undo3.save("untitled-3").unwrap();
     
     // Verify all were created
-    assert!(home_dir.join(".ue/files/untitled.ue").exists());
-    assert!(home_dir.join(".ue/files/untitled-2.ue").exists());
-    assert!(home_dir.join(".ue/files/untitled-3.ue").exists());
+    assert!(home_dir.join("data/files/untitled.ue").exists());
+    assert!(home_dir.join("data/files/untitled-2.ue").exists());
+    assert!(home_dir.join("data/files/untitled-3.ue").exists());
     
     // Cleanup one of them
     ue::editing::delete_file_history("untitled-2").unwrap();
     
     // Verify only the specified one was deleted
-    assert!(home_dir.join(".ue/files/untitled.ue").exists(), "untitled should still exist");
-    assert!(!home_dir.join(".ue/files/untitled-2.ue").exists(), "untitled-2 should be deleted");
-    assert!(home_dir.join(".ue/files/untitled-3.ue").exists(), "untitled-3 should still exist");
+    assert!(home_dir.join("data/files/untitled.ue").exists(), "untitled should still exist");
+    assert!(!home_dir.join("data/files/untitled-2.ue").exists(), "untitled-2 should be deleted");
+    assert!(home_dir.join("data/files/untitled-3.ue").exists(), "untitled-3 should still exist");
 }
 
 #[test]
@@ -99,12 +99,12 @@ fn test_untitled_not_saved_to_subdirectory() {
     let undo = ue::undo::UndoHistory::new();
     undo.save("untitled").unwrap();
     
-    // Verify it's in the root of .ue/files/, not in a subdirectory
-    let expected_path = home_dir.join(".ue/files/untitled.ue");
-    assert!(expected_path.exists(), "Untitled should be in .ue/files/ root");
+    // Verify it's in the root of data/files/, not in a subdirectory
+    let expected_path = home_dir.join("data/files/untitled.ue");
+    assert!(expected_path.exists(), "Untitled should be in data/files/ root");
     
-    // Make sure it's not in a subdirectory like .ue/files/untitled/untitled.ue
-    let wrong_path = home_dir.join(".ue/files/untitled/untitled.ue");
+    // Make sure it's not in a subdirectory like data/files/untitled/untitled.ue
+    let wrong_path = home_dir.join("data/files/untitled/untitled.ue");
     assert!(!wrong_path.exists(), "Untitled should NOT be in a subdirectory");
 }
 
@@ -118,8 +118,8 @@ fn test_untitled_case_insensitive() {
     let undo = ue::undo::UndoHistory::new();
     undo.save("UNTITLED").unwrap();
     
-    let expected_path = home_dir.join(".ue/files/UNTITLED.ue");
-    assert!(expected_path.exists(), "UNTITLED (uppercase) should be created in .ue/files/ root");
+    let expected_path = home_dir.join("data/files/UNTITLED.ue");
+    assert!(expected_path.exists(), "UNTITLED (uppercase) should be created in data/files/ root");
 }
 
 #[test]
@@ -136,13 +136,13 @@ fn test_untitled_with_path_is_not_untitled() {
     let undo = ue::undo::UndoHistory::new();
     undo.save(test_file.to_str().unwrap()).unwrap();
     
-    // Should be in a subdirectory structure, not in .ue/files/ root
-    let untitled_root_path = home_dir.join(".ue/files/document.txt.ue");
+    // Should be in a subdirectory structure, not in data/files/ root
+    let untitled_root_path = home_dir.join("data/files/document.txt.ue");
     assert!(!untitled_root_path.exists(), "Path with 'untitled' dir should not be in root");
     
     // Should be in the proper subdirectory
     let proper_path_str = test_file.to_str().unwrap().trim_start_matches('/');
-    let proper_path = home_dir.join(format!(".ue/files/{}", proper_path_str))
+    let proper_path = home_dir.join(format!("data/files/{}", proper_path_str))
         .parent().unwrap()
         .join("document.txt.ue");
     assert!(proper_path.exists(), "Should be in proper subdirectory structure");

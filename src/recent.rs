@@ -4,9 +4,9 @@ use std::{fs, io};
 const MAX_RECENT: usize = 50;
 
 fn recent_list_path() -> io::Result<PathBuf> {
-    let home = crate::env::resolve_home()
+    let data_dir = crate::env::resolve_data_dir()
         .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
-    Ok(PathBuf::from(home).join(".ue").join("files.ue"))
+    Ok(data_dir.join("files.ue"))
 }
 
 pub fn get_recent_files() -> io::Result<Vec<PathBuf>> {

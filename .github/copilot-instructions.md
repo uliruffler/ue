@@ -21,7 +21,7 @@ src/
   event_handlers.rs  Translates crossterm KeyEvent → state mutations / editing calls
   mouse_handlers.rs  Mouse-specific events (click, drag, double-click, wheel)
   find.rs            Find/replace logic, pattern→regex, history, scoped search
-  undo.rs            Edit enum, UndoHistory serialisation (serde_json to ~/.ue/)
+  undo.rs            Edit enum, UndoHistory serialisation (serde_json to ~/.local/share/ue/)
   settings.rs        Settings + KeyBindings structs, TOML load, key-match helpers
   syntax.rs          Regex-based highlighting engine; stack for embedded languages
   menu.rs            MenuBar / MenuAction enum; drop-down menu rendering + input
@@ -30,7 +30,7 @@ src/
   session.rs         last_session file (editor vs selector mode, last open file)
   recent.rs          files.ue MRU list (most recently opened first)
   double_esc.rs      Double-tap Esc within N ms → quit
-  default_syntax.rs  Embeds defaults/syntax/* and deploys to ~/.ue/syntax/ on first run
+  default_syntax.rs  Embeds defaults/syntax/* and deploys to ~/.config/ue/syntax/ on first run
   env.rs             UE_TEST_HOME isolation + mutex for serial tests
   help.rs            Help file deployment with keybinding substitution
 ```
@@ -115,7 +115,7 @@ rendered_lines: Vec<String>        // ANSI-decorated display lines
 
 ### `UndoHistory` (undo.rs)
 
-Event-sourced undo. Serialised as JSON to `~/.ue/files/<mirrored-path>.ue`.
+Event-sourced undo. Serialised as JSON to `~/.local/share/ue/files/<mirrored-path>.ue`.
 
 ```rust
 pub struct UndoHistory {
@@ -147,7 +147,7 @@ pub enum Edit {
 
 ### `Settings` / `KeyBindings` (settings.rs)
 
-Loaded once from `~/.ue/settings.toml`; all keybinding fields accept human-readable strings
+Loaded once from `~/.config/ue/settings.toml`; all keybinding fields accept human-readable strings
 like `"Ctrl+s"`, `"Alt+Shift+Down"`. Each action exposes a `_matches(code, modifiers)` method:
 
 ```rust
@@ -211,7 +211,7 @@ syntax::pop_syntax()            // restore previous
 syntax::highlight_line(line)    // → Vec<(start_byte, end_byte, Color)>
 ```
 
-`.ue-syntax` file format (in `~/.ue/syntax/`):
+`.ue-syntax` file format (in `~/.config/ue/syntax/`):
 ```
 pattern = "\\bfn\\b"   color = "Yellow"   priority = 10
 ```
@@ -234,11 +234,14 @@ Priority resolves overlapping matches (higher wins). `switch_to`/`switch_back` f
 ## File Persistence Layout
 
 ```
-~/.ue/
+~/.config/ue/                       XDG config (respects $XDG_CONFIG_HOME)
   settings.toml                   user config (created from defaults on first run)
+  syntax/                         deployed .ue-syntax definitions
+
+~/.local/share/ue/                  XDG data (respects $XDG_DATA_HOME)
   files.ue                        MRU list — one absolute path per line, most recent first
   last_session                    JSON: {mode: "editor"|"selector", file: "/path"}
-  syntax/                         deployed .ue-syntax definitions
+  help/                           deployed help files (keybinding placeholders substituted)
   files/                          undo / state files — mirrors absolute paths
     home/user/project/main.rs.ue  JSON UndoHistory for /home/user/project/main.rs
     untitled.ue                   untitled buffer (no subdirectory)

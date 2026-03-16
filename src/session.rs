@@ -13,9 +13,9 @@ pub struct LastSession {
 }
 
 fn session_file_path() -> io::Result<PathBuf> {
-    let home = crate::env::resolve_home()
+    let data_dir = crate::env::resolve_data_dir()
         .map_err(|e| io::Error::new(io::ErrorKind::NotFound, e))?;
-    Ok(PathBuf::from(home).join(".ue").join("last_session"))
+    Ok(data_dir.join("last_session"))
 }
 
 pub fn load_last_session() -> io::Result<Option<LastSession>> {

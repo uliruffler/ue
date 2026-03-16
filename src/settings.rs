@@ -226,8 +226,8 @@ impl Settings {
     }
 
     fn config_path() -> Result<PathBuf, Box<dyn std::error::Error>> {
-        let home = crate::env::resolve_home()?;
-        Ok(PathBuf::from(home).join(".ue").join("settings.toml"))
+        let config_dir = crate::env::resolve_config_dir()?;
+        Ok(config_dir.join("settings.toml"))
     }
 }
 
@@ -527,7 +527,7 @@ mod tests {
         let settings_first = Settings::load().expect("first load");
         assert_eq!(settings_first.appearance.line_number_digits, 3);
         // Modify file to check reload
-        let settings_path = tmp.path().join(".ue").join("settings.toml");
+        let settings_path = tmp.path().join("config").join("settings.toml");
         let mut content = fs::read_to_string(&settings_path).unwrap();
         content = content.replace("line_number_digits = 3", "line_number_digits = 5");
         fs::write(&settings_path, content).unwrap();

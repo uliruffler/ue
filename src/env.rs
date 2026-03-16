@@ -4,6 +4,8 @@ use std::sync::{Mutex, OnceLock};
 #[cfg(test)]
 use tempfile::TempDir;
 
+use std::path::PathBuf;
+
 #[cfg(test)]
 static ENV_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
@@ -36,6 +38,40 @@ pub(crate) fn resolve_home() -> Result<String, std::env::VarError> {
 
     // Regular (non-sudo) execution.
     std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE"))
+}
+
+/// Resolve the configuration directory: `~/.config/ue/`.
+///
+/// Priority order:
+/// 1. `UE_TEST_HOME` — `$UE_TEST_HOME/config` for test isolation.
+/// 2. `XDG_CONFIG_HOME` — `$XDG_CONFIG_HOME/ue`.
+/// 3. `~/.config/ue` — standard XDG default.
+pub(crate) fn resolve_config_dir() -> Result<PathBuf, std::env::VarError> {
+    if let Ok(test_home) = std::env::var("UE_TEST_HOME") {
+        return Ok(PathBuf::from(test_home).join("config"));
+    }
+    if let Ok(xdg_config) = std::env::var("XDG_CONFIG_HOME") {
+        return Ok(PathBuf::from(xdg_config).join("ue"));
+    }
+    let home = resolve_home()?;
+    Ok(PathBuf::from(home).join(".config").join("ue"))
+}
+
+/// Resolve the data directory: `~/.local/share/ue/`.
+///
+/// Priority order:
+/// 1. `UE_TEST_HOME` — `$UE_TEST_HOME/data` for test isolation.
+/// 2. `XDG_DATA_HOME` — `$XDG_DATA_HOME/ue`.
+/// 3. `~/.local/share/ue` — standard XDG default.
+pub(crate) fn resolve_data_dir() -> Result<PathBuf, std::env::VarError> {
+    if let Ok(test_home) = std::env::var("UE_TEST_HOME") {
+        return Ok(PathBuf::from(test_home).join("data"));
+    }
+    if let Ok(xdg_data) = std::env::var("XDG_DATA_HOME") {
+        return Ok(PathBuf::from(xdg_data).join("ue"));
+    }
+    let home = resolve_home()?;
+    Ok(PathBuf::from(home).join(".local").join("share").join("ue"))
 }
 
 /// Look up a user's home directory from `/etc/passwd`.

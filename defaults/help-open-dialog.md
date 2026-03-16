@@ -64,7 +64,7 @@ The open dialog:
 
 ## Settings
 
-Add or modify in `~/.ue/settings.toml`:
+Add or modify in `~/.config/ue/settings.toml`:
 
 ```toml
 [keybindings]

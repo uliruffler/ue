@@ -45,5 +45,5 @@ Press **{help}** or **ESC** to close this help.
 
 ---
 
-**Note:** Keybindings can be customized in `~/.ue/settings.toml`
+**Note:** Keybindings can be customized in `~/.config/ue/settings.toml`
 

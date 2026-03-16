@@ -92,5 +92,5 @@ In rendered mode the document is read-only, so all navigation keys control **scr
 
 ---
 
-**Note:** Keybindings can be customized in `~/.ue/settings.toml`
+**Note:** Keybindings can be customized in `~/.config/ue/settings.toml`
 

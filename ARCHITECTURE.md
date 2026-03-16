@@ -115,7 +115,7 @@
 │ Configuration & keybindings                                  │
 │ • Settings struct - Configuration                            │
 │ • KeyBindings - Key mapping                                  │
-│ • load() - Read from ~/.ue/settings.toml                     │
+│ • load() - Read from ~/.config/ue/settings.toml                │
 │ • *_matches() - Check keybinding match                       │
 │ + 7 tests                                                    │
 └──────────────────────────────────────────────────────────────┘

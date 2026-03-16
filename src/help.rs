@@ -9,26 +9,23 @@ pub enum HelpContext {
 }
 
 /// Return the absolute path to the deployed help file for a given context.
-/// The file lives in `~/.ue/help/<name>.md`.
+/// The file lives in `~/.local/share/ue/help/<name>.md`.
 pub fn get_help_file_path(context: HelpContext) -> Option<PathBuf> {
-    let home = std::env::var("HOME")
-        .or_else(|_| std::env::var("USERPROFILE"))
-        .ok()?;
+    let data_dir = crate::env::resolve_data_dir().ok()?;
     let name = match context {
         HelpContext::Editor => "editor.md",
         HelpContext::Find => "find.md",
     };
-    Some(PathBuf::from(home).join(".ue").join("help").join(name))
+    Some(data_dir.join("help").join(name))
 }
 
-/// Deploy help files to `~/.ue/help/` with keybinding placeholders replaced.
+/// Deploy help files to `~/.local/share/ue/help/` with keybinding placeholders replaced.
 /// Always overwrites existing files so keybinding changes take effect immediately.
 pub fn deploy_help_files(settings: &crate::settings::Settings) {
-    let home = match std::env::var("HOME").or_else(|_| std::env::var("USERPROFILE")) {
-        Ok(h) => h,
+    let help_dir = match crate::env::resolve_data_dir() {
+        Ok(d) => d.join("help"),
         Err(_) => return,
     };
-    let help_dir = PathBuf::from(&home).join(".ue").join("help");
     if std::fs::create_dir_all(&help_dir).is_err() {
         return;
     }
