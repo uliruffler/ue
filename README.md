@@ -4,6 +4,34 @@ A terminal-based file editor with configurable key bindings that strives to be a
 One of the main reasons for creating this editor was to explore how to work with Copilot. Thus, the code is heavily AI-based, and almost everything is generated.
 
 
+## Installation
+
+### Homebrew (macOS / Linux)
+
+```bash
+brew tap uliruffler/ue
+brew install ue
+```
+
+To install the latest development build directly from the `main` branch:
+
+```bash
+brew install --HEAD uliruffler/ue/ue
+```
+
+### Build from Source
+
+Requires [Rust](https://rustup.rs/) (edition 2024, stable toolchain).
+
+```bash
+git clone https://github.com/uliruffler/ue.git
+cd ue
+cargo install --path .
+```
+
+The binary is installed to `~/.cargo/bin/ue`. Make sure that directory is on your `PATH`.
+
+
 ## Features
 
 - Line numbering
