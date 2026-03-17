@@ -58,10 +58,15 @@ else
   echo "  Run scripts/create-homebrew-tap.sh first to set up the tap"
 fi
 
-# Check for uncommitted changes (other than what we're about to do)
+# Check that Cargo.toml and Cargo.lock are not already dirty (we'll be editing them)
 cd "$REPO_ROOT"
+for f in Cargo.toml Cargo.lock; do
+  if ! git diff --quiet -- "$f" || ! git diff --cached --quiet -- "$f"; then
+    die "$f has uncommitted changes. Commit or stash them first."
+  fi
+done
 if [[ -n "$(git status --porcelain)" ]]; then
-  die "Working directory has uncommitted changes. Commit or stash them first."
+  echo "  Note: working tree has other uncommitted changes — they will not be included in the release commit"
 fi
 
 # ── Step 1: Bump version in Cargo.toml ───────────────────────────────────────
@@ -162,7 +167,16 @@ else
 fi
 ok "Formula updated: $FORMULA"
 
-# ── Step 7: Push updated formula to tap repo ─────────────────────────────────
+# ── Step 7: Commit updated formula back to main repo ────────────────────────
+
+step "Committing updated formula to main repo"
+cd "$REPO_ROOT"
+git add "$FORMULA"
+git commit -m "Homebrew formula: update to v${VERSION}"
+git push origin main
+ok "Formula committed and pushed to main repo"
+
+# ── Step 8: Push updated formula to tap repo ─────────────────────────────────
 
 if [[ "$TAP_EXISTS" -eq 1 ]]; then
   step "Pushing updated formula to tap repo ($TAP_DIR)"
