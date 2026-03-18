@@ -1,6 +1,11 @@
 # JavaScript syntax highlighting
 # Format: priority|color|regex
 
+# Content-detection patterns (Node.js scripts often have no extension or use .js)
+detect|^#!/usr/bin/env node
+detect|^#!/usr/bin/node
+detect|^#!/usr/local/bin/node
+
 # Comments (line and block)
 10|dark_green|//.*$
 10|dark_green|/\*[\s\S]*?\*/

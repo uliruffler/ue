@@ -1,6 +1,11 @@
 # HTML syntax highlighting
 # Format: priority|color|regex
 
+# Content-detection patterns
+# DOCTYPE is matched case-insensitively; plain <html> is also common.
+detect|(?i)^\s*<!DOCTYPE\s+html
+detect|(?i)^\s*<html
+
 # Comments
 10|dark_green|<!--[\s\S]*?-->
 

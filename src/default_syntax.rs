@@ -138,6 +138,15 @@ fn create_symlink_if_missing(
     }
 }
 
+/// Returns all canonical extension names that have built-in syntax definitions.
+/// Used for content-based syntax detection on files with unrecognized extensions.
+pub(crate) fn all_known_extensions() -> &'static [&'static str] {
+    &[
+        "rs", "py", "js", "ts", "c", "cpp", "go", "java", "sh", "html", "css", "md", "json",
+        "xml", "toml", "yaml", "sql", "txt", "ue-syntax", "cs",
+    ]
+}
+
 /// Get syntax file content for a given extension.
 /// First checks `~/.config/ue/syntax/`, then falls back to embedded defaults.
 pub(crate) fn get_syntax_content(extension: &str) -> Option<String> {
@@ -154,6 +163,14 @@ pub(crate) fn get_syntax_content(extension: &str) -> Option<String> {
 
     // Fall back to embedded default
     get_default_syntax(extension).map(|s| s.to_string())
+}
+
+/// Return the embedded (compiled-in) syntax content for an extension, ignoring
+/// any user-deployed file.  Used for content-type detection so that newly added
+/// `detect|` patterns always work even when the user has an older syntax file
+/// deployed to `~/.config/ue/syntax/`.
+pub(crate) fn get_embedded_syntax(extension: &str) -> Option<&'static str> {
+    get_default_syntax(extension)
 }
 
 #[cfg(test)]

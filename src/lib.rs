@@ -50,3 +50,7 @@ pub fn syntax_pop() {
 pub fn syntax_clear_stack() {
     syntax::clear_syntax_stack();
 }
+
+pub fn syntax_detect_from_content(lines: &[String]) {
+    syntax::maybe_detect_syntax_from_content(lines);
+}

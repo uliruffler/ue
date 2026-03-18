@@ -31,13 +31,23 @@ struct Pattern {
 #[derive(Debug)]
 struct SyntaxDefinition {
     patterns: Vec<Pattern>,
+    /// Regexes matched against the first few lines of a file to detect the syntax
+    /// when the file has an unrecognized extension (e.g. `NuGet.config`, `00-init`).
+    detect_patterns: Vec<Regex>,
 }
 
 impl SyntaxDefinition {
     fn new() -> Self {
         Self {
             patterns: Vec::new(),
+            detect_patterns: Vec::new(),
         }
+    }
+
+    fn add_detect_pattern(&mut self, pattern: &str) -> Result<(), regex::Error> {
+        let regex = Regex::new(pattern)?;
+        self.detect_patterns.push(regex);
+        Ok(())
     }
 
     fn add_pattern(
@@ -165,6 +175,72 @@ impl SyntaxCache {
         self.definitions.get(resolved).and_then(|opt| opt.as_ref())
     }
 
+    /// Try to identify the syntax for a file with an unrecognized extension by
+    /// matching `detect|` patterns from each known syntax definition against the
+    /// first few lines of the file.  Returns the canonical extension of the first
+    /// matching definition, or `None` if nothing matched.
+    ///
+    /// **Always reads `detect|` patterns from the compiled-in defaults**, not from
+    /// the user's deployed `~/.config/ue/syntax/` files.  This means newly added
+    /// detection patterns work even for users who already had an older syntax file
+    /// on disk (which wouldn't contain the new `detect|` lines).
+    fn detect_extension_from_content(&mut self, preview: &[&str]) -> Option<String> {
+        let all_extensions = crate::default_syntax::all_known_extensions();
+
+        // Strip the UTF-8 BOM (U+FEFF) from the first line if present.
+        // Windows tools commonly write it at the start of XML/text files, and it
+        // is invisible — without stripping it, `^\s*<\?xml` would fail to match.
+        let first_stripped;
+        let preview: Vec<&str> = if let Some(first) = preview.first() {
+            first_stripped = first.strip_prefix('\u{FEFF}').unwrap_or(first);
+            std::iter::once(first_stripped)
+                .chain(preview.iter().skip(1).copied())
+                .collect()
+        } else {
+            preview.to_vec()
+        };
+
+        for &ext in all_extensions {
+            let Some(content) = crate::default_syntax::get_embedded_syntax(ext) else {
+                continue;
+            };
+            let detect_patterns = Self::parse_detect_patterns_only(content);
+            if detect_patterns.is_empty() {
+                continue;
+            }
+            for pattern in &detect_patterns {
+                for line in &preview {
+                    if pattern.is_match(line) {
+                        return Some(ext.to_string());
+                    }
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Parse only the `detect|<regex>` lines from syntax file content.
+    /// Used exclusively for content detection — does not require valid
+    /// priority/color fields, so it is safe to call on any syntax file content.
+    fn parse_detect_patterns_only(content: &str) -> Vec<Regex> {
+        let mut patterns = Vec::new();
+        for line in content.lines() {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                continue;
+            }
+            // Use splitn(2) so the regex itself can contain '|' safely.
+            let parts: Vec<&str> = line.splitn(2, '|').collect();
+            if parts.len() == 2 && parts[0].trim() == "detect" {
+                if let Ok(regex) = Regex::new(parts[1].trim()) {
+                    patterns.push(regex);
+                }
+            }
+        }
+        patterns
+    }
+
     fn load_syntax_file(extension: &str) -> Option<SyntaxDefinition> {
         // Use the default_syntax module which handles both user files and embedded defaults
         let content = crate::default_syntax::get_syntax_content(extension)?;
@@ -184,6 +260,17 @@ impl SyntaxCache {
 
             // Parse pattern lines: priority|color|regex[|switch_to=ext or |switch_back]
             let parts: Vec<&str> = line.split('|').collect();
+
+            // Handle content-detection directives: detect|<regex>
+            // These are matched against the first few lines of a file when the
+            // extension is unrecognized to auto-select the right syntax.
+            if parts.len() >= 2 && parts[0].trim() == "detect" {
+                // Rejoin remaining parts in case the regex itself contained '|'
+                let pattern = parts[1..].join("|");
+                let _ = def.add_detect_pattern(pattern.trim());
+                continue;
+            }
+
             if parts.len() < 3 {
                 continue;
             }
@@ -286,6 +373,30 @@ impl SyntaxHighlighter {
         self.syntax_stack.clear();
     }
 
+    /// Returns `true` if the current file's extension maps to a known syntax definition.
+    fn has_recognized_syntax(&mut self) -> bool {
+        match self.base_extension.clone() {
+            Some(ext) => self.cache.get_or_load(&ext).is_some(),
+            None => false,
+        }
+    }
+
+    /// For files that have no recognized extension, attempt to detect the syntax
+    /// from the first few lines of content.  Does nothing when the extension is
+    /// already recognized.  Returns `true` if detection succeeded.
+    fn detect_from_content(&mut self, lines: &[String]) -> bool {
+        if self.has_recognized_syntax() {
+            return false;
+        }
+        let preview: Vec<&str> = lines.iter().take(5).map(|s| s.as_str()).collect();
+        if let Some(detected) = self.cache.detect_extension_from_content(&preview) {
+            self.base_extension = Some(detected);
+            true
+        } else {
+            false
+        }
+    }
+
     fn highlight_line(&mut self, line: &str) -> HighlightResult {
         let ext = self.current_extension().map(|s| s.to_string());
         let base_ext = self.base_extension.clone();
@@ -342,6 +453,16 @@ pub(crate) fn pop_syntax() {
 /// Clear all syntax overrides and return to base file syntax
 pub(crate) fn clear_syntax_stack() {
     HIGHLIGHTER.with(|h| h.borrow_mut().clear_syntax_stack());
+}
+
+/// For files with an unrecognized extension (or no extension at all), examine
+/// the first few lines of content and select the best matching syntax.
+/// Must be called *after* `set_current_file` and *after* the lines are loaded.
+/// Has no effect when the extension was already recognized.
+pub(crate) fn maybe_detect_syntax_from_content(lines: &[String]) {
+    HIGHLIGHTER.with(|h| {
+        h.borrow_mut().detect_from_content(lines);
+    });
 }
 
 /// Get syntax highlighting for a line, with optional switch action
@@ -472,5 +593,45 @@ mod tests {
         highlighter.push_syntax("cs".to_string());
         highlighter.clear_syntax_stack();
         assert_eq!(highlighter.current_extension(), Some("md"));
+    }
+}
+
+#[cfg(test)]
+mod detect_debug_tests {
+    use super::*;
+
+    #[test]
+    fn test_nuget_config_detection() {
+        let lines: Vec<String> = vec![
+            r#"<?xml version="1.0" encoding="utf-8"?>"#.to_string(),
+            "<configuration>".to_string(),
+        ];
+        HIGHLIGHTER.with(|h| {
+            let mut h = h.borrow_mut();
+            h.set_file("/home/user/NuGet.Config");
+            println!("base_extension: {:?}", h.base_extension);
+            println!("has_recognized: {}", h.has_recognized_syntax());
+            let result = h.detect_from_content(&lines);
+            println!("detect result: {result}");
+            println!("base_extension after: {:?}", h.base_extension);
+        });
+    }
+
+    #[test]
+    fn test_nuget_config_detection_with_bom() {
+        // U+FEFF (BOM) prepended to the first line — common for Windows-generated XML
+        let bom = "\u{FEFF}";
+        let lines: Vec<String> = vec![
+            format!("{bom}<?xml version=\"1.0\" encoding=\"utf-8\"?>"),
+            "<configuration>".to_string(),
+        ];
+        HIGHLIGHTER.with(|h| {
+            let mut h = h.borrow_mut();
+            h.set_file("/home/user/NuGet.Config");
+            println!("preview[0] bytes: {:?}", &lines[0].as_bytes()[..lines[0].len().min(8)]);
+            let result = h.detect_from_content(&lines);
+            println!("detect result with BOM: {result}");
+            println!("base_extension after: {:?}", h.base_extension);
+        });
     }
 }

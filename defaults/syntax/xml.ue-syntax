@@ -1,5 +1,9 @@
 # XML syntax highlighting
 # Format: priority|color|regex
+
+# Content-detection patterns
+# Matches the XML declaration (<?xml ...) which always appears on the first line.
+detect|^\s*<\?xml
 # Comments
 10|dark_green|<!--[\s\S]*?-->
 # CDATA sections

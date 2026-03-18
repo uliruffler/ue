@@ -708,6 +708,11 @@ fn editing_session(
         l
     };
 
+    // For files whose extension is not recognised (e.g. `NuGet.config`,
+    // `~/.config/zshrc/00-init`), fall back to content-based detection using the
+    // `detect|` patterns embedded in each syntax definition.
+    crate::syntax::maybe_detect_syntax_from_content(&lines);
+
     let (term_width, term_height) = size()?;
 
     let mut state = FileViewerState::new(term_width, undo_history.clone(), settings);

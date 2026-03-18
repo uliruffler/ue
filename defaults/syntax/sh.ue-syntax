@@ -1,6 +1,24 @@
 # Shell script syntax highlighting
 # Format: priority|color|regex
 
+# Content-detection patterns (matched against first few lines for extension-less files)
+# Each `detect|<regex>` line is tried in order; the first match wins.
+detect|^#!/bin/sh
+detect|^#!/bin/bash
+detect|^#!/bin/zsh
+detect|^#!/bin/ksh
+detect|^#!/bin/dash
+detect|^#!/usr/bin/sh
+detect|^#!/usr/bin/bash
+detect|^#!/usr/bin/zsh
+detect|^#!/usr/bin/ksh
+detect|^#!/usr/local/bin/bash
+detect|^#!/usr/local/bin/zsh
+detect|^#!/usr/bin/env sh
+detect|^#!/usr/bin/env bash
+detect|^#!/usr/bin/env zsh
+detect|^#!/usr/bin/env ksh
+
 # Comments
 10|dark_green|#.*$
 

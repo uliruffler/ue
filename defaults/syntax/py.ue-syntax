@@ -1,6 +1,16 @@
 # Python syntax highlighting
 # Format: priority|color|regex
 
+# Content-detection patterns
+detect|^#!/usr/bin/python
+detect|^#!/usr/bin/python2
+detect|^#!/usr/bin/python3
+detect|^#!/usr/local/bin/python
+detect|^#!/usr/local/bin/python3
+detect|^#!/usr/bin/env python
+detect|^#!/usr/bin/env python2
+detect|^#!/usr/bin/env python3
+
 # Comments
 10|dark_green|#.*$
 
