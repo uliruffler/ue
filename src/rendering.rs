@@ -1081,8 +1081,14 @@ struct RenderContext<'a> {
 
 struct SegmentInfo {
     line_index: usize,
+    /// Char index in `expanded_chars` where this segment begins (loop bounds).
     start_visual: usize,
+    /// Char index in `expanded_chars` where this segment ends (loop bounds).
     end_visual: usize,
+    /// Printable (ANSI-stripped) column at the start of this segment.
+    start_printable: usize,
+    /// Printable (ANSI-stripped) column at the end of this segment.
+    end_printable: usize,
     tab_width: usize,
 }
 
@@ -1239,10 +1245,14 @@ fn render_line(
         // Render content if there's any visible part of the line
         let mut content_width = if start_visual < chars.len() {
             let actual_end = end_visual.min(chars.len());
+            let start_printable = crate::coordinates::visual_width_up_to(line, start_char_idx, tab_width);
+            let end_printable = crate::coordinates::visual_width_up_to(line, end_char_idx.min(line.chars().count()), tab_width);
             let segment = SegmentInfo {
                 line_index: logical_line_index,
                 start_visual,
                 end_visual: actual_end,
+                start_printable,
+                end_printable,
                 tab_width,
             };
 
@@ -1328,6 +1338,11 @@ thread_local! {
 }
 
 /// Get character ranges for search matches in a line (with caching).
+/// Searches the ANSI-stripped version of the line so that colour-change
+/// escape sequences do not split search terms.  Returned positions are
+/// char indices into the **raw** (unstripped) line so the rest of the
+/// rendering pipeline can convert them to printable columns via
+/// `visual_width_up_to`.
 /// For single-line patterns this uses the regex cache; multiline patterns always
 /// return empty — use `get_search_matches_for_line` instead when you have `lines`.
 fn get_search_matches(line: &str, pattern: &str, regex_mode: bool) -> Vec<(usize, usize)> {
@@ -1340,49 +1355,47 @@ fn get_search_matches(line: &str, pattern: &str, regex_mode: bool) -> Vec<(usize
         return vec![];
     }
 
+    // Search on ANSI-stripped text so escape sequences don't break up search terms
+    let stripped = crate::coordinates::strip_ansi_escapes(line);
+
     // Try to use cached regex
     SEARCH_REGEX_CACHE.with(|cache| {
         let mut cache = cache.borrow_mut();
 
-        // Create a cache key that includes both pattern and mode
         let cache_key = format!("{}:{}", if regex_mode { "R" } else { "W" }, pattern);
 
-        // Check if we need to compile a new regex
         let regex = if let Some((cached_key, cached_regex)) = cache.as_ref() {
             if cached_key == &cache_key {
                 cached_regex
             } else {
-                // Pattern or mode changed, compile new regex
                 match crate::find::pattern_to_regex(pattern, regex_mode) {
                     Ok(regex) => {
                         *cache = Some((cache_key, regex));
                         &cache.as_ref().unwrap().1
                     }
-                    Err(_) => {
-                        return vec![];
-                    }
+                    Err(_) => return vec![],
                 }
             }
         } else {
-            // No cached regex, compile new one
             match crate::find::pattern_to_regex(pattern, regex_mode) {
                 Ok(regex) => {
                     *cache = Some((cache_key, regex));
                     &cache.as_ref().unwrap().1
                 }
-                Err(_) => {
-                    return vec![];
-                }
+                Err(_) => return vec![],
             }
         };
 
         regex
-            .find_iter(line)
+            .find_iter(&stripped)
             .map(|m| {
-                // Convert byte positions to character positions
-                let char_start = line[..m.start()].chars().count();
-                let char_end = line[..m.end()].chars().count();
-                (char_start, char_end)
+                // Positions in the stripped string
+                let stripped_start = stripped[..m.start()].chars().count();
+                let stripped_end   = stripped[..m.end()].chars().count();
+                // Map back to char indices in the raw line
+                let raw_start = crate::coordinates::stripped_char_to_raw_char(line, stripped_start);
+                let raw_end   = crate::coordinates::stripped_char_to_raw_char(line, stripped_end);
+                (raw_start, raw_end)
             })
             .collect()
     })
@@ -1931,14 +1944,13 @@ fn render_line_segment_expanded(
     // Get syntax highlighting for the original line
     let (highlights, _switch_action) = crate::syntax::highlight_line(original_line);
 
-    // Convert byte positions to visual positions for the expanded line
-    let mut visual_to_color: Vec<Option<crossterm::style::Color>> =
-        vec![None; expanded_chars.len()];
-    let mut visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
+    // Arrays indexed by printable column relative to segment start.
+    let printable_width = segment.end_printable.saturating_sub(segment.start_printable);
+    let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; printable_width];
+    let mut visual_to_search_match: Vec<bool> = vec![false; printable_width];
 
-    // Apply syntax highlighting
+    // Apply syntax highlighting: byte range → char range → printable col → array index
     for (byte_start, byte_end, color) in highlights {
-        // Convert byte positions to character positions in original line
         let char_start = original_line[..byte_start.min(original_line.len())]
             .chars()
             .count();
@@ -1946,20 +1958,18 @@ fn render_line_segment_expanded(
             .chars()
             .count();
 
-        // Convert character positions to visual positions (accounting for tabs)
-        let visual_start =
-            crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
-        let visual_end =
-            crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+        let visual_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width)
+            .saturating_sub(segment.start_printable);
+        let visual_end = crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width)
+            .saturating_sub(segment.start_printable);
 
-        // Mark visual positions with color
         for i in visual_start..visual_end.min(visual_to_color.len()) {
             visual_to_color[i] = Some(color);
         }
     }
 
-    // Apply search match highlighting - compute once and cache current match range
-    let mut current_match_range: Option<(usize, usize)> = None; // Visual column range
+    // Apply search match highlighting; cache current-match printable-col range
+    let mut current_match_range: Option<(usize, usize)> = None;
     if let Some(ref pattern) = ctx.state.last_search_pattern {
         let matches = get_search_matches_for_line(
             ctx.lines,
@@ -1970,53 +1980,37 @@ fn render_line_segment_expanded(
         );
         let cursor_pos = ctx.state.current_position();
         let is_cursor_line = segment.line_index == cursor_pos.0;
-        let cursor_col = if is_cursor_line {
-            cursor_pos.1
-        } else {
-            usize::MAX
-        };
+        let cursor_col = if is_cursor_line { cursor_pos.1 } else { usize::MAX };
 
         for (char_start, char_end) in matches {
-            // Check if this match overlaps with the find_scope
-            if !match_overlaps_scope(
-                segment.line_index,
-                char_start,
-                char_end,
-                ctx.state.find_scope,
-            ) {
+            if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
                 continue;
             }
 
-            let visual_start = crate::coordinates::visual_width_up_to(
-                original_line,
-                char_start,
-                segment.tab_width,
-            );
-            let visual_end = crate::coordinates::visual_width_up_to(
-                original_line,
-                char_end,
-                segment.tab_width,
-            );
+            // Absolute printable cols for this match
+            let abs_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+            let abs_end   = crate::coordinates::visual_width_up_to(original_line, char_end,   segment.tab_width);
+            // Segment-relative indices for the search-match array
+            let rel_start = abs_start.saturating_sub(segment.start_printable);
+            let rel_end   = abs_end.saturating_sub(segment.start_printable);
 
-            // Check if cursor is within this match
-            let is_current_match =
-                is_cursor_line && cursor_col >= char_start && cursor_col < char_end;
+            let is_current_match = is_cursor_line && cursor_col >= char_start && cursor_col < char_end;
 
             if is_current_match {
-                // Cache the current match range
-                current_match_range = Some((visual_start, visual_end));
+                current_match_range = Some((abs_start, abs_end));
             } else {
-                // Mark as regular search match
-                for i in visual_start..visual_end.min(visual_to_search_match.len()) {
+                for i in rel_start..rel_end.min(visual_to_search_match.len()) {
                     visual_to_search_match[i] = true;
                 }
             }
         }
     }
 
-    // Render the segment with colors
+    // Render the segment
     let mut current_color: Option<crossterm::style::Color> = None;
     let mut current_bg: bool = false;
+    let mut in_file_ansi = false;
+    let mut printable_col = segment.start_printable; // absolute printable column
 
     for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() {
@@ -2024,76 +2018,77 @@ fn render_line_segment_expanded(
         }
 
         let ch = expanded_chars[visual_i];
-        let desired_color = visual_to_color.get(visual_i).copied().flatten();
-        let is_search_match = visual_to_search_match
-            .get(visual_i)
-            .copied()
-            .unwrap_or(false);
 
-        // Check if this position is in the current match (using cached range)
+        // File-embedded ANSI sequences: write verbatim without touching color state.
+        // After the sequence ends, re-apply our background so the terminal's reset
+        // does not cancel an active selection/search highlight.
+        if ch == '\x1b' {
+            in_file_ansi = true;
+            write!(stdout, "{}", ch)?;
+            continue;
+        }
+        if in_file_ansi {
+            let was_in_ansi = in_file_ansi;
+            if ch.is_ascii_alphabetic() {
+                in_file_ansi = false;
+            }
+            write!(stdout, "{}", ch)?;
+            // Sequence just ended — re-apply our background if one is active
+            if was_in_ansi && !in_file_ansi && current_bg {
+                if let Some((start, end)) = current_match_range {
+                    // figure out which kind of bg is active at the upcoming printable_col
+                    let _ = (start, end); // we re-apply whatever current_bg says
+                }
+                // Re-apply active background
+                let array_idx_next = printable_col.saturating_sub(segment.start_printable);
+                let is_sm = visual_to_search_match.get(array_idx_next).copied().unwrap_or(false);
+                let is_cm = current_match_range.map_or(false, |(s, e)| printable_col >= s && printable_col < e);
+                if is_cm {
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?;
+                } else if is_sm {
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
+                }
+                if let Some(color) = current_color {
+                    execute!(stdout, SetForegroundColor(color))?;
+                }
+            }
+            continue;
+        }
+
+        // Printable character: use printable_col for array lookups
+        let array_idx = printable_col.saturating_sub(segment.start_printable);
+        let desired_color = visual_to_color.get(array_idx).copied().flatten();
+        let is_search_match = visual_to_search_match.get(array_idx).copied().unwrap_or(false);
+
         let is_current_match = if let Some((start, end)) = current_match_range {
-            visual_i >= start && visual_i < end
+            printable_col >= start && printable_col < end
         } else {
             false
         };
 
-        // Apply background color for search matches
         let new_bg_state = is_search_match || is_current_match;
         if new_bg_state != current_bg {
             if new_bg_state {
                 if is_current_match {
-                    // Darker blue background for current match
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::Rgb {
-                            r: 50,
-                            g: 100,
-                            b: 200
-                        })
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?;
                 } else {
-                    // Light blue background for other matches
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::Rgb {
-                            r: 100,
-                            g: 150,
-                            b: 200
-                        })
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
                 }
             } else {
                 execute!(stdout, ResetColor)?;
-                // Reapply foreground color if needed
                 if let Some(color) = current_color {
                     execute!(stdout, SetForegroundColor(color))?;
                 }
             }
             current_bg = new_bg_state;
         } else if new_bg_state {
-            // Background is active but we might need to switch between current and non-current
             if is_current_match {
-                execute!(
-                    stdout,
-                    SetBackgroundColor(crossterm::style::Color::Rgb {
-                        r: 50,
-                        g: 100,
-                        b: 200
-                    })
-                )?;
+                execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?;
             } else if is_search_match {
-                execute!(
-                    stdout,
-                    SetBackgroundColor(crossterm::style::Color::Rgb {
-                        r: 100,
-                        g: 150,
-                        b: 200
-                    })
-                )?;
+                execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
             }
         }
 
-        // Change foreground color if needed
         if desired_color != current_color {
             if let Some(color) = desired_color {
                 execute!(stdout, SetForegroundColor(color))?;
@@ -2104,9 +2099,9 @@ fn render_line_segment_expanded(
         }
 
         write!(stdout, "{}", ch)?;
+        printable_col += crate::coordinates::char_visual_width_pub(ch, printable_col, segment.tab_width);
     }
 
-    // Reset color at end
     if current_color.is_some() || current_bg {
         execute!(stdout, ResetColor)?;
     }
@@ -2138,34 +2133,27 @@ fn render_line_segment_with_selection_expanded(
     // Get syntax highlighting for the original line
     let (highlights, _switch_action) = crate::syntax::highlight_line(original_line);
 
-    // Convert byte positions to visual positions for the expanded line
-    let mut visual_to_color: Vec<Option<crossterm::style::Color>> =
-        vec![None; expanded_chars.len()];
-    let mut visual_to_search_match: Vec<bool> = vec![false; expanded_chars.len()];
+    // Arrays indexed by printable column relative to segment start
+    let printable_width = segment.end_printable.saturating_sub(segment.start_printable);
+    let mut visual_to_color: Vec<Option<crossterm::style::Color>> = vec![None; printable_width];
+    let mut visual_to_search_match: Vec<bool> = vec![false; printable_width];
 
     // Apply syntax highlighting
     for (byte_start, byte_end, color) in highlights {
-        // Convert byte positions to character positions in original line
-        let char_start = original_line[..byte_start.min(original_line.len())]
-            .chars()
-            .count();
-        let char_end = original_line[..byte_end.min(original_line.len())]
-            .chars()
-            .count();
+        let char_start = original_line[..byte_start.min(original_line.len())].chars().count();
+        let char_end   = original_line[..byte_end.min(original_line.len())].chars().count();
 
-        // Convert character positions to visual positions (accounting for tabs)
-        let visual_start =
-            crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
-        let visual_end =
-            crate::coordinates::visual_width_up_to(original_line, char_end, segment.tab_width);
+        let abs_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+        let abs_end   = crate::coordinates::visual_width_up_to(original_line, char_end,   segment.tab_width);
+        let rel_start = abs_start.saturating_sub(segment.start_printable);
+        let rel_end   = abs_end.saturating_sub(segment.start_printable);
 
-        // Mark visual positions with color
-        for i in visual_start..visual_end.min(visual_to_color.len()) {
+        for i in rel_start..rel_end.min(visual_to_color.len()) {
             visual_to_color[i] = Some(color);
         }
     }
 
-    // Populate search-match highlights (same as non-selection path)
+    // Populate search-match highlights
     if let Some(ref pattern) = ctx.state.last_search_pattern {
         let cursor_pos = ctx.state.current_position();
         let matches = get_search_matches_for_line(
@@ -2176,64 +2164,47 @@ fn render_line_segment_with_selection_expanded(
             ctx.state.find_scope,
         );
         for (char_start, char_end) in &matches {
-            if !match_overlaps_scope(
-                segment.line_index,
-                *char_start,
-                *char_end,
-                ctx.state.find_scope,
-            ) {
+            if !match_overlaps_scope(segment.line_index, *char_start, *char_end, ctx.state.find_scope) {
                 continue;
             }
-            // Skip the current-match highlight (handled separately below)
             let is_cursor_line = segment.line_index == cursor_pos.0;
-            let cursor_col = cursor_pos.1;
-            if is_cursor_line && cursor_col >= *char_start && cursor_col < *char_end {
-                continue;
+            if is_cursor_line && cursor_pos.1 >= *char_start && cursor_pos.1 < *char_end {
+                continue; // handled separately as current-match
             }
-            let visual_start = crate::coordinates::visual_width_up_to(
-                original_line,
-                *char_start,
-                segment.tab_width,
-            );
-            let visual_end = crate::coordinates::visual_width_up_to(
-                original_line,
-                *char_end,
-                segment.tab_width,
-            );
-            for i in visual_start..visual_end.min(visual_to_search_match.len()) {
+            let abs_start = crate::coordinates::visual_width_up_to(original_line, *char_start, segment.tab_width);
+            let abs_end   = crate::coordinates::visual_width_up_to(original_line, *char_end,   segment.tab_width);
+            let rel_start = abs_start.saturating_sub(segment.start_printable);
+            let rel_end   = abs_end.saturating_sub(segment.start_printable);
+            for i in rel_start..rel_end.min(visual_to_search_match.len()) {
                 visual_to_search_match[i] = true;
             }
         }
     }
 
-    // Convert selection character indices to visual column range
+    // Selection boundaries in absolute printable columns
     let (start_visual_col, end_visual_col) = if ctx.state.block_selection {
-        // Block selection: use the column range for all lines in the selection
-        let block_start_col = visual_width_up_to(original_line, start_col, segment.tab_width);
-        let block_end_col = visual_width_up_to(original_line, end_col, segment.tab_width);
-        (block_start_col, block_end_col)
+        let s = visual_width_up_to(original_line, start_col, segment.tab_width);
+        let e = visual_width_up_to(original_line, end_col,   segment.tab_width);
+        (s, e)
     } else {
-        // Normal line-wise selection
-        let start_visual_col = if segment.line_index == start_line {
+        let s = if segment.line_index == start_line {
             visual_width_up_to(original_line, start_col, segment.tab_width)
         } else {
             0
         };
-        let end_visual_col = if segment.line_index == end_line {
+        let e = if segment.line_index == end_line {
             visual_width_up_to(original_line, end_col, segment.tab_width)
         } else {
             usize::MAX
         };
-        (start_visual_col, end_visual_col)
+        (s, e)
     };
 
-    // Cache current match range to avoid recalculating in the loop
+    // Cache current match range (absolute printable cols)
     let mut current_match_range: Option<(usize, usize)> = None;
     if let Some(ref pattern) = ctx.state.last_search_pattern {
         let cursor_pos = ctx.state.current_position();
-        let is_cursor_line = segment.line_index == cursor_pos.0;
-
-        if is_cursor_line {
+        if segment.line_index == cursor_pos.0 {
             let matches = get_search_matches_for_line(
                 ctx.lines,
                 segment.line_index,
@@ -2241,31 +2212,14 @@ fn render_line_segment_with_selection_expanded(
                 ctx.state.last_search_regex_mode,
                 ctx.state.find_scope,
             );
-            let cursor_col = cursor_pos.1;
-
             for (char_start, char_end) in matches {
-                if cursor_col >= char_start && cursor_col < char_end {
-                    // Check if this match overlaps with the find_scope
-                    if !match_overlaps_scope(
-                        segment.line_index,
-                        char_start,
-                        char_end,
-                        ctx.state.find_scope,
-                    ) {
+                if cursor_pos.1 >= char_start && cursor_pos.1 < char_end {
+                    if !match_overlaps_scope(segment.line_index, char_start, char_end, ctx.state.find_scope) {
                         continue;
                     }
-
-                    let visual_start = crate::coordinates::visual_width_up_to(
-                        original_line,
-                        char_start,
-                        segment.tab_width,
-                    );
-                    let visual_end = crate::coordinates::visual_width_up_to(
-                        original_line,
-                        char_end,
-                        segment.tab_width,
-                    );
-                    current_match_range = Some((visual_start, visual_end));
+                    let abs_start = crate::coordinates::visual_width_up_to(original_line, char_start, segment.tab_width);
+                    let abs_end   = crate::coordinates::visual_width_up_to(original_line, char_end,   segment.tab_width);
+                    current_match_range = Some((abs_start, abs_end));
                     break;
                 }
             }
@@ -2273,7 +2227,9 @@ fn render_line_segment_with_selection_expanded(
     }
 
     let mut current_color: Option<crossterm::style::Color> = None;
-    let mut current_bg: Option<&str> = None; // Track background: None, "search", "current", or "selection"
+    let mut current_bg: Option<&str> = None;
+    let mut in_file_ansi = false;
+    let mut printable_col = segment.start_printable;
 
     for visual_i in segment.start_visual..segment.end_visual {
         if visual_i >= expanded_chars.len() {
@@ -2281,23 +2237,49 @@ fn render_line_segment_with_selection_expanded(
         }
 
         let ch = expanded_chars[visual_i];
-        let is_selected = visual_i >= start_visual_col && visual_i < end_visual_col;
-        let is_search_match = visual_to_search_match
-            .get(visual_i)
-            .copied()
-            .unwrap_or(false);
 
-        // Determine syntax highlight color for this position
-        let desired_color = visual_to_color.get(visual_i).copied().flatten();
+        // File-embedded ANSI sequences: write verbatim without touching color state.
+        // After the sequence ends, re-apply our background so the terminal's reset
+        // does not cancel an active selection/search/current-match highlight.
+        if ch == '\x1b' {
+            in_file_ansi = true;
+            write!(stdout, "{}", ch)?;
+            continue;
+        }
+        if in_file_ansi {
+            let was_in_ansi = in_file_ansi;
+            if ch.is_ascii_alphabetic() {
+                in_file_ansi = false;
+            }
+            write!(stdout, "{}", ch)?;
+            // Sequence just ended — re-apply whatever background was active
+            if was_in_ansi && !in_file_ansi {
+                if let Some(bg) = current_bg {
+                    match bg {
+                        "selection" => execute!(stdout, SetBackgroundColor(crossterm::style::Color::DarkGrey))?,
+                        "current"   => execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?,
+                        "search"    => execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?,
+                        _ => {}
+                    }
+                    if let Some(color) = current_color {
+                        execute!(stdout, SetForegroundColor(color))?;
+                    }
+                }
+            }
+            continue;
+        }
 
-        // Check if this position is in the current match (using cached range)
-        let is_current_match = if let Some((start, end)) = current_match_range {
-            visual_i >= start && visual_i < end
+        // Printable character
+        let array_idx = printable_col.saturating_sub(segment.start_printable);
+        let desired_color = visual_to_color.get(array_idx).copied().flatten();
+        let is_search_match = visual_to_search_match.get(array_idx).copied().unwrap_or(false);
+        let is_selected = printable_col >= start_visual_col && printable_col < end_visual_col;
+        let is_current_match = if let Some((s, e)) = current_match_range {
+            printable_col >= s && printable_col < e
         } else {
             false
         };
 
-        // Determine background (search matches take priority over selection)
         let desired_bg = if is_current_match {
             Some("current")
         } else if is_search_match {
@@ -2308,37 +2290,16 @@ fn render_line_segment_with_selection_expanded(
             None
         };
 
-        // Apply background if it changed
         if desired_bg != current_bg {
             match desired_bg {
                 Some("selection") => {
-                    // Use a subtle background for selection
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::DarkGrey)
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::DarkGrey))?;
                 }
                 Some("current") => {
-                    // Darker blue background for current match
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::Rgb {
-                            r: 50,
-                            g: 100,
-                            b: 200
-                        })
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?;
                 }
                 Some("search") => {
-                    // Light blue background for other matches
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::Rgb {
-                            r: 100,
-                            g: 150,
-                            b: 200
-                        })
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
                 }
                 _ => {
                     execute!(stdout, ResetColor)?;
@@ -2348,46 +2309,26 @@ fn render_line_segment_with_selection_expanded(
             current_bg = desired_bg;
         }
 
-
-        // Change foreground color if needed
         if desired_color != current_color {
             if let Some(color) = desired_color {
                 execute!(stdout, SetForegroundColor(color))?;
             } else if !(is_search_match || is_current_match || is_selected) {
                 execute!(stdout, ResetColor)?;
-                // Reapply background if needed
                 if is_search_match {
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::Rgb {
-                            r: 100,
-                            g: 150,
-                            b: 200
-                        })
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 100, g: 150, b: 200 }))?;
                 } else if is_current_match {
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::Rgb {
-                            r: 50,
-                            g: 100,
-                            b: 200
-                        })
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::Rgb { r: 50, g: 100, b: 200 }))?;
                 } else if is_selected {
-                    execute!(
-                        stdout,
-                        SetBackgroundColor(crossterm::style::Color::DarkGrey)
-                    )?;
+                    execute!(stdout, SetBackgroundColor(crossterm::style::Color::DarkGrey))?;
                 }
             }
             current_color = desired_color;
         }
 
         write!(stdout, "{}", ch)?;
+        printable_col += crate::coordinates::char_visual_width_pub(ch, printable_col, segment.tab_width);
     }
 
-    // Reset color at end
     if current_color.is_some() || current_bg.is_some() {
         execute!(stdout, ResetColor)?;
     }

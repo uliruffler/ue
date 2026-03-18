@@ -83,7 +83,9 @@ pub enum Edit {
     CompositeEdit {
         edits: Vec<Edit>,
         #[serde(default)]
-        undo_cursor: CursorState, // (line, col, multi_cursors)
+        undo_cursor: CursorState, // post-edit cursor: restored after redo
+        #[serde(default)]
+        pre_cursor: CursorState,  // pre-edit cursor: restored after undo (if set)
     },
 }
 
@@ -145,16 +147,17 @@ impl UndoHistory {
         &mut self,
         edits: Vec<Edit>,
         undo_cursor: CursorState,
+        pre_cursor: CursorState,
     ) {
         if edits.is_empty() {
             return;
         }
         // Remove any edits after current position (they were undone)
         self.edits.truncate(self.current);
-        if edits.len() == 1 && undo_cursor.is_none() {
+        if edits.len() == 1 && undo_cursor.is_none() && pre_cursor.is_none() {
             self.edits.push(edits.into_iter().next().unwrap());
         } else {
-            self.edits.push(Edit::CompositeEdit { edits, undo_cursor });
+            self.edits.push(Edit::CompositeEdit { edits, undo_cursor, pre_cursor });
         }
         self.current = self.edits.len();
     }

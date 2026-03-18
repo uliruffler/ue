@@ -194,6 +194,10 @@ pub(crate) fn handle_paste(
         state.clear_selection();
     }
 
+    // Capture the pre-paste cursor (after any selection deletion, before paste insertion).
+    // Used to restore cursor position on Ctrl+Z so a second paste doesn't panic.
+    let pre_paste_cursor = Some((state.absolute_line(), state.cursor_col, state.multi_cursors.clone()));
+
     let idx = state.absolute_line();
     if idx >= lines.len() {
         return false;
@@ -221,14 +225,18 @@ pub(crate) fn handle_paste(
                 ch,
             });
         }
-        lines[idx].insert_str(state.cursor_col, paste_text);
-        state.cursor_col += paste_text.len();
+        // Use byte index for insert_str; cursor_col is a char index
+        let byte_offset = char_index_to_byte_index(&lines[idx], state.cursor_col);
+        lines[idx].insert_str(byte_offset, paste_text);
+        state.cursor_col += paste_text.chars().count();
         state.desired_cursor_col = state.cursor_col;
         state.modified = true;
     } else {
         let current_line = &lines[idx];
-        let before = current_line[..state.cursor_col].to_string();
-        let after = current_line[state.cursor_col..].to_string();
+        // Convert char index to byte index for slicing
+        let byte_offset = char_index_to_byte_index(current_line, state.cursor_col);
+        let before = current_line[..byte_offset].to_string();
+        let after = current_line[byte_offset..].to_string();
         let first_paste_line = paste_lines[0].to_string();
         edits.push(Edit::SplitLine {
             line: idx,
@@ -252,14 +260,16 @@ pub(crate) fn handle_paste(
         });
         lines.insert(idx + paste_lines.len() - 1, final_line);
         state.cursor_line = (idx + paste_lines.len() - 1).saturating_sub(state.top_line);
-        state.set_cursor_col(last_paste_line.len(), lines);
+        state.set_cursor_col(last_paste_line.chars().count(), lines);
         state.modified = true;
     }
 
-    // Push all edits (selection deletion + paste) as a single composite so Ctrl+Z undoes the entire operation
+    // Push all edits as a single composite so Ctrl+Z undoes the entire operation.
+    // pre_cursor = where cursor was before paste (for undo restoration).
+    // undo_cursor = where cursor is after paste (for redo restoration).
     let absolute_line = state.absolute_line();
     let undo_cursor = Some((absolute_line, state.cursor_col, state.multi_cursors.clone()));
-    state.undo_history.push_composite(edits, undo_cursor);
+    state.undo_history.push_composite(edits, undo_cursor, pre_paste_cursor);
 
     state.undo_history.update_state(
         state.top_line,
@@ -394,7 +404,7 @@ pub(crate) fn remove_selection(
 
         let undo_cursor = Some((s_line, s_col, state.multi_cursors.clone()));
         // Push all deletes as a single composite edit
-        state.undo_history.push_composite(edits, undo_cursor);
+        state.undo_history.push_composite(edits, undo_cursor, None);
 
         // Position cursor at start of selection
         state.cursor_line = s_line.saturating_sub(state.top_line);
@@ -432,7 +442,7 @@ pub(crate) fn remove_selection(
             });
         }
         let undo_cursor = Some((s_line, s_col, state.multi_cursors.clone()));
-        state.undo_history.push_composite(edits, undo_cursor);
+        state.undo_history.push_composite(edits, undo_cursor, None);
         line.replace_range(s_col..end_col, "");
     } else {
         // Multi-line removal
@@ -483,7 +493,7 @@ pub(crate) fn remove_selection(
 
         let undo_cursor = Some((s_line, s_col, state.multi_cursors.clone()));
         // Push all edits as composite
-        state.undo_history.push_composite(edits, undo_cursor);
+        state.undo_history.push_composite(edits, undo_cursor, None);
 
         lines[s_line].push_str(&second_snapshot);
         // Remove intervening + original end line
@@ -976,7 +986,7 @@ pub(crate) fn apply_undo(
 ) -> bool {
     if let Some(edit) = state.undo_history.undo() {
         let result = match &edit {
-            Edit::CompositeEdit { edits, undo_cursor } => {
+            Edit::CompositeEdit { edits, undo_cursor, pre_cursor } => {
                 // Undo composite edit: apply all edits in reverse order
                 let mut success = true;
                 for e in edits.iter().rev() {
@@ -984,8 +994,10 @@ pub(crate) fn apply_undo(
                         success = false;
                     }
                 }
-                // Restore cursor & multi-cursors snapshot if present
-                if let Some((line, col, multi)) = undo_cursor {
+                // Restore cursor: prefer pre_cursor (pre-edit position) if set,
+                // otherwise fall back to undo_cursor for backward compatibility.
+                let cursor_to_restore = pre_cursor.as_ref().or(undo_cursor.as_ref());
+                if let Some((line, col, multi)) = cursor_to_restore {
                     state.cursor_line = line.saturating_sub(state.top_line);
                     state.cursor_col = *col;
                     state.multi_cursors = multi.clone();
@@ -1152,7 +1164,7 @@ pub(crate) fn apply_redo(
 ) -> bool {
     if let Some(edit) = state.undo_history.redo() {
         let result = match &edit {
-            Edit::CompositeEdit { edits, undo_cursor } => {
+            Edit::CompositeEdit { edits, undo_cursor, .. } => {
                 // Redo composite edit: apply all edits in forward order
                 let mut success = true;
                 for e in edits.iter() {
@@ -1160,7 +1172,7 @@ pub(crate) fn apply_redo(
                         success = false;
                     }
                 }
-                // Restore cursor & multi-cursors snapshot if present
+                // Restore post-edit cursor (undo_cursor stores the post-edit position for redo)
                 if let Some((line, col, multi)) = undo_cursor {
                     state.cursor_line = line.saturating_sub(state.top_line);
                     state.cursor_col = *col;
@@ -1464,7 +1476,7 @@ fn insert_char_multi_cursor(
     }
 
     if inserted {
-        state.undo_history.push_composite(edits, undo_cursor);
+        state.undo_history.push_composite(edits, undo_cursor, None);
         // Advance all cursor positions by 1
         state.cursor_col += 1;
         for cursor in &mut state.multi_cursors { cursor.1 += 1; }
@@ -1509,7 +1521,7 @@ fn delete_backward_multi_cursor(
     }
 
     if deleted {
-        state.undo_history.push_composite(edits, undo_cursor);
+        state.undo_history.push_composite(edits, undo_cursor, None);
         // Move all cursor positions left by 1
         if state.cursor_col > 0 { state.cursor_col -= 1; }
         for cursor in &mut state.multi_cursors { if cursor.1 > 0 { cursor.1 -= 1; } }
@@ -1550,7 +1562,7 @@ fn delete_forward_multi_cursor(
     }
 
     if deleted {
-        state.undo_history.push_composite(edits, undo_cursor);
+        state.undo_history.push_composite(edits, undo_cursor, None);
         let absolute_line = state.absolute_line();
         state.undo_history.update_state(state.top_line, absolute_line, state.cursor_col, lines.to_owned());
         save_undo_with_timestamp(state, filename);

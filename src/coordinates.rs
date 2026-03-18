@@ -10,12 +10,22 @@ pub const WRAP_INDICATOR: char = '↩';
 // ---------------------------------------------------------------------------
 
 /// Calculate the visual (terminal column) width of a string.
+/// ANSI escape sequences contribute zero columns.
 /// Tabs expand to the next multiple of `tab_width`; wide characters (emoji,
 /// CJK) count as 2 columns.
 pub fn visual_width(s: &str, tab_width: usize) -> usize {
     let mut width = 0;
+    let mut in_escape = false;
     for ch in s.chars() {
-        width += char_visual_width(ch, width, tab_width);
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            width += char_visual_width(ch, width, tab_width);
+        }
     }
     width
 }
@@ -31,27 +41,97 @@ fn char_visual_width(ch: char, current_col: usize, tab_width: usize) -> usize {
     }
 }
 
-/// Visual width of the first `char_index` characters of `s`.
+/// Public wrapper for `char_visual_width`, used by rendering to advance the
+/// printable-column counter in a way that is consistent with `visual_width_up_to`.
+#[inline]
+pub(crate) fn char_visual_width_pub(ch: char, current_col: usize, tab_width: usize) -> usize {
+    char_visual_width(ch, current_col, tab_width)
+}
+
+/// Visual width (printable terminal columns) of the first `char_index` characters of `s`.
+/// ANSI escape sequence characters are skipped and contribute zero columns.
 pub fn visual_width_up_to(s: &str, char_index: usize, tab_width: usize) -> usize {
     let mut width = 0;
+    let mut in_escape = false;
     for (i, ch) in s.chars().enumerate() {
         if i >= char_index {
             break;
         }
-        width += char_visual_width(ch, width, tab_width);
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            width += char_visual_width(ch, width, tab_width);
+        }
     }
     width
 }
 
+/// Convert a char index in the ANSI-stripped version of `raw` back to the
+/// corresponding char index in `raw` (the raw line with escape sequences).
+pub(crate) fn stripped_char_to_raw_char(raw: &str, stripped_idx: usize) -> usize {
+    let mut in_escape = false;
+    let mut stripped_count = 0;
+    for (raw_idx, ch) in raw.chars().enumerate() {
+        if !in_escape && stripped_count >= stripped_idx {
+            return raw_idx;
+        }
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            stripped_count += 1;
+        }
+    }
+    raw.chars().count()
+}
+
+/// Convert a raw-line char index to the corresponding char index in the
+/// ANSI-stripped version of that line.  ANSI escape chars are skipped.
+pub(crate) fn raw_char_to_stripped_char(raw: &str, raw_idx: usize) -> usize {
+    let mut in_escape = false;
+    let mut stripped = 0usize;
+    for (i, ch) in raw.chars().enumerate() {
+        if i >= raw_idx {
+            break;
+        }
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            stripped += 1;
+        }
+    }
+    stripped
+}
+
 /// Convert a visual column position to the corresponding character index,
-/// accounting for tab expansion.
+/// accounting for tab expansion and ANSI escape sequences (which contribute zero columns).
 pub fn visual_col_to_char_index(line: &str, visual_col: usize, tab_width: usize) -> usize {
     let mut current_visual = 0;
+    let mut in_escape = false;
     for (char_idx, ch) in line.chars().enumerate() {
-        if current_visual >= visual_col {
+        if !in_escape && current_visual >= visual_col {
             return char_idx;
         }
-        current_visual += char_visual_width(ch, current_visual, tab_width);
+        if ch == '\x1b' {
+            in_escape = true;
+        } else if in_escape {
+            if ch.is_ascii_alphabetic() {
+                in_escape = false;
+            }
+        } else {
+            current_visual += char_visual_width(ch, current_visual, tab_width);
+        }
     }
     line.chars().count()
 }

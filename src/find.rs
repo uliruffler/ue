@@ -5,11 +5,6 @@ use crate::editor_state::{FileViewerState, Position};
 
 const MAX_FIND_HISTORY: usize = 100;
 
-/// Convert a byte offset within `s` to the corresponding character index.
-fn byte_to_char(s: &str, byte_offset: usize) -> usize {
-    s[..byte_offset.min(s.len())].chars().count()
-}
-
 /// Convert a character index within `s` to the corresponding byte offset.
 fn char_to_byte(s: &str, char_idx: usize) -> usize {
     s.char_indices()
@@ -18,7 +13,128 @@ fn char_to_byte(s: &str, char_idx: usize) -> usize {
         .unwrap_or(s.len())
 }
 
-/// Convert a wildcard pattern (* = any characters, ? = any single character) to a regex pattern
+// ---------------------------------------------------------------------------
+// ANSI-aware single-line search helpers
+// ---------------------------------------------------------------------------
+
+/// Return the byte offset in the ANSI-stripped version of `raw` that corresponds
+/// to stripped char index `sc`.
+fn stripped_char_to_stripped_byte(stripped: &str, sc: usize) -> usize {
+    char_to_byte(stripped, sc)
+}
+
+/// Return all raw-line char indices at which `regex` matches, after stripping ANSI
+/// from `line`.  Matches are only returned when their raw start falls within
+/// [`scope_raw_char_from`, `scope_raw_char_to`).  Pass `line.chars().count()` for
+/// "to end of line".
+fn stripped_find(
+    line: &str,
+    regex: &Regex,
+    scope_raw_char_from: usize,
+    scope_raw_char_to: usize,
+) -> Vec<usize> {
+    if scope_raw_char_from >= scope_raw_char_to {
+        return vec![];
+    }
+    let stripped = crate::coordinates::strip_ansi_escapes(line);
+
+    // Convert raw char scope boundaries to byte boundaries in the stripped string
+    let s_from = crate::coordinates::raw_char_to_stripped_char(line, scope_raw_char_from);
+    let s_to   = crate::coordinates::raw_char_to_stripped_char(line, scope_raw_char_to);
+    let b_from = stripped_char_to_stripped_byte(&stripped, s_from);
+    let b_to   = stripped_char_to_stripped_byte(&stripped, s_to);
+
+    regex
+        .find_iter(&stripped)
+        .filter(|m| m.start() >= b_from && m.start() < b_to)
+        .map(|m| {
+            let sc = stripped[..m.start()].chars().count();
+            crate::coordinates::stripped_char_to_raw_char(line, sc)
+        })
+        .collect()
+}
+
+/// Return scope boundaries as raw char indices for `line_idx`.
+fn scope_char_range(
+    line_idx: usize,
+    line: &str,
+    scope: Option<(Position, Position)>,
+) -> (usize, usize) {
+    if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
+        let from = if line_idx == scope_start_line { scope_start_col } else { 0 };
+        let to   = if line_idx == scope_end_line   { scope_end_col   } else { line.chars().count() };
+        (from, to)
+    } else {
+        (0, line.chars().count())
+    }
+}
+
+/// Replace all occurrences of `regex` (found in the ANSI-stripped text) within
+/// `line[scope_char_from..scope_char_to]` (raw char indices).  ANSI sequences
+/// outside matched regions are preserved; ANSI within a matched region is removed.
+/// Returns `(new_raw_line, number_of_replacements)`.
+fn replace_in_stripped_line(
+    line: &str,
+    regex: &Regex,
+    replacement: &str,
+    scope_char_from: usize,
+    scope_char_to: usize,
+) -> (String, usize) {
+    if scope_char_from >= scope_char_to {
+        return (line.to_string(), 0);
+    }
+    let stripped = crate::coordinates::strip_ansi_escapes(line);
+
+    let s_from = crate::coordinates::raw_char_to_stripped_char(line, scope_char_from);
+    let s_to   = crate::coordinates::raw_char_to_stripped_char(line, scope_char_to);
+    let b_from = stripped_char_to_stripped_byte(&stripped, s_from);
+    let b_to   = stripped_char_to_stripped_byte(&stripped, s_to);
+
+    // Collect all matches in the stripped text within scope
+    let matches: Vec<(usize, usize, String)> = regex
+        .find_iter(&stripped)
+        .filter(|m| m.start() >= b_from && m.start() < b_to)
+        .map(|m| {
+            let sc_start = stripped[..m.start()].chars().count();
+            let sc_end   = stripped[..m.end()].chars().count();
+            let raw_start = crate::coordinates::stripped_char_to_raw_char(line, sc_start);
+            let raw_end   = crate::coordinates::stripped_char_to_raw_char(line, sc_end);
+            // Capture-group–aware replacement: apply the regex to the stripped match text
+            let repl = regex.replace(&stripped[m.start()..m.end()], replacement).to_string();
+            (raw_start, raw_end, repl)
+        })
+        .collect();
+
+    if matches.is_empty() {
+        return (line.to_string(), 0);
+    }
+
+    let count = matches.len();
+    let raw_chars: Vec<char> = line.chars().collect();
+    let mut new_line = String::new();
+    let mut raw_pos = 0usize;
+    let mut repl_idx = 0usize;
+
+    while raw_pos <= raw_chars.len() {
+        if repl_idx < matches.len() {
+            let (rstart, rend, ref repl_str) = matches[repl_idx];
+            if raw_pos == rstart {
+                new_line.push_str(repl_str);
+                raw_pos = rend;
+                repl_idx += 1;
+                continue;
+            }
+        }
+        if raw_pos < raw_chars.len() {
+            new_line.push(raw_chars[raw_pos]);
+        }
+        raw_pos += 1;
+    }
+
+    (new_line, count)
+}
+
+
 /// This escapes regex special characters and replaces wildcards with their regex equivalents
 pub(crate) fn wildcard_to_regex(pattern: &str) -> Result<String, Box<dyn std::error::Error>> {
     let mut regex = String::new();
@@ -76,9 +192,12 @@ pub(crate) fn expand_newline_escapes(pattern: &str) -> String {
     pattern.replace("\\n", "\n")
 }
 
-/// Build a single string by joining `lines[min_line..=max_line]` with `\n`.
+/// Build a single string by joining ANSI-stripped versions of `lines[min_line..=max_line]`
+/// with `\n`.  Stripping ANSI ensures that colour-change sequences embedded in lines
+/// do not split search terms.
+///
 /// Also returns a `Vec<usize>` where `line_starts[i]` is the byte offset of
-/// `lines[min_line + i]` in the joined string.
+/// the stripped `lines[min_line + i]` in the joined string.
 pub(crate) fn build_joined_text(lines: &[String], min_line: usize, max_line: usize) -> (String, Vec<usize>) {
     let max_line = max_line.min(lines.len().saturating_sub(1));
     let mut joined = String::new();
@@ -86,7 +205,8 @@ pub(crate) fn build_joined_text(lines: &[String], min_line: usize, max_line: usi
     let slice = &lines[min_line..=max_line];
     for (i, line) in slice.iter().enumerate() {
         line_starts.push(joined.len());
-        joined.push_str(line);
+        let stripped = crate::coordinates::strip_ansi_escapes(line);
+        joined.push_str(&stripped);
         if i + 1 < slice.len() {
             joined.push('\n');
         }
@@ -94,8 +214,9 @@ pub(crate) fn build_joined_text(lines: &[String], min_line: usize, max_line: usi
     (joined, line_starts)
 }
 
-/// Convert a byte offset in the joined string back to `(absolute_line, char_col)`.
-/// `line_starts[i]` is the byte offset of `lines[min_line + i]`.
+/// Convert a byte offset in the (ANSI-stripped) joined string back to
+/// `(absolute_line, char_col)` where `char_col` is a char index in the **raw** line.
+/// `line_starts[i]` is the byte offset of the stripped `lines[min_line + i]` in the joined string.
 pub(crate) fn byte_offset_to_position(
     byte_offset: usize,
     line_starts: &[usize],
@@ -109,8 +230,11 @@ pub(crate) fn byte_offset_to_position(
     };
     let abs_line = min_line + rel;
     let line_byte_offset = byte_offset - line_starts[rel];
-    // Convert byte offset to character index
-    let col = lines[abs_line][..line_byte_offset].chars().count();
+    // The joined string was built from stripped lines, so byte offset is in the stripped line.
+    let stripped = crate::coordinates::strip_ansi_escapes(&lines[abs_line]);
+    let stripped_col = stripped[..line_byte_offset.min(stripped.len())].chars().count();
+    // Map stripped char index back to raw line char index
+    let col = crate::coordinates::stripped_char_to_raw_char(&lines[abs_line], stripped_col);
     (abs_line, col)
 }
 
@@ -648,43 +772,25 @@ fn find_next(
         (0, lines.len().saturating_sub(1))
     };
 
-    /// Return the first match in `line` whose byte-offset start is within [col_from, col_to)
-    /// and whose byte-offset start is strictly > after_byte.
-    /// Returns the match position as a **char index**.
-    fn first_match_after(
-        line: &str,
-        regex: &Regex,
-        after_byte: usize, // byte offset derived from cursor char-index
-        col_from: usize,   // byte offset
-        col_to: usize,     // byte offset
-    ) -> Option<usize> {
-        regex
-            .find_iter(line)
-            .find(|m| m.start() >= col_from && m.start() < col_to && m.start() > after_byte)
-            .map(|m| byte_to_char(line, m.start()))
-    }
-
     if !force_wrap {
-        // Search current line for a match strictly after start_col.
-        // Convert start_col (char index) to a byte offset for comparison with m.start().
+        // Search current line for a match strictly after start_col
         if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-            let (col_from, col_to) = scope_col_range(start_line, line, scope);
-            let after_byte = char_to_byte(line, start_col);
-            if let Some(col) = first_match_after(line, regex, after_byte, col_from, col_to) {
+            let (col_from, col_to) = scope_char_range(start_line, line, scope);
+            let col = stripped_find(line, regex, col_from, col_to)
+                .into_iter()
+                .find(|&c| c > start_col);
+            if let Some(col) = col {
                 return Some((start_line, col));
             }
         }
 
         // Search subsequent lines
         let end_line = max_line.min(lines.len().saturating_sub(1));
-        for (line_idx, line) in lines.iter().enumerate().take(end_line + 1).skip(start_line + 1) {
-            let (col_from, col_to) = scope_col_range(line_idx, line, scope);
-            if let Some(col) = regex
-                .find_iter(line)
-                .find(|m| m.start() >= col_from && m.start() < col_to)
-                .map(|m| byte_to_char(line, m.start()))
-            {
+        for line_idx in (start_line + 1)..=end_line {
+            let line = &lines[line_idx];
+            let (col_from, col_to) = scope_char_range(line_idx, line, scope);
+            if let Some(col) = stripped_find(line, regex, col_from, col_to).into_iter().next() {
                 return Some((line_idx, col));
             }
         }
@@ -698,12 +804,8 @@ fn find_next(
             break;
         }
         let line = &lines[line_idx];
-        let (col_from, col_to) = scope_col_range(line_idx, line, scope);
-        if let Some(col) = regex
-            .find_iter(line)
-            .find(|m| m.start() >= col_from && m.start() < col_to)
-            .map(|m| byte_to_char(line, m.start()))
-        {
+        let (col_from, col_to) = scope_char_range(line_idx, line, scope);
+        if let Some(col) = stripped_find(line, regex, col_from, col_to).into_iter().next() {
             return Some((line_idx, col));
         }
     }
@@ -730,18 +832,15 @@ fn find_prev(
     };
 
     if !force_wrap {
-        // Search current line for the last match strictly before start_col.
-        // Convert start_col (char index) to a byte offset for comparison with m.start().
+        // Search current line for the last match strictly before start_col
         if start_line >= min_line && start_line <= max_line && start_line < lines.len() {
             let line = &lines[start_line];
-            let (col_from, col_to) = scope_col_range(start_line, line, scope);
-            let before_byte = char_to_byte(line, start_col);
-            if let Some(col) = regex
-                .find_iter(line)
-                .filter(|m| m.start() >= col_from && m.start() < col_to && m.start() < before_byte)
-                .last()
-                .map(|m| byte_to_char(line, m.start()))
-            {
+            let (col_from, col_to) = scope_char_range(start_line, line, scope);
+            let col = stripped_find(line, regex, col_from, col_to)
+                .into_iter()
+                .filter(|&c| c < start_col)
+                .last();
+            if let Some(col) = col {
                 return Some((start_line, col));
             }
         }
@@ -753,13 +852,8 @@ fn find_prev(
                     continue;
                 }
                 let line = &lines[line_idx];
-                let (col_from, col_to) = scope_col_range(line_idx, line, scope);
-                if let Some(col) = regex
-                    .find_iter(line)
-                    .filter(|m| m.start() >= col_from && m.start() < col_to)
-                    .last()
-                    .map(|m| byte_to_char(line, m.start()))
-                {
+                let (col_from, col_to) = scope_char_range(line_idx, line, scope);
+                if let Some(col) = stripped_find(line, regex, col_from, col_to).into_iter().last() {
                     return Some((line_idx, col));
                 }
             }
@@ -774,35 +868,13 @@ fn find_prev(
             continue;
         }
         let line = &lines[line_idx];
-        let (col_from, col_to) = scope_col_range(line_idx, line, scope);
-        if let Some(col) = regex
-            .find_iter(line)
-            .filter(|m| m.start() >= col_from && m.start() < col_to)
-            .last()
-            .map(|m| byte_to_char(line, m.start()))
-        {
+        let (col_from, col_to) = scope_char_range(line_idx, line, scope);
+        if let Some(col) = stripped_find(line, regex, col_from, col_to).into_iter().last() {
             return Some((line_idx, col));
         }
     }
 
     None
-}
-
-/// Return the (from, to) byte-offset range to search within a line, clamped by scope.
-/// Scope boundaries are stored as char indices and are converted to byte offsets here so
-/// that all comparisons against `m.start()` (which is always a byte offset) are consistent.
-fn scope_col_range(
-    line_idx: usize,
-    line: &str,
-    scope: Option<(Position, Position)>,
-) -> (usize, usize) {
-    if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
-        let from = if line_idx == scope_start_line { char_to_byte(line, scope_start_col) } else { 0 };
-        let to = if line_idx == scope_end_line { char_to_byte(line, scope_end_col).min(line.len()) } else { line.len() };
-        (from, to)
-    } else {
-        (0, line.len())
-    }
 }
 
 /// Move cursor to the specified position, adjusting viewport if needed
@@ -873,41 +945,14 @@ pub(crate) fn calculate_search_hits(
     for (line_idx, line) in lines.iter().enumerate().take(max_line.min(lines.len().saturating_sub(1)) + 1).skip(min_line) {
 
         // Determine search boundaries for this line based on scope
-        // Compute byte-offset bounds for this line (consistent with m.start() which is a byte offset)
-        let (search_start, search_end) =
-            if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) =
-                scope
-            {
-                let start_offset = if line_idx == scope_start_line {
-                    char_to_byte(line, scope_start_col)
-                } else {
-                    0
-                };
-                let end_offset = if line_idx == scope_end_line {
-                    char_to_byte(line, scope_end_col).min(line.len())
-                } else {
-                    line.len()
-                };
-                (start_offset, end_offset)
-            } else {
-                (0, line.len())
-            };
+        let (scope_from, scope_to) = scope_char_range(line_idx, line, scope.map(|(a, b)| (a, b)));
 
-        if search_start < search_end {
-            for m in regex.find_iter(line) {
-                // m.start() is a byte offset; convert to char index for position tracking
-                let match_byte = m.start();
-                if match_byte < search_start || match_byte >= search_end {
-                    continue;
-                }
-                let match_col = byte_to_char(line, match_byte);
-                total_hits += 1;
-
-                // Check if this match is at the cursor position
-                if !found_cursor_hit && line_idx == cursor_line && match_col == cursor_col {
-                    current_hit = total_hits;
-                    found_cursor_hit = true;
-                }
+        let hits = stripped_find(line, &regex, scope_from, scope_to);
+        for match_col in hits {
+            total_hits += 1;
+            if !found_cursor_hit && line_idx == cursor_line && match_col == cursor_col {
+                current_hit = total_hits;
+                found_cursor_hit = true;
             }
         }
     }
@@ -966,14 +1011,13 @@ pub(crate) fn get_multiline_matches_per_line(
         return result;
     };
 
+    // `joined` is built from ANSI-stripped lines; `line_starts` are byte offsets in that join.
     let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
 
     for m in regex.find_iter(&joined) {
         // Map byte offsets in the joined string back to (line, col)
         let (start_line, _start_char) =
             byte_offset_to_position(m.start(), &line_starts, lines, min_line);
-        // For the end we want the position of the last byte *inside* the match, then +1.
-        // Using m.end() directly could land on a '\n' separator which is not part of any real line.
         let end_byte = m.end();
 
         // Walk through each line that this match covers and record the highlighted range.
@@ -991,10 +1035,12 @@ pub(crate) fn get_multiline_matches_per_line(
                 break
             };
 
-            let line_len_bytes = lines[line_idx].len();
-            let line_end_in_joined = line_start_in_joined + line_len_bytes; // exclusive, excl. '\n'
+            // Lengths are in the STRIPPED line (which is what the joined string was built from)
+            let stripped_line = crate::coordinates::strip_ansi_escapes(&lines[line_idx]);
+            let line_len_bytes = stripped_line.len();
+            let line_end_in_joined = line_start_in_joined + line_len_bytes;
 
-            // Start of highlighted region on this line (in bytes within the line)
+            // Highlighted range in bytes within the stripped line
             let hl_start_byte = if first {
                 cur_byte - line_start_in_joined
             } else {
@@ -1002,7 +1048,6 @@ pub(crate) fn get_multiline_matches_per_line(
             };
             first = false;
 
-            // End of highlighted region on this line (in bytes within the line)
             let hl_end_byte = if end_byte <= line_end_in_joined {
                 end_byte - line_start_in_joined
             } else {
@@ -1010,16 +1055,17 @@ pub(crate) fn get_multiline_matches_per_line(
             };
 
             if hl_start_byte <= hl_end_byte && hl_start_byte <= line_len_bytes {
-                let line_str = &lines[line_idx];
-                let char_start = line_str[..hl_start_byte.min(line_str.len())].chars().count();
-                let char_end = line_str[..hl_end_byte.min(line_str.len())].chars().count();
+                // Convert byte offsets in the stripped line to char indices, then map to raw line
+                let stripped_char_start = stripped_line[..hl_start_byte.min(stripped_line.len())].chars().count();
+                let stripped_char_end   = stripped_line[..hl_end_byte.min(stripped_line.len())].chars().count();
+                let char_start = crate::coordinates::stripped_char_to_raw_char(&lines[line_idx], stripped_char_start);
+                let char_end   = crate::coordinates::stripped_char_to_raw_char(&lines[line_idx], stripped_char_end);
                 if char_start < char_end || (char_start == char_end && char_start == 0 && hl_end_byte == 0 && line_len_bytes == 0) {
                     result[line_idx].push((char_start, char_end));
                 }
             }
 
-            // Advance past this line + the '\n' separator in the joined string
-            cur_byte = line_end_in_joined + 1; // +1 for the '\n'
+            cur_byte = line_end_in_joined + 1; // +1 for the '\n' separator
         }
     }
 
@@ -1229,13 +1275,14 @@ pub(crate) fn replace_current_occurrence(
                 let (joined, line_starts) = build_joined_text(lines, min_line, max_line);
                 let (cursor_line, cursor_col) = state.current_position();
 
-                // Find the cursor byte offset in the joined text
+                // Find the cursor byte offset in the stripped joined text
                 let cursor_byte = if cursor_line >= min_line && cursor_line <= max_line {
                     let rel = cursor_line - min_line;
-                    let col_byte = lines[cursor_line]
-                        .char_indices()
-                        .nth(cursor_col)
-                        .map_or(lines[cursor_line].len(), |(b, _)| b);
+                    let stripped_cursor = crate::coordinates::strip_ansi_escapes(&lines[cursor_line]);
+                    let cursor_stripped_char = crate::coordinates::raw_char_to_stripped_char(&lines[cursor_line], cursor_col);
+                    let col_byte = stripped_cursor.char_indices()
+                        .nth(cursor_stripped_char)
+                        .map_or(stripped_cursor.len(), |(b, _)| b);
                     line_starts[rel] + col_byte
                 } else {
                     0
@@ -1278,8 +1325,6 @@ pub(crate) fn replace_current_occurrence(
                 let (line, col) = state.current_position();
 
                 if line < lines.len() {
-                    let line_text = &lines[line];
-
                     // Check scope
                     let in_scope = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = state.find_scope {
                         line >= scope_start_line && line <= scope_end_line &&
@@ -1290,20 +1335,40 @@ pub(crate) fn replace_current_occurrence(
                     };
 
                     if in_scope {
-                        // Find match at current position (search from start of line to find match at cursor)
-                        let match_at_cursor = regex.find_iter(line_text).find(|m| m.start() == col);
+                        let line_text = lines[line].clone();
+                        let (scope_from, scope_to) = scope_char_range(line, &line_text, state.find_scope);
+
+                        // Find a match in the stripped line that starts at the cursor raw char index
+                        let stripped = crate::coordinates::strip_ansi_escapes(&line_text);
+                        let cursor_stripped = crate::coordinates::raw_char_to_stripped_char(&line_text, col);
+                        let cursor_stripped_byte = char_to_byte(&stripped, cursor_stripped);
+                        // scope in stripped char space
+                        let s_from = crate::coordinates::raw_char_to_stripped_char(&line_text, scope_from);
+                        let s_to   = crate::coordinates::raw_char_to_stripped_char(&line_text, scope_to);
+                        let b_from = char_to_byte(&stripped, s_from);
+                        let b_to   = char_to_byte(&stripped, s_to);
+
+                        let match_at_cursor = regex
+                            .find_iter(&stripped)
+                            .find(|m| m.start() >= b_from && m.start() < b_to && m.start() == cursor_stripped_byte);
+
                         if let Some(m) = match_at_cursor {
-                            // We're at a match - replace it, expanding capture group references ($1, $2, etc.)
-                            // and \n escape sequences in the replacement string
                             let replace_str = expand_newline_escapes(&state.replace_pattern);
-                            let before = &line_text[..m.start()];
-                            let after = &line_text[m.end()..];
+                            // Map stripped byte positions back to raw char positions
+                            let sc_start = stripped[..m.start()].chars().count();
+                            let sc_end   = stripped[..m.end()].chars().count();
+                            let raw_start = crate::coordinates::stripped_char_to_raw_char(&line_text, sc_start);
+                            let raw_end   = crate::coordinates::stripped_char_to_raw_char(&line_text, sc_end);
+                            let raw_byte_start = char_to_byte(&line_text, raw_start);
+                            let raw_byte_end   = char_to_byte(&line_text, raw_end);
+
                             let replaced_segment = regex
-                                .replace(m.as_str(), replace_str.as_str())
+                                .replace(&stripped[m.start()..m.end()], replace_str.as_str())
                                 .to_string();
+                            let before = &line_text[..raw_byte_start];
+                            let after  = &line_text[raw_byte_end..];
 
                             if replaced_segment.contains('\n') {
-                                // Replacement introduces newlines — split into multiple lines
                                 let combined = format!("{}{}{}", before, replaced_segment, after);
                                 let new_lines: Vec<String> = combined.split('\n').map(|s| s.to_string()).collect();
                                 let before_snap = lines.clone();
@@ -1319,7 +1384,7 @@ pub(crate) fn replace_current_occurrence(
                                 });
                             } else {
                                 let new_line = format!("{}{}{}", before, replaced_segment, after);
-                                let old_line = lines[line].clone();
+                                let old_line = line_text;
                                 lines[line] = new_line.clone();
                                 state.undo_history.push(crate::undo::Edit::ReplaceLine {
                                     line,
@@ -1414,46 +1479,36 @@ pub(crate) fn replace_all_occurrences(
                     let actual_idx = line_idx + insert_offset;
                     let line_text = lines[actual_idx].clone();
 
-                    let (search_start, search_end) = if let Some(((scope_start_line, scope_start_col), (scope_end_line, scope_end_col))) = scope {
-                        let start_offset = if line_idx == scope_start_line { scope_start_col } else { 0 };
-                        let end_offset = if line_idx == scope_end_line { scope_end_col.min(line_text.len()) } else { line_text.len() };
-                        (start_offset, end_offset)
-                    } else {
-                        (0, line_text.len())
-                    };
+                    let (scope_char_from, scope_char_to) = scope_char_range(line_idx, &line_text, scope);
+                    let replace_str = expand_newline_escapes(&state.replace_pattern);
 
-                    if search_start < search_end {
-                        let before_scope = &line_text[..search_start];
-                        let search_slice = &line_text[search_start..search_end];
-                        let after_scope = &line_text[search_end..];
+                    let (new_line_text, count) = replace_in_stripped_line(
+                        &line_text,
+                        &regex,
+                        &replace_str,
+                        scope_char_from,
+                        scope_char_to,
+                    );
 
-                        let replace_str = expand_newline_escapes(&state.replace_pattern);
-                        let replaced_slice = regex.replace_all(search_slice, replace_str.as_str()).to_string();
-
-                        if replaced_slice != search_slice {
-                            let line_replacements = regex.find_iter(search_slice).count();
-                            replaced_count += line_replacements;
-
-                            let combined = format!("{}{}{}", before_scope, replaced_slice, after_scope);
-                            if combined.contains('\n') {
-                                // Replacement introduces newlines — splice into multiple lines
-                                let new_lines: Vec<String> = combined.split('\n').map(|s| s.to_string()).collect();
-                                let extra = new_lines.len() - 1;
-                                lines.splice(actual_idx..=actual_idx, new_lines.clone());
-                                insert_offset += extra;
-                                state.undo_history.push(crate::undo::Edit::ReplaceLine {
-                                    line: actual_idx,
-                                    old_content: line_text.clone(),
-                                    new_content: new_lines.join("\n"),
-                                });
-                            } else {
-                                lines[actual_idx] = combined.clone();
-                                state.undo_history.push(crate::undo::Edit::ReplaceLine {
-                                    line: actual_idx,
-                                    old_content: line_text.clone(),
-                                    new_content: combined,
-                                });
-                            }
+                    if count > 0 {
+                        replaced_count += count;
+                        if new_line_text.contains('\n') {
+                            let new_lines: Vec<String> = new_line_text.split('\n').map(|s| s.to_string()).collect();
+                            let extra = new_lines.len() - 1;
+                            lines.splice(actual_idx..=actual_idx, new_lines.clone());
+                            insert_offset += extra;
+                            state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                line: actual_idx,
+                                old_content: line_text,
+                                new_content: new_lines.join("\n"),
+                            });
+                        } else {
+                            lines[actual_idx] = new_line_text.clone();
+                            state.undo_history.push(crate::undo::Edit::ReplaceLine {
+                                line: actual_idx,
+                                old_content: line_text,
+                                new_content: new_line_text,
+                            });
                         }
                     }
                 }
