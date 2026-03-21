@@ -393,10 +393,11 @@ impl<'a> FileViewerState<'a> {
     }
 
     pub(crate) fn adjust_cursor_col(&mut self, lines: &[&str]) {
-        if let Some(line) = lines.get(self.absolute_line())
-            && self.cursor_col > line.len()
-        {
-            self.cursor_col = line.len();
+        if let Some(line) = lines.get(self.absolute_line()) {
+            let char_count = line.chars().count();
+            if self.cursor_col > char_count {
+                self.cursor_col = char_count;
+            }
         }
     }
 
@@ -745,15 +746,15 @@ impl<'a> FileViewerState<'a> {
         if let Some(line) = lines.get(absolute_line) {
             let line_char_len = line.chars().count();
             if self.cursor_col < line_char_len {
-                // Check wrap point logic
                 if self.is_line_wrapping_enabled() {
                     let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
-                    let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, self.settings.tab_width);
+                    let tab_width = self.settings.tab_width;
+                    let wrap_points = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, tab_width);
 
                     // If we're AT a wrap point with wrap_end=true, move to start of next segment (same position, clear flag)
                     if wrap_points.contains(&self.cursor_col) && self.cursor_at_wrap_end {
                         self.cursor_at_wrap_end = false;
-                        self.desired_cursor_col = self.cursor_col;
+                        self.desired_cursor_col = 0; // now at start of the next segment
                         return true;
                     }
 
@@ -766,9 +767,19 @@ impl<'a> FileViewerState<'a> {
                         self.desired_cursor_col = self.cursor_col;
                         return true;
                     }
+
+                    // Normal move right in wrap mode: store visual offset within current segment
+                    // so Up/Down can correctly restore the column even after clamping on a short segment.
+                    self.cursor_col += 1;
+                    self.cursor_at_wrap_end = false;
+                    let seg_start = wrap_points.iter().copied().filter(|&p| p <= self.cursor_col).last().unwrap_or(0);
+                    let seg_vs = crate::coordinates::visual_width_up_to(line, seg_start, tab_width);
+                    let cur_vs = crate::coordinates::visual_width_up_to(line, self.cursor_col, tab_width);
+                    self.desired_cursor_col = cur_vs.saturating_sub(seg_vs);
+                    return true;
                 }
 
-                // Normal move right within current line
+                // Non-wrapping: normal move right within current line
                 self.cursor_col += 1;
                 self.cursor_at_wrap_end = false;
                 self.desired_cursor_col = self.cursor_col;
@@ -818,7 +829,24 @@ impl<'a> FileViewerState<'a> {
             // Normal left movement (also handles moving left from wrap_end position)
             self.cursor_col -= 1;
             self.cursor_at_wrap_end = false;
-            self.desired_cursor_col = self.cursor_col;
+            if self.is_line_wrapping_enabled() {
+                // Store visual offset within the current segment so Up/Down navigation
+                // can correctly restore the column even after clamping on a short segment.
+                if let Some(line) = lines.get(absolute_line) {
+                    let visible_lines = 10; // terminal height not used by calculate_text_width
+                    let text_width = crate::coordinates::calculate_text_width(self, lines, visible_lines);
+                    let tab_width = self.settings.tab_width;
+                    let wp = crate::coordinates::calculate_word_wrap_points(line, text_width as usize, tab_width);
+                    let seg_start = wp.iter().copied().filter(|&p| p <= self.cursor_col).last().unwrap_or(0);
+                    let seg_vs = crate::coordinates::visual_width_up_to(line, seg_start, tab_width);
+                    let cur_vs = crate::coordinates::visual_width_up_to(line, self.cursor_col, tab_width);
+                    self.desired_cursor_col = cur_vs.saturating_sub(seg_vs);
+                } else {
+                    self.desired_cursor_col = self.cursor_col;
+                }
+            } else {
+                self.desired_cursor_col = self.cursor_col;
+            }
             return true;
         }
 

@@ -439,7 +439,7 @@ pub(crate) fn handle_key_event(
                         state.cursor_line = if state.markdown_rendered { 0 } else { last_line - state.top_line };
                     }
                     if !state.markdown_rendered {
-                        state.cursor_col = lines[last_line].len();
+                        state.cursor_col = lines[last_line].chars().count();
                         state.desired_cursor_col = state.cursor_col;
                     }
                 }
@@ -1466,10 +1466,26 @@ fn handle_up_navigation(state: &mut FileViewerState, lines: &[String], visible_l
 
     // If we're not on the first wrapped line of this logical line, move up within the same line
     if current_wrap_line > 0 {
-        // Intra-line segment navigation: always derive the desired offset fresh from the current
-        // cursor position so that a stale absolute char index (e.g. from a mouse click or a
-        // left/right keypress on a non-first segment) does not contaminate the target column.
-        let desired_visual_offset = col_within_seg;
+        // Determine how to compute the target visual column.
+        //
+        // After vertical navigation (Down intra-line or Left/Right key), desired_cursor_col
+        // is stored as the visual offset within a segment — always smaller than the char
+        // index of the current segment's start (wrap_points[current_wrap_line - 1]).
+        //
+        // After a mouse click (or older code paths), desired_cursor_col is set to the
+        // absolute char index, which is ≥ the segment's start char.
+        //
+        // When it looks like a vertical-nav memory, use max() so that a column remembered
+        // before Down clamped the cursor onto a shorter segment is properly restored.
+        // Otherwise use col_within_seg (the actual visual position) directly.
+        let seg_start_char = wrap_points[current_wrap_line - 1];
+        let desired_visual_offset = if state.desired_cursor_col < seg_start_char {
+            // desired_cursor_col is a visual-offset memory from vertical navigation.
+            state.desired_cursor_col.max(col_within_seg)
+        } else {
+            // desired_cursor_col is an absolute char index (mouse click or similar).
+            col_within_seg
+        };
         state.desired_cursor_col = desired_visual_offset;
 
         // Move to the previous segment, applying the desired visual offset within it
@@ -1587,8 +1603,18 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
 
     // If we're not on the last wrapped line of this logical line, move down within the same line
     if current_wrap_line + 1 < num_wrapped {
-        // Intra-line segment navigation: always use the fresh intra-segment offset.
-        let desired_visual_offset = col_within_seg;
+        // Use max() to preserve column memory across wrapped segments:
+        // if desired_cursor_col was set by vertical navigation (a visual offset, smaller than
+        // the segment's start char index), keep the larger of the two — this restores the
+        // original column after it was clamped onto a short segment.
+        // If desired_cursor_col is an absolute char index from a mouse click (≥ seg start char),
+        // use col_within_seg directly so the stale value doesn't pull the cursor sideways.
+        let seg_start_char = cur_seg_start_char; // already computed above
+        let desired_visual_offset = if state.desired_cursor_col < seg_start_char {
+            state.desired_cursor_col.max(col_within_seg)
+        } else {
+            col_within_seg
+        };
         state.desired_cursor_col = desired_visual_offset;
 
         // Move to the next segment, applying the desired visual offset within it
@@ -1612,14 +1638,19 @@ fn handle_down_navigation(state: &mut FileViewerState, lines: &[String], visible
         };
     } else {
         // Cross-logical-line from the last (or only) segment.
-        // If we arrived here from a non-first segment (current_wrap_line > 0), desired_cursor_col
-        // may hold a stale absolute char index set by mouse/horizontal nav → use col_within_seg.
-        // If we're on the only segment (current_wrap_line == 0), use max() so that the cursor
-        // "remembers" its column when passing through short logical lines.
-        let desired_visual_offset = if current_wrap_line > 0 {
-            col_within_seg
-        } else {
+        // Use max() to preserve column memory (same logic as the cross-line Up path and the
+        // intra-line Up path):
+        //  • For segment 0, cur_seg_start_char == 0 so desired_cursor_col is already a visual
+        //    offset — max() keeps the larger remembered column through short logical lines.
+        //  • For a non-first segment, desired_cursor_col was set by vertical nav and holds a
+        //    visual offset smaller than cur_seg_start_char, or by a mouse click and holds an
+        //    absolute char index >= cur_seg_start_char.  We apply the same char-index
+        //    discriminant as the Up handler: only if it looks like a vertical-nav memory
+        //    (< seg start char) do we apply max(); otherwise use col_within_seg.
+        let desired_visual_offset = if current_wrap_line == 0 || state.desired_cursor_col < cur_seg_start_char {
             state.desired_cursor_col.max(col_within_seg)
+        } else {
+            col_within_seg
         };
         state.desired_cursor_col = desired_visual_offset;
 
@@ -1742,7 +1773,7 @@ fn handle_navigation(
         KeyCode::End => {
             if let Some(line) = lines.get(state.top_line + state.cursor_line) {
                 // Always go to end of line
-                state.cursor_col = line.len();
+                state.cursor_col = line.chars().count();
                 state.desired_cursor_col = state.cursor_col;
                 true
             } else {
