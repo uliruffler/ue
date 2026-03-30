@@ -120,5 +120,14 @@ This displays all keyboard inputs with their modifiers in real-time. Press `Esc`
 - Debugging why a keybinding isn't working as expected
 
 
+## Support
+
+If `ue` makes your terminal life a bit easier and you feel like supporting the project:
+
+- https://ko-fi.com/uliruffler
+
+Every coffee helps a lot and means the world to me. Thanks so much!
+
+
 ## License
 This project is licensed under the GNU General Public License v3.0 - see the LICENSE file for details.
